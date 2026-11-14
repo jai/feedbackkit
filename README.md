@@ -67,3 +67,6 @@ with `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>`.
 - Swift: `swift test`. Swift 6, iOS 26 and macOS 26.
 - Demo and UI test: `xcodegen` in `Demo/`, then build or test the `FeedbackDemo` scheme.
 - Worker: `npm ci`, `npm test` and `npm run typecheck` in `worker/`. Deploy: [docs/worker.md](docs/worker.md#deploy).
+- CI (`ci.yml`) runs all three on every push to main, the demo's UI test end to end on an iPhone simulator.
+- Releases: once an hour `release.yml` tags main's newest green commit (`release/`, Conventional Commits) when a
+  feat, fix or breaking change is waiting. Don't tag by hand.

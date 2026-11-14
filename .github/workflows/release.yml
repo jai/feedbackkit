@@ -1,0 +1,35 @@
+# The hourly release: once an hour (or by hand), the newest commit on main whose `ci` run passed (the package's tests,
+# the Worker's and the demo's end-to-end UI test) becomes the next version's tag and GitHub Release, when the commits
+# since the last tag hold a feat, fix or breaking change (release/version.mjs). PRHub and Agent Pager pin these tags.
+name: release
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test 'release/*.test.mjs'
+      - run: node release/release.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

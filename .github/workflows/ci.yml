@@ -28,10 +28,20 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  release-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test 'release/*.test.mjs'
   demo:
-    # The demo app builds from a fresh clone, for iPhone and Mac, against the package by local path.
+    # The demo app builds from a fresh clone, for iPhone and Mac, against the package by local path. Then end to end:
+    # FeedbackDemoUITests drives the app on an iPhone simulator through each role's flows on the in-app mock Worker.
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
@@ -39,3 +49,20 @@ jobs:
       - run: >-
           xcodebuild build -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo
           -destination 'generic/platform=iOS Simulator' -destination 'generic/platform=macOS'
+      - name: Pick an iPhone simulator
+        run: |
+          id=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[] | select(.key | test("iOS-2[6-9]")) | .value[] | select(.name | startswith("iPhone"))]
+            | last | .udid // empty')
+          [ -n "$id" ] || { xcrun simctl list devices available; echo "::error::no iOS 26+ iPhone simulator"; exit 1; }
+          echo "SIMULATOR=$id" >> "$GITHUB_ENV"
+          xcrun simctl boot "$id"
+      - name: End-to-end UI test
+        run: >-
+          xcodebuild test -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo
+          -destination "platform=iOS Simulator,id=$SIMULATOR" -resultBundlePath e2e.xcresult
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-xcresult
+          path: e2e.xcresult
