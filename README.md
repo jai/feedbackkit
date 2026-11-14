@@ -11,6 +11,9 @@ This repo holds both sides:
 - `Sources/FeedbackKit`: the Swift package, the screens and the client.
 - `worker/`: the FeedbackKit Worker (`featurekit` on Cloudflare), which keeps every app's feedback, hands owners' and
   builders' messages to the runner on Jai's Mac, and opens issues for everyone else ([docs/worker.md](docs/worker.md)).
+- The runner is not in this repo: it is the threads hub on Jai's Mac mini, in jai/agent-pager. It runs each chat in an
+  Orca project per app on a builder Mac. To set up a builder, see
+  [Set up a builder Mac for Feedback](https://github.com/jai/agent-pager#set-up-a-builder-mac-for-feedback).
 - [docs/api.md](docs/api.md): the routes an app's backend serves and forwards.
 
 The chat is [AgentChatKit](https://github.com/jai/agentchatkit)'s, re-exported, so it takes the app's `ChatTheme`.
