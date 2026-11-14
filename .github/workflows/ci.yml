@@ -28,3 +28,14 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  demo:
+    # The demo app builds from a fresh clone, for iPhone and Mac, against the package by local path.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen --spec Demo/project.yml
+      - run: >-
+          xcodebuild build -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo
+          -destination 'generic/platform=iOS Simulator' -destination 'generic/platform=macOS'

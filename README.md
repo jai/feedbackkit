@@ -32,7 +32,35 @@ FeedbackRequestsView(model: feedback)   // the list and New; a conversation push
   PRHub and Agent Pager use jai/prhub's `FeatureKit`, which does this over PRKit's `PRViewerClient`.
 - `FeedbackSamples` runs it with no Worker, for UI tests and screenshots.
 
+## Demo
+
+`Demo/` is an iPhone and Mac app that shows how it works, on a mock Worker in the app: nothing leaves the device.
+Switch who is sending to see each experience.
+
+- **Owner**: an agent makes the change, tests it and ships a build. The chats show the agent working, one shipped, and
+  one whose message never reached the builder Mac.
+- **Builder**: the same, but the agent opens a pull request for an owner to merge.
+- **Everyone else**: each request becomes a public GitHub issue; owners' comments on it show in the chat.
+
+A message goes pending, delivering, delivered, and the mock agent answers a few seconds later. Holding the Demo badge
+opens a hidden setting that points the app at a real Worker URL and token instead (off by default; the token stays in
+the Keychain).
+
+<p>
+  <img src="docs/images/demo-owner-list.png" width="250" alt="The owner's feedback list under the role switch">
+  <img src="docs/images/demo-owner-chat.png" width="250" alt="New feedback, answered by the agent with a build">
+  <img src="docs/images/demo-issue-chat.png" width="250" alt="Everyone else's feedback as a GitHub issue">
+</p>
+
+```sh
+cd Demo && xcodegen && open FeedbackDemo.xcodeproj   # scheme FeedbackDemo, iPhone or My Mac
+```
+
+The demo hosts this repo's UI test (`FeedbackDemoUITests`), which walks each role and writes these screenshots when run
+with `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>`.
+
 ## Develop
 
 - Swift: `swift test`. Swift 6, iOS 26 and macOS 26.
+- Demo and UI test: `xcodegen` in `Demo/`, then build or test the `FeedbackDemo` scheme.
 - Worker: `npm ci`, `npm test` and `npm run typecheck` in `worker/`. Deploy: [docs/worker.md](docs/worker.md#deploy).
