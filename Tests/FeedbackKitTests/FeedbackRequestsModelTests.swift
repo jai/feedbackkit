@@ -4,7 +4,7 @@ import Testing
 
 /// The feature-request routes as the Worker answers them, and a conversation going from new to a thread.
 @MainActor
-struct FeatureRequestsModelTests {
+struct FeedbackRequestsModelTests {
     /// A Worker that answers each route with a fixed body and keeps what it was asked.
     final class Worker: @unchecked Sendable {
         private let lock = NSLock()
@@ -27,8 +27,8 @@ struct FeatureRequestsModelTests {
         }
     }
 
-    private func client(_ worker: Worker) -> FeatureClient {
-        FeatureClient(connection: URLFeedbackConnection(
+    private func client(_ worker: Worker) -> FeedbackClient {
+        FeedbackClient(connection: URLFeedbackConnection(
             baseURL: { URL(string: "https://worker.example.com")! }, bearer: { "token" }, exchange: { worker.answer($0) }
         ))
     }
@@ -38,22 +38,22 @@ struct FeatureRequestsModelTests {
         let json = #"{"id": "sesn_1", "isWorking": false, "builderOnline": true, "costCents": 3, "messages": ["#
             + #"{"id": "e1", "role": "you", "text": "", "anchor": null, "images": 2},"#
             + #"{"id": "e2", "role": "agent", "text": "Done", "anchor": null}]}"#
-        let chat = try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+        let chat = try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
         #expect(chat.screenshots == ["e1": 2] && chat.messages.count == 2)
     }
 
     @Test func aChatNamesTheAgentsCodingThread() throws {
         let json = #"{"id":"sesn_1","messages":[],"isWorking":true,"builderOnline":true,"thread": "#
             + #"{"host":"builder","id":"codex:session-1"}}"#
-        let chat = try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+        let chat = try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
 
-        #expect(chat.thread == FeatureAgentThread(host: "builder", id: "codex:session-1"))
+        #expect(chat.thread == FeedbackAgentThread(host: "builder", id: "codex:session-1"))
     }
 
     @Test func aChatWithoutAnAgentThreadKeepsTheFeedbackConversation() throws {
         for thread in ["", #", "thread": null"#] {
             let json = #"{"id":"sesn_1","messages":[],"isWorking":false,"builderOnline":true"# + thread + "}"
-            let chat = try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+            let chat = try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
             #expect(chat.thread == nil)
         }
     }
@@ -63,7 +63,7 @@ struct FeatureRequestsModelTests {
             + #"{"host":"builder"}}"#
 
         #expect(throws: DecodingError.self) {
-            try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+            try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
         }
     }
 
@@ -71,25 +71,25 @@ struct FeatureRequestsModelTests {
         for thread in [#"{"host":" ","id":"codex:session-1"}"#, #"{"host":"builder","id":""}"#] {
             let json = #"{"id":"sesn_1","messages":[],"isWorking":true,"builderOnline":true,"thread": "#
                 + thread + "}"
-            let chat = try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+            let chat = try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
             #expect(chat.thread == nil)
         }
     }
 
     @Test func sampleChatsCanNameAnAgentThreadAndOlderInitializersStayEmpty() {
-        var chat = FeatureChat(
+        var chat = FeedbackChat(
             id: "sesn_1", messages: [], isWorking: false, activity: nil, problem: nil,
             costCents: nil, builderOnline: true
         )
         #expect(chat.thread == nil)
-        let thread = FeatureAgentThread(host: "builder", id: "codex:session-1")
+        let thread = FeedbackAgentThread(host: "builder", id: "codex:session-1")
         chat.thread = thread
         #expect(chat.thread == thread)
     }
 
     @Test func aHostStartsTheAgentThroughFeedbackAndKeepsLaterDraftsForItsThread() async {
         let worker = Worker()
-        let model = FeatureRequestsModel(client: client(worker))
+        let model = FeedbackRequestsModel(client: client(worker))
         let route = model.compose(reusing: nil)
         model.drafts[route.box] = "Bigger clock"
         await model.sendFirstMessage(route)
@@ -105,7 +105,7 @@ struct FeatureRequestsModelTests {
     /// The first message of a new conversation makes the thread; the conversation keeps its route and goes on there.
     @Test func theFirstMessageMakesTheThread() async {
         let worker = Worker()
-        let model = FeatureRequestsModel(client: client(worker))
+        let model = FeedbackRequestsModel(client: client(worker))
         let route = model.compose(reusing: nil)
         model.drafts[route.box] = "Bigger clock"
         await model.send(route)
@@ -120,14 +120,14 @@ struct FeatureRequestsModelTests {
 
     /// Samples: nothing reaches a Worker, and the agent answers a moment after a send.
     @Test func samplesAnswerWithoutAWorker() async throws {
-        let samples = FeatureSamples(
-            list: FeatureList(threads: [], builderOnline: true),
-            chat: { FeatureChat(
+        let samples = FeedbackSamples(
+            list: FeedbackList(threads: [], builderOnline: true),
+            chat: { FeedbackChat(
                 id: $0, messages: [], isWorking: false, activity: nil, problem: nil, costCents: 0, builderOnline: true
             ) },
             answer: "Got it."
         )
-        let model = FeatureRequestsModel(client: FeatureClient(connection: client(Worker()).connection, samples: samples))
+        let model = FeedbackRequestsModel(client: FeedbackClient(connection: client(Worker()).connection, samples: samples))
         let route = model.compose(reusing: nil)
         model.drafts[route.box] = "Bigger clock"
         await model.send(route)

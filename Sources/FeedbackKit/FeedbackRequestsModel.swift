@@ -11,7 +11,7 @@ struct PendingMessage: Equatable, Sendable {
 
 /// A conversation open on the screen: one started here and not sent yet (or just sent), or one in the list. A new one
 /// keeps its route after its first message makes it a thread, so it goes on in place.
-enum FeatureRoute: Hashable, Sendable {
+enum FeedbackRoute: Hashable, Sendable {
     case new(UUID)
     case thread(String)
 
@@ -25,11 +25,11 @@ enum FeatureRoute: Hashable, Sendable {
 }
 
 /// A standalone chat stops when the agent is idle; a host keeps discovering its thread until the view hands off.
-enum FeatureFollowMode {
+enum FeedbackFollowMode {
     case whileWorking
     case untilHandoff
 
-    func keepsReading(_ chat: FeatureChat?) -> Bool {
+    func keepsReading(_ chat: FeedbackChat?) -> Bool {
         switch self {
         case .whileWorking: chat?.isWorking == true
         case .untilHandoff: true
@@ -41,13 +41,13 @@ enum FeatureFollowMode {
 /// build. Keep one for the app's life, so drafts and open chats outlive the screen.
 @MainActor
 @Observable
-public final class FeatureRequestsModel {
+public final class FeedbackRequestsModel {
     static let pollInterval: Duration = .seconds(3)
 
-    private(set) var list = FeatureList(threads: [], builderOnline: false)
-    private(set) var chats: [String: FeatureChat] = [:]
+    private(set) var list = FeedbackList(threads: [], builderOnline: false)
+    private(set) var chats: [String: FeedbackChat] = [:]
     private(set) var error: String?
-    /// Unsent words, one box per conversation (`FeatureRoute.box`).
+    /// Unsent words, one box per conversation (`FeedbackRoute.box`).
     var drafts: [String: String] = [:]
     /// The words on their way, by box, shown as sent until the chat has them.
     private(set) var pending: [String: PendingMessage] = [:]
@@ -59,9 +59,9 @@ public final class FeatureRequestsModel {
     private(set) var sending: Set<String> = []
     /// The boxes the sample screenshot went into once.
     @ObservationIgnored private var seeded: Set<String> = []
-    private let client: FeatureClient
+    private let client: FeedbackClient
 
-    public init(client: FeatureClient) {
+    public init(client: FeedbackClient) {
         self.client = client
     }
 
@@ -70,7 +70,7 @@ public final class FeatureRequestsModel {
     func isSending(_ box: String) -> Bool { sending.contains(box) }
 
     /// The thread a conversation is, once it is one.
-    func thread(for route: FeatureRoute) -> String? {
+    func thread(for route: FeedbackRoute) -> String? {
         switch route {
         case .new(let id): started[id]
         case .thread(let id): id
@@ -78,7 +78,7 @@ public final class FeatureRequestsModel {
     }
 
     /// A new conversation to write in: the one already started and still empty, else a fresh one.
-    func compose(reusing route: FeatureRoute?) -> FeatureRoute {
+    func compose(reusing route: FeedbackRoute?) -> FeedbackRoute {
         if case .new(let id) = route, started[id] == nil {
             return .new(id)
         }
@@ -86,7 +86,7 @@ public final class FeatureRequestsModel {
     }
 
     /// Its title: the list's, else the first words sent, else nothing yet.
-    func title(for route: FeatureRoute) -> String? {
+    func title(for route: FeedbackRoute) -> String? {
         guard let id = thread(for: route) else {
             return nil
         }
@@ -129,7 +129,7 @@ public final class FeatureRequestsModel {
     }
 
     /// A host with its own coding-thread chat uses Feedback only to start the agent. Later drafts stay for the host.
-    func sendFirstMessage(_ route: FeatureRoute) async {
+    func sendFirstMessage(_ route: FeedbackRoute) async {
         guard thread(for: route) == nil else {
             return
         }
@@ -137,7 +137,7 @@ public final class FeatureRequestsModel {
     }
 
     /// The conversation's draft, to its thread, or as a new request before it has one: that makes the thread.
-    func send(_ route: FeatureRoute) async {
+    func send(_ route: FeedbackRoute) async {
         let box = route.box
         let thread = thread(for: route)
         let text = draft(for: box).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -155,7 +155,7 @@ public final class FeatureRequestsModel {
             pending[box] = nil
         }
         do {
-            let message = FeatureMessage(
+            let message = FeedbackMessage(
                 text: text, build: build, images: screenshots.map { MessageImage(jpeg: $0.jpeg) },
                 client_ref: UUID().uuidString
             )
@@ -176,12 +176,12 @@ public final class FeatureRequestsModel {
         }
     }
 
-    /// `FeatureSamples`: a send the agent answers a moment later, so a test and a recording see the whole round.
-    private func sendSample(_ message: FeatureMessage, thread: String?, route: FeatureRoute, answer: String)
+    /// `FeedbackSamples`: a send the agent answers a moment later, so a test and a recording see the whole round.
+    private func sendSample(_ message: FeedbackMessage, thread: String?, route: FeedbackRoute, answer: String)
         async throws {
         try await Task.sleep(for: .milliseconds(600))
         let id = thread ?? "sesn_new_\(list.threads.count)"
-        var chat = chats[id] ?? FeatureChat(
+        var chat = chats[id] ?? FeedbackChat(
             id: id, messages: [], isWorking: false, activity: nil, problem: nil, costCents: 0, builderOnline: true
         )
         let sent = "\(chat.messages.count + 1)"
@@ -194,7 +194,7 @@ public final class FeatureRequestsModel {
         chats[id] = chat
         if case .new(let started) = route, thread == nil {
             self.started[started] = id
-            list.threads.insert(FeatureThread(id: id, title: message.text, createdAt: Date.now.ISO8601Format()), at: 0)
+            list.threads.insert(FeedbackThread(id: id, title: message.text, createdAt: Date.now.ISO8601Format()), at: 0)
         }
         Task {
             try? await Task.sleep(for: .seconds(3))
@@ -209,7 +209,7 @@ public final class FeatureRequestsModel {
     }
 
     /// While a chat shows: every few seconds while the agent works or a message is on its way, and once otherwise.
-    func follow(_ route: FeatureRoute, mode: FeatureFollowMode = .whileWorking) async {
+    func follow(_ route: FeedbackRoute, mode: FeedbackFollowMode = .whileWorking) async {
         guard let thread = thread(for: route) else {
             return
         }
@@ -233,7 +233,7 @@ public final class FeatureRequestsModel {
         }
     }
 
-    /// `FeatureSamples.screenshot`: a box starts with it in its tray, once.
+    /// `FeedbackSamples.screenshot`: a box starts with it in its tray, once.
     func seedScreenshot(in box: String) async {
         guard let screenshot = client.samples?.screenshot else {
             return

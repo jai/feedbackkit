@@ -3,16 +3,16 @@ import SwiftUI
 
 /// One conversation: what Jai said and what the agent did with it, with a box to say more. A new one is empty, with
 /// the box ready; its first message makes the thread, and the conversation goes on here.
-struct FeatureChatView: View {
+struct FeedbackChatView: View {
     @Environment(\.chatTheme) private var theme
-    @Bindable var model: FeatureRequestsModel
-    let route: FeatureRoute
-    let conversation: ((FeatureConversation) -> AnyView?)?
+    @Bindable var model: FeedbackRequestsModel
+    let route: FeedbackRoute
+    let conversation: ((FeedbackConversation) -> AnyView?)?
     @FocusState private var isWriting: Bool
 
     private var box: String { route.box }
     private var thread: String? { model.thread(for: route) }
-    private var chat: FeatureChat? { thread.flatMap { model.chats[$0] } }
+    private var chat: FeedbackChat? { thread.flatMap { model.chats[$0] } }
     private var isNew: Bool { thread == nil && !model.isSending(box) }
     /// Legacy messages stay visible until delivered; the host also decides whether its thread is ready to draw.
     var hostedConversation: AnyView? {
@@ -21,7 +21,7 @@ struct FeatureChatView: View {
         else {
             return nil
         }
-        return conversation(FeatureConversation(
+        return conversation(FeedbackConversation(
             thread: thread, draft: model.binding(for: box), attachments: model.attachments(for: box)
         ))
     }
@@ -29,18 +29,18 @@ struct FeatureChatView: View {
     /// Once the first message created the feedback chat, the host's coding thread receives every follow-up.
     var awaitsAgentThread: Bool { conversation != nil && thread != nil }
 
-    private var messages: [FeatureChat.Message] {
+    private var messages: [FeedbackChat.Message] {
         let sent = chat?.messages ?? []
         guard let pending = model.pending[box], !sent.contains(where: { $0.isJai && $0.text == pending.text })
         else {
             return sent
         }
-        return sent + [FeatureChat.Message(id: Self.pendingID, role: "you", text: pending.text, anchor: nil)]
+        return sent + [FeedbackChat.Message(id: Self.pendingID, role: "you", text: pending.text, anchor: nil)]
     }
 
     private static let pendingID = "pending"
 
-    private func screenshots(_ message: FeatureChat.Message) -> Int {
+    private func screenshots(_ message: FeedbackChat.Message) -> Int {
         message.id == Self.pendingID ? model.pending[box]?.screenshots ?? 0 : chat?.screenshots[message.id] ?? 0
     }
 
@@ -89,7 +89,7 @@ struct FeatureChatView: View {
                     BuilderNote()
                 }
                 if messages.isEmpty {
-                    Text(model.list.notice ?? FeatureList.agentNotice)
+                    Text(model.list.notice ?? FeedbackList.agentNotice)
                         .font(theme.font(.footnote))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -196,7 +196,7 @@ struct FeatureChatView: View {
     }
 }
 
-extension FeatureList {
+extension FeedbackList {
     /// What sending does when the Worker gives no notice: the owner's coding agent.
     static let agentNotice = "Say what to change in the app. An agent makes the change, tests it and ships a build."
 }

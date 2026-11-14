@@ -8,18 +8,18 @@ import UIKit
 /// Messages is: the screen lists the conversations, New starts one, and the first message makes it a thread that goes
 /// on in place. Where the screen is narrow (a phone, Slide Over) a stack: the list, a conversation pushed over it. Where
 /// it is wide (an iPad, the Mac) the list beside the conversation picked. A tab of its own: it brings its navigation.
-public struct FeatureRequestsView: View {
+public struct FeedbackRequestsView: View {
     @Environment(\.chatTheme) private var theme
-    @State private var model: FeatureRequestsModel
-    private let conversation: ((FeatureConversation) -> AnyView?)?
+    @State private var model: FeedbackRequestsModel
+    private let conversation: ((FeedbackConversation) -> AnyView?)?
     /// The wide layout's open conversation.
-    @State private var selection: FeatureRoute?
+    @State private var selection: FeedbackRoute?
     /// The narrow layout's conversations, pushed by value onto a stack of its own, so they stay open whatever is
     /// presented over them: More's controller dropped its pushes when a full-screen Files or Photos picker closed
     /// (iOS 27.2).
-    @State private var path: [FeatureRoute] = []
+    @State private var path: [FeedbackRoute] = []
     /// The narrow layout's next new conversation: one route until its first message makes it a thread.
-    @State private var newRoute = FeatureRoute.new(UUID())
+    @State private var newRoute = FeedbackRoute.new(UUID())
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// More's way back to its list, while the tab is under More (the phone, with more tabs than the bar holds). More's
@@ -28,7 +28,7 @@ public struct FeatureRequestsView: View {
     #endif
 
     /// A model the host keeps, so drafts and open chats outlive the screen.
-    public init(model: FeatureRequestsModel) {
+    public init(model: FeedbackRequestsModel) {
         _model = State(initialValue: model)
         conversation = nil
     }
@@ -37,14 +37,14 @@ public struct FeatureRequestsView: View {
     /// runner names it and the host returns its view. The host moves the draft and attachments into that view's
     /// composer, and owns its delivery statuses, reply queue and Send now controls. Returning nil keeps Feedback.
     public init(
-        model: FeatureRequestsModel, conversation: @escaping (FeatureConversation) -> AnyView?
+        model: FeedbackRequestsModel, conversation: @escaping (FeedbackConversation) -> AnyView?
     ) {
         _model = State(initialValue: model)
         self.conversation = conversation
     }
 
-    public init(client: FeatureClient) {
-        self.init(model: FeatureRequestsModel(client: client))
+    public init(client: FeedbackClient) {
+        self.init(model: FeedbackRequestsModel(client: client))
     }
 
     public var body: some View {
@@ -69,7 +69,7 @@ public struct FeatureRequestsView: View {
     /// empty, else a fresh one.
     private var stack: some View {
         NavigationStack(path: $path) {
-            FeatureListView(model: model, selected: nil, isStacked: true) { _ in }
+            FeedbackListView(model: model, selected: nil, isStacked: true) { _ in }
                 .inlineNavigationTitle()
                 .featureTitle("Feedback")
                 .toolbar {
@@ -92,15 +92,15 @@ public struct FeatureRequestsView: View {
                         .accessibilityIdentifier("feedback-new")
                     }
                 }
-                .navigationDestination(for: FeatureRoute.self) { route in
-                    FeatureChatView(model: model, route: route, conversation: conversation)
+                .navigationDestination(for: FeedbackRoute.self) { route in
+                    FeedbackChatView(model: model, route: route, conversation: conversation)
                 }
         }
     }
 
     private var split: some View {
         NavigationSplitView {
-            FeatureListView(model: model, selected: selection, isStacked: false) { route in
+            FeedbackListView(model: model, selected: selection, isStacked: false) { route in
                 withAnimation(ChatMotion.swap) { selection = route }
             }
             // The app's readable width is the window's; this column is narrower than it.
@@ -119,7 +119,7 @@ public struct FeatureRequestsView: View {
             NavigationStack {
                 ZStack {
                     if let selection {
-                        FeatureChatView(model: model, route: selection, conversation: conversation)
+                        FeedbackChatView(model: model, route: selection, conversation: conversation)
                             .id(selection)
                             .transition(.opacity)
                     } else {
@@ -146,7 +146,7 @@ extension View {
         navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    FeatureTitle(title: title)
+                    FeedbackTitle(title: title)
                 }
             }
         #else
@@ -156,7 +156,7 @@ extension View {
 }
 
 /// A Feedback screen's title in the bar, in the chat's type.
-private struct FeatureTitle: View {
+private struct FeedbackTitle: View {
     let title: String
     @Environment(\.chatTheme) private var theme
 
@@ -168,15 +168,15 @@ private struct FeatureTitle: View {
 }
 
 /// The conversations, newest first; on a wide screen the open one is marked, and a new one not sent yet sits on top.
-private struct FeatureListView: View {
+private struct FeedbackListView: View {
     @Environment(\.chatTheme) private var theme
-    let model: FeatureRequestsModel
-    let selected: FeatureRoute?
+    let model: FeedbackRequestsModel
+    let selected: FeedbackRoute?
     /// Pushed rows carry a chevron; rows beside their conversation are marked instead.
     let isStacked: Bool
-    let open: (FeatureRoute) -> Void
+    let open: (FeedbackRoute) -> Void
 
-    private var unsent: FeatureRoute? {
+    private var unsent: FeedbackRoute? {
         guard let selected, case .new = selected, model.thread(for: selected) == nil else {
             return nil
         }
@@ -197,7 +197,7 @@ private struct FeatureListView: View {
                         .transition(.opacity)
                 }
                 if model.list.threads.isEmpty, unsent == nil {
-                    Text(model.list.notice ?? FeatureList.agentNotice)
+                    Text(model.list.notice ?? FeedbackList.agentNotice)
                         .font(theme.font(.footnote))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, ChatSpace.lg)
@@ -226,7 +226,7 @@ private struct FeatureListView: View {
     }
 
     @ViewBuilder
-    private func row(route: FeatureRoute, title: String, date: Date?, isSelected: Bool) -> some View {
+    private func row(route: FeedbackRoute, title: String, date: Date?, isSelected: Bool) -> some View {
         if isStacked {
             NavigationLink(value: route) {
                 rowLabel(title: title, date: date, isSelected: false)

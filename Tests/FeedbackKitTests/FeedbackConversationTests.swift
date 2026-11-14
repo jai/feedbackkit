@@ -4,20 +4,20 @@ import Testing
 @testable import FeedbackKit
 
 @MainActor
-struct FeatureConversationTests {
-    private let thread = FeatureAgentThread(host: "builder", id: "codex:session-1")
-    private let route = FeatureRoute.thread("sesn_1")
+struct FeedbackConversationTests {
+    private let thread = FeedbackAgentThread(host: "builder", id: "codex:session-1")
+    private let route = FeedbackRoute.thread("sesn_1")
 
-    private func model(delivery: [String: FeatureMessageDelivery] = [:]) async -> FeatureRequestsModel {
+    private func model(delivery: [String: FeedbackMessageDelivery] = [:]) async -> FeedbackRequestsModel {
         let thread = thread
-        let samples = FeatureSamples(
-            list: FeatureList(threads: [], builderOnline: true),
-            chat: { FeatureChat(
+        let samples = FeedbackSamples(
+            list: FeedbackList(threads: [], builderOnline: true),
+            chat: { FeedbackChat(
                 id: $0, messages: [], isWorking: false, activity: nil, problem: nil,
                 costCents: nil, builderOnline: true, thread: thread, delivery: delivery
             ) }, answer: "Got it."
         )
-        let model = FeatureRequestsModel(client: FeatureClient(
+        let model = FeedbackRequestsModel(client: FeedbackClient(
             baseURL: { URL(string: "https://worker.example.com")! }, bearer: { "token" }, samples: samples
         ))
         await model.follow(route)
@@ -25,10 +25,10 @@ struct FeatureConversationTests {
     }
 
     @Test func everyUndeliveredStateKeepsTheExistingFeedbackHistory() async {
-        for state in [FeatureMessageDelivery.pending, .delivering, .failed, .unknown] {
+        for state in [FeedbackMessageDelivery.pending, .delivering, .failed, .unknown] {
             let model = await model(delivery: ["old-message": state])
             var called = false
-            let view = FeatureChatView(model: model, route: route, conversation: { _ in
+            let view = FeedbackChatView(model: model, route: route, conversation: { _ in
                 called = true
                 return AnyView(EmptyView())
             })
@@ -42,8 +42,8 @@ struct FeatureConversationTests {
         let model = await model(delivery: ["old-message": .delivered])
         model.drafts[route.box] = "The next change"
         let attachments = model.attachments(for: route.box)
-        var received: FeatureConversation?
-        let view = FeatureChatView(model: model, route: route, conversation: { context in
+        var received: FeedbackConversation?
+        let view = FeedbackChatView(model: model, route: route, conversation: { context in
             received = context
             return AnyView(EmptyView())
         })
@@ -59,8 +59,8 @@ struct FeatureConversationTests {
 
     @Test func theHostCanKeepFeedbackWhileItsThreadIsUnavailable() async {
         let model = await model()
-        var received: FeatureAgentThread?
-        let view = FeatureChatView(model: model, route: route, conversation: { context in
+        var received: FeedbackAgentThread?
+        let view = FeedbackChatView(model: model, route: route, conversation: { context in
             received = context.thread
             return nil
         })
@@ -72,7 +72,7 @@ struct FeatureConversationTests {
 
     @Test func anEarlierFailedMessageExplainsWhyTheChatCannotHandOff() async {
         let model = await model(delivery: ["old-message": .failed, "newer-message": .delivered])
-        let view = FeatureChatView(model: model, route: route, conversation: { _ in AnyView(EmptyView()) })
+        let view = FeedbackChatView(model: model, route: route, conversation: { _ in AnyView(EmptyView()) })
 
         #expect(view.hostedConversation == nil)
         #expect(view.handoffProblem == "An earlier message did not reach the agent. Start new feedback to continue.")
@@ -80,10 +80,10 @@ struct FeatureConversationTests {
 
     @Test func onlyAHostedChatThatHasStartedBlocksTheFeedbackComposer() async {
         let model = await model()
-        let hosted: (FeatureConversation) -> AnyView? = { _ in nil }
-        let first = FeatureChatView(model: model, route: .new(UUID()), conversation: hosted)
-        let started = FeatureChatView(model: model, route: route, conversation: hosted)
-        let standalone = FeatureChatView(model: model, route: route, conversation: nil)
+        let hosted: (FeedbackConversation) -> AnyView? = { _ in nil }
+        let first = FeedbackChatView(model: model, route: .new(UUID()), conversation: hosted)
+        let started = FeedbackChatView(model: model, route: route, conversation: hosted)
+        let standalone = FeedbackChatView(model: model, route: route, conversation: nil)
 
         #expect(!first.awaitsAgentThread)
         #expect(started.awaitsAgentThread)
@@ -97,21 +97,21 @@ struct FeatureConversationTests {
             + #"{"id":"two","role":"you","text":"Second","status":"queued"},"#
             + #"{"id":"three","role":"you","text":"Third"},"#
             + #"{"id":"answer","role":"agent","text":"Working"}]}"#
-        let chat = try JSONDecoder().decode(FeatureChat.self, from: Data(json.utf8))
+        let chat = try JSONDecoder().decode(FeedbackChat.self, from: Data(json.utf8))
 
         #expect(chat.delivery == ["one": .delivered, "two": .unknown, "three": .unknown])
         #expect(chat.hasUndeliveredMessages)
     }
 
     @Test func hostedDiscoveryContinuesAfterTheAgentBecomesIdleOrAReadFails() {
-        var chat = FeatureChat(
+        var chat = FeedbackChat(
             id: "sesn_1", messages: [], isWorking: false, activity: nil, problem: nil,
             costCents: nil, builderOnline: true
         )
-        #expect(!FeatureFollowMode.whileWorking.keepsReading(chat))
-        #expect(FeatureFollowMode.untilHandoff.keepsReading(chat))
-        #expect(FeatureFollowMode.untilHandoff.keepsReading(nil))
+        #expect(!FeedbackFollowMode.whileWorking.keepsReading(chat))
+        #expect(FeedbackFollowMode.untilHandoff.keepsReading(chat))
+        #expect(FeedbackFollowMode.untilHandoff.keepsReading(nil))
         chat.isWorking = true
-        #expect(FeatureFollowMode.whileWorking.keepsReading(chat))
+        #expect(FeedbackFollowMode.whileWorking.keepsReading(chat))
     }
 }

@@ -2,7 +2,7 @@ import AgentChatCore
 import Foundation
 
 /// One feature request, as the Worker lists it (`worker/src/feedback.ts` in Agent Pager's pr-worker).
-public struct FeatureThread: Decodable, Equatable, Identifiable, Hashable, Sendable {
+public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Sendable {
     public let id: String
     public let title: String
     public let createdAt: String
@@ -15,13 +15,13 @@ public struct FeatureThread: Decodable, Equatable, Identifiable, Hashable, Senda
 }
 
 /// The requests and whether the builder Mac is taking work.
-public struct FeatureList: Decodable, Equatable, Sendable {
-    public var threads: [FeatureThread]
+public struct FeedbackList: Decodable, Equatable, Sendable {
+    public var threads: [FeedbackThread]
     public var builderOnline: Bool
     /// What sending does, when the Worker says (an issue Worker: a public GitHub issue); nil is the coding agent.
     public var notice: String?
 
-    public init(threads: [FeatureThread], builderOnline: Bool, notice: String? = nil) {
+    public init(threads: [FeedbackThread], builderOnline: Bool, notice: String? = nil) {
         self.threads = threads
         self.builderOnline = builderOnline
         self.notice = notice
@@ -29,7 +29,7 @@ public struct FeatureList: Decodable, Equatable, Sendable {
 }
 
 /// The coding thread the feedback agent runs in, once the runner has started it.
-public struct FeatureAgentThread: Codable, Equatable, Hashable, Sendable {
+public struct FeedbackAgentThread: Codable, Equatable, Hashable, Sendable {
     public let host: String
     public let id: String
 
@@ -40,7 +40,7 @@ public struct FeatureAgentThread: Codable, Equatable, Hashable, Sendable {
 }
 
 /// What the feedback runner knows of a message. Missing or newer states stay unknown until it confirms delivery.
-public enum FeatureMessageDelivery: Equatable, Sendable, Decodable {
+public enum FeedbackMessageDelivery: Equatable, Sendable, Decodable {
     case pending
     case delivering
     case delivered
@@ -59,7 +59,7 @@ public enum FeatureMessageDelivery: Equatable, Sendable, Decodable {
 }
 
 /// One request's conversation with the builder agent: the Ask chat's shape, and whether the builder Mac is taking work.
-public struct FeatureChat: Decodable, Equatable, Sendable {
+public struct FeedbackChat: Decodable, Equatable, Sendable {
     /// One line of the conversation: the sender's (`you`) or the agent's.
     public struct Message: Decodable, Equatable, Identifiable, Sendable {
         public let id: String
@@ -86,18 +86,18 @@ public struct FeatureChat: Decodable, Equatable, Sendable {
     public var costCents: Int?
     public var builderOnline: Bool
     /// The agent's coding thread. A host with its own thread conversation can use that same reply path here.
-    public var thread: FeatureAgentThread?
+    public var thread: FeedbackAgentThread?
     /// How many screenshots each message carried, by its id; none for a message without.
     public var screenshots: [String: Int]
     /// Only the sender's messages have delivery states; agent messages do not travel through the runner's queue.
-    public var delivery: [String: FeatureMessageDelivery]
+    public var delivery: [String: FeedbackMessageDelivery]
 
     public var hasUndeliveredMessages: Bool { delivery.values.contains { $0 != .delivered } }
 
     public init(
         id: String, messages: [Message], isWorking: Bool, activity: String?, problem: String?,
-        costCents: Int?, builderOnline: Bool, screenshots: [String: Int] = [:], thread: FeatureAgentThread? = nil,
-        delivery: [String: FeatureMessageDelivery] = [:]
+        costCents: Int?, builderOnline: Bool, screenshots: [String: Int] = [:], thread: FeedbackAgentThread? = nil,
+        delivery: [String: FeedbackMessageDelivery] = [:]
     ) {
         self.id = id
         self.messages = messages
@@ -119,7 +119,7 @@ public struct FeatureChat: Decodable, Equatable, Sendable {
     private struct MessageMetadata: Decodable {
         var id: String
         var images: Int?
-        var status: FeatureMessageDelivery?
+        var status: FeedbackMessageDelivery?
     }
 
     public init(from decoder: any Decoder) throws {
@@ -131,7 +131,7 @@ public struct FeatureChat: Decodable, Equatable, Sendable {
         problem = try container.decodeIfPresent(String.self, forKey: .problem)
         costCents = try container.decodeIfPresent(Int.self, forKey: .costCents)
         builderOnline = try container.decode(Bool.self, forKey: .builderOnline)
-        if let agentThread = try container.decodeIfPresent(FeatureAgentThread.self, forKey: .thread),
+        if let agentThread = try container.decodeIfPresent(FeedbackAgentThread.self, forKey: .thread),
            !agentThread.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !agentThread.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             thread = agentThread
@@ -151,7 +151,7 @@ public struct FeatureChat: Decodable, Equatable, Sendable {
 
 /// What goes to the builder: the words, the screenshots and the build the sender is on. `client_ref` makes a retry send
 /// it once.
-struct FeatureMessage: Encodable, Sendable {
+struct FeedbackMessage: Encodable, Sendable {
     let text: String
     let build: String?
     let images: [MessageImage]
@@ -160,17 +160,17 @@ struct FeatureMessage: Encodable, Sendable {
 }
 
 /// Made-up requests and no Worker, for UI tests and screenshots: a send is answered a moment later.
-public struct FeatureSamples: Sendable {
-    public var list: FeatureList
+public struct FeedbackSamples: Sendable {
+    public var list: FeedbackList
     /// A listed request's conversation.
-    public var chat: @Sendable (String) -> FeatureChat
+    public var chat: @Sendable (String) -> FeedbackChat
     /// The agent's answer to anything sent.
     public var answer: String
     /// A picture each composer starts with in its tray; nil starts them empty.
     public var screenshot: Data?
 
     public init(
-        list: FeatureList, chat: @escaping @Sendable (String) -> FeatureChat, answer: String, screenshot: Data? = nil
+        list: FeedbackList, chat: @escaping @Sendable (String) -> FeedbackChat, answer: String, screenshot: Data? = nil
     ) {
         self.list = list
         self.chat = chat
@@ -180,15 +180,15 @@ public struct FeatureSamples: Sendable {
 }
 
 /// The Worker's feature-request routes. The host gives where they are and how to reach them (`FeedbackConnection`).
-public struct FeatureClient: Sendable {
+public struct FeedbackClient: Sendable {
     /// The routes' root on the Worker: `GET/POST feedback` and `GET/POST feedback/<id>`.
     static let root = "feedback"
 
     let connection: any FeedbackConnection
-    /// Set: nothing leaves the device (`FeatureSamples`).
-    public let samples: FeatureSamples?
+    /// Set: nothing leaves the device (`FeedbackSamples`).
+    public let samples: FeedbackSamples?
 
-    public init(connection: any FeedbackConnection, samples: FeatureSamples? = nil) {
+    public init(connection: any FeedbackConnection, samples: FeedbackSamples? = nil) {
         self.connection = connection
         self.samples = samples
     }
@@ -196,21 +196,21 @@ public struct FeatureClient: Sendable {
     /// Straight to a Worker with `URLSession`: its root, and the bearer each request carries.
     public init(
         baseURL: @escaping @Sendable () -> URL?, bearer: @escaping @Sendable () async throws -> String,
-        samples: FeatureSamples? = nil
+        samples: FeedbackSamples? = nil
     ) {
         self.init(connection: URLFeedbackConnection(baseURL: baseURL, bearer: bearer), samples: samples)
     }
 
-    func list() async throws -> FeatureList {
-        try await connection.read(Self.root, as: FeatureList.self)
+    func list() async throws -> FeedbackList {
+        try await connection.read(Self.root, as: FeedbackList.self)
     }
 
-    func chat(_ thread: String) async throws -> FeatureChat {
-        try await connection.read("\(Self.root)/\(thread)", as: FeatureChat.self)
+    func chat(_ thread: String) async throws -> FeedbackChat {
+        try await connection.read("\(Self.root)/\(thread)", as: FeedbackChat.self)
     }
 
     /// To the thread, or as a new request when there is none: that makes the thread.
-    func send(_ message: FeatureMessage, to thread: String?) async throws -> FeatureChat {
-        try await connection.send(thread.map { "\(Self.root)/\($0)" } ?? Self.root, message, as: FeatureChat.self)
+    func send(_ message: FeedbackMessage, to thread: String?) async throws -> FeedbackChat {
+        try await connection.send(thread.map { "\(Self.root)/\($0)" } ?? Self.root, message, as: FeedbackChat.self)
     }
 }
