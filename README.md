@@ -4,8 +4,14 @@
 
 The app shows `FeatureRequestsView`; each conversation goes to the app's Worker (`GET/POST /feedback` and
 `/feedback/<id>`), which hands it to the FeedbackKit Worker. A request from one of the app's owners starts a coding
-session that makes the change; anyone else's becomes a GitHub issue. The Worker side is documented in
-[jai/prhub `docs/featurekit.md`](https://github.com/jai/prhub/blob/main/docs/featurekit.md) for now.
+session that makes the change; anyone else's becomes a GitHub issue.
+
+This repo holds both sides:
+
+- `Sources/FeedbackKit`: the Swift package, the screens and the client.
+- `worker/`: the FeedbackKit Worker (`featurekit` on Cloudflare), which keeps every app's feedback, hands owners' and
+  builders' messages to the runner on Jai's Mac, and opens issues for everyone else ([docs/worker.md](docs/worker.md)).
+- [docs/api.md](docs/api.md): the routes an app's backend serves and forwards.
 
 The chat is [AgentChatKit](https://github.com/jai/agentchatkit)'s, re-exported, so it takes the app's `ChatTheme`.
 
@@ -28,4 +34,5 @@ FeatureRequestsView(model: feedback)   // the list and New; a conversation pushe
 
 ## Develop
 
-`swift test`. Swift 6, iOS 26 and macOS 26.
+- Swift: `swift test`. Swift 6, iOS 26 and macOS 26.
+- Worker: `npm ci`, `npm test` and `npm run typecheck` in `worker/`. Deploy: [docs/worker.md](docs/worker.md#deploy).
