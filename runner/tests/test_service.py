@@ -101,6 +101,13 @@ class ServiceTests(unittest.TestCase):
         loop.step()
         self.assertEqual(runner.saved, 1)
 
+    def test_the_old_runner_back_stops_this_one_before_a_tick(self) -> None:
+        loop, runner, _, _ = service([])
+        loop.old_runner = lambda: "com.jai.agent-pager-feedback-runner is loaded"
+        with self.assertRaises(SystemExit):
+            loop.step()
+        self.assertEqual(runner.ticks, [])
+
     def test_the_first_wait_learns_the_count_without_a_tick(self) -> None:
         loop, runner, api, _ = service([9, 9])
         loop.seq = None

@@ -79,8 +79,10 @@ class Service:
         api: FeedbackApi,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        old_runner: Callable[[], str | None] = lambda: None,
     ) -> None:
         self.runner = runner
+        self.old_runner = old_runner
         self.api = api
         self.clock = clock
         self.sleep = sleep
@@ -125,7 +127,13 @@ class Service:
         return woke
 
     def step(self) -> None:
+        """Exits when Agent Pager's old runner is back (a `make threads-install` from before it was removed): launchd
+        starts this one again, and it waits until the old one is gone."""
         if self.clock() >= self.next_full:
+            old = self.old_runner()
+            if old is not None:
+                log("FEEDBACK_OLD_RUNNER", logging.WARNING, reason=f"{old}; stopping so two runners never run at once")
+                raise SystemExit(0)
             self.next_full = self.clock() + FULL_TICK_SECONDS
             self.tick(fast=False)
         if self.wait():
@@ -181,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         check_queue=hub.check_queue,
     )
     log("FEEDBACK_RUNNER_STARTED", pid=os.getpid())
-    Service(runner, api).run()
+    Service(runner, api, old_runner=old_runner_running).run()
     return 0
 
 
