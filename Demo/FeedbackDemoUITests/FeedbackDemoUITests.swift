@@ -30,7 +30,7 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertTrue(text("Archive hook: \(title)").waitForExistence(timeout: 5))
         row.press(forDuration: 1.2)
         app.buttons["Delete"].firstMatch.tap()
-        app.buttons["Cancel"].firstMatch.tap()
+        cancelConfirmation()
         XCTAssertFalse(text("Delete hook:").exists)
         row.press(forDuration: 1.2)
         app.buttons["Delete"].firstMatch.tap()
@@ -110,7 +110,23 @@ final class FeedbackDemoUITests: XCTestCase {
 
     /// A list row: its title, then its age.
     private func row(_ title: String) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        // The row's button holds its title as a text of its own on iOS 26, not as its label.
+        app.buttons.containing(NSPredicate(format: "label == %@", title)).firstMatch
+    }
+
+    /// iOS 26 shows a row's confirmation dialog without a Cancel button; a tap on the dimmed screen outside it cancels.
+    private func cancelConfirmation() {
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.waitForExistence(timeout: 2) {
+            cancel.tap()
+            return
+        }
+        let dialog = app.sheets.firstMatch
+        let screen = app.windows.firstMatch.frame
+        let frame = dialog.exists ? dialog.frame : CGRect(x: 0, y: screen.midY, width: screen.width, height: 0)
+        let y = frame.minY > 200 ? (frame.minY - 60) / screen.height : (frame.maxY + 60) / screen.height
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: min(max(y, 0.15), 0.95))).tap()
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 3), "the confirmation dialog stayed open")
     }
 
     private func back() {

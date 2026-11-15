@@ -11,7 +11,7 @@ struct FeedbackDirectTests {
         let rest = DirectHTTP(statuses: [401, 200])
         let tokens = TokenCalls()
         let client = FeedbackClient(direct: FeedbackDirect(
-            baseURL: URL(string: "https://worker.test")!, token: tokens.token, http: rest
+            baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) }, http: rest
         ))
         let message = FeedbackMessage(text: "Change it", build: "42", images: [.init(jpeg: Data([1, 2, 3]))],
                                       client_ref: "once")
@@ -33,7 +33,7 @@ struct FeedbackDirectTests {
         for rest in [DirectHTTP(statuses: [401, 401]), DirectHTTP(fails: true)] {
             let tokens = TokenCalls()
             let client = FeedbackClient(direct: FeedbackDirect(
-                baseURL: URL(string: "https://worker.test")!, token: tokens.token, http: rest
+                baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) }, http: rest
             ))
             do { _ = try await client.send(.init(text: "One", build: nil, images: [], client_ref: "one"), to: nil)
                 Issue.record("Expected refusal")
@@ -66,7 +66,7 @@ struct FeedbackDirectTests {
     @Test func imagesAuthenticateOnlySameOriginAndRenewOnceWithoutLeakingToExternalOrigins() async throws {
         let images = DirectHTTP(statuses: [401, 200, 200, 200])
         let tokens = TokenCalls()
-        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: tokens.token,
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
                                     images: images)
         for uri in ["/v2/feedback/chat-1/images/m1/0", "https://cdn.test/signed.png?signature=fixture",
                     "https://worker.test:8443/other.png"] {
@@ -89,7 +89,7 @@ struct FeedbackDirectTests {
     @Test func externalImage401DoesNotRequestAFeedbackTokenOrRetry() async throws {
         let images = DirectHTTP(statuses: [401])
         let tokens = TokenCalls()
-        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: tokens.token,
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
                                     images: images)
         guard case .failure = await direct.loadScreenshot(try attachment("https://cdn.test/expired.png")) else {
             Issue.record("Expected expired external image to fail")
@@ -102,7 +102,7 @@ struct FeedbackDirectTests {
     @Test func unsafeImageSchemesAndCredentialsAreRejectedBeforeTransportOrTokenAccess() async throws {
         let images = DirectHTTP()
         let tokens = TokenCalls()
-        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: tokens.token,
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
                                     images: images)
         for uri in ["file:///private/photo.png", "data:image/png;base64,eA==", "http://worker.test/image",
                     "https://user:password@worker.test/image", "javascript:alert(1)"] {
@@ -120,7 +120,7 @@ struct FeedbackDirectTests {
         await server.accept(bearer: "renewed-fixture")
         let tokens = TokenCalls()
         let endpoint = EndpointCapture()
-        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: tokens.token,
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
                                     liveFactory: { value in
             endpoint.url = value.acp
             return LiveChatModel(endpoint: LiveEndpoint(acp: server.acp, session: server.session, bearer: value.bearer),

@@ -32,8 +32,8 @@ final class LiveFeedbackUITests: XCTestCase {
         let field = app.textViews["sessionReplyField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let draft = NSPredicate(format: "value CONTAINS %@", "Edit these queued words")
-        expectation(for: draft, evaluatedWith: field)
-        waitForExpectations(timeout: 5)
+        let filled = XCTNSPredicateExpectation(predicate: draft, object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [filled], timeout: 5), .completed)
         XCTAssertTrue(element("feedback-edit-edit").waitForNonExistence(timeout: 5))
         activate(element("feedback-remove-remove"))
         XCTAssertTrue(element("feedback-remove-remove").waitForNonExistence(timeout: 5))
