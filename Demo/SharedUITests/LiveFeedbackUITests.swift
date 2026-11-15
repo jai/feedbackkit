@@ -27,7 +27,9 @@ final class LiveFeedbackUITests: XCTestCase {
 
     func testQueuedWordsAppearOnceAndSharedActionsReachACP() {
         launch("queue")
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Edit these queued words")).count, 1)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(
+            format: "label == %@ OR value == %@", "Edit these queued words", "Edit these queued words"
+        )).count, 1)
         activate(element("feedback-edit-edit"))
         let field = app.textViews["sessionReplyField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -102,7 +104,10 @@ final class LiveFeedbackUITests: XCTestCase {
 
     private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
     private func text(_ value: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
+        // A Mac StaticText holds its words in value, not label.
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value)
+        ).firstMatch
     }
 
     private func capture(_ name: String) {
