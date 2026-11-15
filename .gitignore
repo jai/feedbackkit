@@ -5,3 +5,4 @@ DerivedData/
 *.xcodeproj/
 deploy/wrangler.jsonc
 __pycache__/
+runner/MenuBar/FeedbackKitRunner.zip

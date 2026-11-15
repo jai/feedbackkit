@@ -1,0 +1,44 @@
+# The FeedbackKit Runner menu bar app (runner/MenuBar): its tests on every change, and on main a build published as
+# the GitHub prerelease `runner-menu` (FeedbackKitRunner.zip), which runner/MenuBar/install.sh downloads on Jai's Mac.
+# Nothing builds on Jai's Macs (jai/ci RULES.md). The tag is not a v* version: the hourly release never reads it.
+name: runner-menu
+on:
+  push:
+    branches: [main]
+    paths: ["runner/MenuBar/**", ".github/workflows/runner-menu.yml"]
+  pull_request:
+    paths: ["runner/MenuBar/**", ".github/workflows/runner-menu.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-menu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # GitHub's own Mac runner: free for a public repo.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: runner/MenuBar
+      - run: ./bundle.sh FeedbackKitRunner.zip
+        working-directory: runner/MenuBar
+      - name: Publish the runner-menu prerelease
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="The FeedbackKit Runner menu bar app, built from ${GITHUB_SHA::7}. Install: runner/MenuBar/README.md."
+          # The tag stays where the release was first made; the zip is replaced, and the notes name its commit.
+          if gh release view runner-menu >/dev/null 2>&1; then
+            gh release edit runner-menu --notes "$notes" --prerelease --latest=false
+          else
+            gh release create runner-menu --target "$GITHUB_SHA" --title "FeedbackKit Runner (menu bar)" \
+              --notes "$notes" --prerelease --latest=false
+          fi
+          gh release upload runner-menu runner/MenuBar/FeedbackKitRunner.zip --clobber
