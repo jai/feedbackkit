@@ -775,6 +775,10 @@ class LegacyCloneTests(RunnerCase):
         }
         return self.runner()
 
+    def test_what_it_shipped_is_asked_about_in_its_clone_else_the_app_s_project(self) -> None:
+        self.legacy().tick()
+        self.assertEqual(self.cube.probes[-1][:2], (CLONE_PATH, BASE), "a deleted clone falls back to the project")
+
     def test_a_reply_still_goes_into_its_clone_s_chat(self) -> None:
         self.assertEqual(self.legacy().state["chats"][CHAT]["layout"], "clone")
         self.now += STARTING_SECONDS

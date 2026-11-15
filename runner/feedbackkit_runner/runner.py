@@ -1021,7 +1021,8 @@ class Runner:
         if sender is None or self.clock() - known.get("shipped_at", 0) < every:
             return None
         known["shipped_at"] = self.clock()
-        project = known["clone"] if known["layout"] == "clone" else project_path(sender["app"])
+        # A chat from before worktrees had its own clone; once it is gone, its commits are asked about in the project.
+        project = project_path(sender["app"])
         try:
             found = builder.cube.shipped(known["clone"], project, known.get("shipped_shas", []), known.get("branch"))
             listed = found.get("commits")
