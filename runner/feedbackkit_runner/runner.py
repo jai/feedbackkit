@@ -428,8 +428,8 @@ class Cube:
         self.machine = machine
         self.state_dir = state_dir
 
-    def sh(self, script: str, *arguments: str, stdin: bytes | None = None) -> None:
-        """RuntimeError with the script's last line when it fails."""
+    def sh(self, script: str, *arguments: str, stdin: bytes | None = None) -> str:
+        """The script's output; RuntimeError with its last line when it fails."""
         command = self.machine.command(["/bin/sh", "-c", script, "sh", *arguments])
         try:
             done = subprocess.run(
@@ -443,6 +443,7 @@ class Cube:
             raise RuntimeError(f"{self.machine.id} did not answer: {type(failure).__name__}") from failure
         if done.returncode != 0:
             raise RuntimeError(last_line(done.stderr.decode("utf-8", "replace")) or f"exit {done.returncode:d}")
+        return done.stdout.decode("utf-8", "replace")
 
     def clone(self, path: str, repo: str) -> None:
         """The repo cloned at `path` unless it is there, with Jai's identity, and fetched."""
@@ -472,11 +473,13 @@ class Cube:
             paths.append(path)
         return paths
 
-    def check_pushed(self, folder: str) -> None:
-        """RuntimeError saying what is left when the checkout has uncommitted changes, or commits on no branch of
-        origin (a worktree's branch has no upstream, so `@{u}` would say nothing)."""
-        self.sh(
-            'set -e; cd "$1"; git fetch -q origin; changes=$(git status --porcelain); [ -z "$changes" ] || '
+    def check_pushed(self, folder: str) -> bool:
+        """False when the checkout is gone already (nothing in it can be lost); RuntimeError saying what is left when it
+        has uncommitted changes, or commits on no branch of origin (a worktree's branch has no upstream, so `@{u}`
+        would say nothing)."""
+        return "gone" not in self.sh(
+            'set -e; [ -d "$1" ] || { echo gone; exit 0; }; cd "$1"; git fetch -q origin; '
+            'changes=$(git status --porcelain); [ -z "$changes" ] || '
             '{ echo "uncommitted changes" >&2; exit 1; }; unpushed=$(git log --oneline HEAD --not --remotes=origin); '
             '[ -z "$unpushed" ] || { echo "unpushed commits" >&2; exit 1; }',
             folder,
@@ -928,19 +931,21 @@ class Runner:
             known["last_activity"] = self.clock()
             return f"FEEDBACK_CLONE_KEPT chat={chat} clone={folder} reason=a full clone from before worktrees; Jai removes it"
         try:
-            builder.cube.check_pushed(folder)
-            builder.orca.remove(folder)
+            there = builder.cube.check_pushed(folder)
+            if there:
+                builder.orca.remove(folder)
         except RuntimeError as failure:
             known["last_activity"] = self.clock()
             return f"FEEDBACK_WORKTREE_KEPT chat={chat} worktree={folder} reason={failure}"
         known["removed"] = True
+        done = "FEEDBACK_WORKTREE_REMOVED" if there else "FEEDBACK_WORKTREE_GONE"
         sender = known.get("sender")
         if sender:
             try:
                 builder.cube.remove_folder(first_screenshots(sender["app"], chat))
             except RuntimeError as failure:
-                return f"FEEDBACK_WORKTREE_REMOVED chat={chat} worktree={folder} screenshots-kept={failure}"
-        return f"FEEDBACK_WORKTREE_REMOVED chat={chat} worktree={folder}"
+                return f"{done} chat={chat} worktree={folder} screenshots-kept={failure}"
+        return f"{done} chat={chat} worktree={folder}"
 
     def post_side(self, chat: str, known: ChatState, side: JsonObject, now: float) -> str | None:
         """Sends the agent's side when it changed, or a minute after the last send; a chat the Worker does not have

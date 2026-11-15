@@ -144,6 +144,7 @@ class FakeCube(Cube):
         self.row: JsonObject | None = None
         self.removed: list[str] = []
         self.dirty = False
+        self.gone = False
         self.folders: list[str] = []
         self.checked: list[str] = []
 
@@ -160,10 +161,11 @@ class FakeCube(Cube):
     def thread(self, clone: str) -> JsonObject | None:
         return self.row if self.row and clone == self.row.get("cwd") else None
 
-    def check_pushed(self, folder: str) -> None:
+    def check_pushed(self, folder: str) -> bool:
         self.checked.append(folder)
         if self.dirty:
             raise RuntimeError("unpushed commits")
+        return not self.gone
 
     def remove_folder(self, folder: str) -> None:
         self.removed.append(folder)
@@ -597,6 +599,17 @@ class RunnerTests(RunnerCase):
         self.runner().tick()
         self.assertEqual(self.orca.removed, [WORKTREE])
 
+    def test_a_worktree_already_gone_counts_as_removed(self) -> None:
+        self.started()
+        self.api.work = []
+        self.cube.gone = True
+        self.now += TIDY_AFTER_SECONDS + 1
+        lines = self.runner().tick()
+        self.assertEqual(self.orca.removed, [], "Orca has nothing to remove")
+        self.assertTrue(any(line.startswith("FEEDBACK_WORKTREE_GONE") for line in lines))
+        self.now += TIDY_AFTER_SECONDS + 1
+        self.assertFalse(any("FEEDBACK_WORKTREE" in line for line in self.runner().tick()), "not asked again")
+
 
 class LegacyCloneTests(RunnerCase):
     """Chats started before 2026-11-14 each have a full clone, `<repo>_fb-<id>`, and an Orca project of their own."""
@@ -1014,7 +1027,8 @@ class CheckPushedTests(unittest.TestCase):
             self.git(base, "push", "-q", "origin", "HEAD:main")
             self.git(base, "worktree", "add", "-q", "-b", "fb-01234567", str(worktree), "origin/main")
             cube = Cube(LocalMachine("local"), Path(root))
-            cube.check_pushed(str(worktree))
+            self.assertTrue(cube.check_pushed(str(worktree)))
+            self.assertFalse(cube.check_pushed(str(Path(root) / "fb-gone")))
 
             (worktree / "change.txt").write_text("x", "utf-8")
             with self.assertRaisesRegex(RuntimeError, "uncommitted changes"):
