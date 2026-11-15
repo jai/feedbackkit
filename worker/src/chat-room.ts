@@ -91,8 +91,13 @@ export class ChatRoom {
     // The app only listens; its pings are answered without waking the room.
   }
 
+  /** The close, answered. 1005 and 1006 only say no code came, and may not be sent: those answer 1000. */
   webSocketClose(socket: WebSocket, code: number, reason: string): void {
-    socket.close(code, reason);
+    try {
+      socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+    } catch {
+      // Closed already.
+    }
   }
 }
 
