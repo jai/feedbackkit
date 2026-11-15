@@ -1,5 +1,5 @@
-"""What the runner still takes from Agent Pager's threads hub (jai/agent-pager collectors/threads), imported from its
-clone on the Mac mini: the builders as SSH machines, reading a thread's transcript, sending a message into an Orca chat
+"""What the runner still takes from Agent Pager's threads hub (jai/agent-pager collectors/threads), imported from the
+copy `make threads-install` keeps on the Mac mini (a LaunchAgent's python may not read ~/Developer there): the builders as SSH machines, reading a thread's transcript, sending a message into an Orca chat
 (`agentSession.send`, run on the builder over SSH) and starting a scan.
 
 Follow-up: the runner gets its own Orca send and coding-thread lookup (Orca's agent-session journal on the builder), and
@@ -14,7 +14,7 @@ from typing import Callable, NamedTuple
 
 from .runner import CheckQueue, ConversationReader, Deliver, Machine
 
-THREADS_DIR = Path.home() / "Developer" / "agent-pager" / "collectors" / "threads"
+THREADS_DIR = Path.home() / "Library" / "Application Support" / "agent-pager-threads"
 
 
 class AgentPager(NamedTuple):
@@ -26,7 +26,7 @@ class AgentPager(NamedTuple):
 
 
 def load(threads_dir: Path = THREADS_DIR) -> AgentPager:
-    """Agent Pager's hub from its clone; ImportError when the clone is not there."""
+    """Agent Pager's installed hub; ImportError when it is not there."""
     sys.path.insert(0, str(threads_dir))
     from hub.conversation_server import MachineReader
     from hub.fleet_scan import FLEET_BY_ID

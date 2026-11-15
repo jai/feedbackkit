@@ -14,8 +14,9 @@ thread's words back. It runs on Jais-Mac-mini as jai: `python3 -m feedbackkit_ru
   `feedback-runner-featurekit.json` (in `~/Library/Application Support/agent-pager-threads/state/`) moves here as it
   is, renamed `.migrated` there, so running chats keep their threads and claimed messages their journal.
 - **Agent Pager.** Finding a chat's thread, reading its transcript and sending a later message use Agent Pager's
-  threads hub, imported from `~/Developer/agent-pager/collectors/threads` (`feedbackkit_runner/agent_pager.py`), and
-  its scans of the builders. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager clone.
+  threads hub, imported from the copy its install keeps in `~/Library/Application Support/agent-pager-threads`
+  (`feedbackkit_runner/agent_pager.py`; a LaunchAgent's python may not read `~/Developer`), and its scans of the
+  builders. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager hub.
 
 ## Install
 
@@ -31,8 +32,7 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
 
 - `~/.credentials/feedbackkit`: `FEEDBACKKIT_URL` and `FEEDBACKKIT_RUNNER_TOKEN`.
 - Each builder's Orca paired on the mini (`orca environment add`) and SSH to it (Agent Pager's fleet aliases).
-- Agent Pager's clone at `~/Developer/agent-pager` and its threads hub installed (`make threads-install`), which scans
-  the builders.
+- Agent Pager's threads hub installed (`make threads-install`), which scans the builders.
 
 ## What it does
 

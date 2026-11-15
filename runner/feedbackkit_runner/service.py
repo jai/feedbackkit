@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-dir", type=Path, default=STATE_DIR)
     parser.add_argument("--scan-dir", type=Path, default=SCAN_DIR, help="Agent Pager's threads hub state folder")
     parser.add_argument("--credentials", type=Path, default=CREDENTIALS)
-    parser.add_argument("--agent-pager", type=Path, default=agent_pager.THREADS_DIR, help="its collectors/threads")
+    parser.add_argument("--agent-pager", type=Path, default=agent_pager.THREADS_DIR, help="Agent Pager's installed threads hub")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
     url = credential_record(args.credentials, "FEEDBACKKIT_URL")

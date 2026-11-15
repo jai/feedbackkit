@@ -9,7 +9,7 @@ login and again by launchd if it ever exits. A changed plist reloads the job; ch
   install.py             install
 
 No credential is installed: the runner reads ~/.credentials/feedbackkit (FEEDBACKKIT_URL, FEEDBACKKIT_RUNNER_TOKEN) as
-it starts. It also needs Agent Pager's clone at ~/Developer/agent-pager and its threads hub's scans (runner/README.md).
+it starts. It also needs Agent Pager's installed threads hub and its scans (runner/README.md).
 """
 
 from __future__ import annotations
