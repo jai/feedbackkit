@@ -83,7 +83,11 @@ struct FeedbackChatView: View {
                 )
             },
             sent: messages.count(where: \.isJai), readsEnd: $readsEnd, focus: $isWriting,
-            extras: { _ in EmptyView() },
+            extras: { message in
+                if message.role == .mine, let state = delivery(for: message.id) {
+                    SentReplyStatus(state: state.replyState, text: state.statusText, about: message.text)
+                }
+            },
             header: {
                 if chat?.builderOnline == false || (isNew && !model.list.builderOnline) {
                     BuilderNote()
@@ -105,6 +109,11 @@ struct FeedbackChatView: View {
             },
             composer: { composer }
         )
+    }
+
+    private func delivery(for messageID: String) -> FeedbackMessageDelivery? {
+        if messageID == Self.pendingID { return nil }
+        return chat?.delivery[messageID]
     }
 
     private struct FollowKey: Hashable {

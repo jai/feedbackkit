@@ -15,6 +15,36 @@ final class FeedbackDemoUITests: XCTestCase {
         app.launch()
     }
 
+    func testSharedRowsCallOnlyTheHostsConfirmedActions() throws {
+        app.terminate()
+        app.launchArguments += ["-DemoThreadControls"]
+        app.launch()
+        let title = "Make the sync button bigger, it's hard to hit"
+        let row = app.staticTexts[title].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["About: Shared conversation row"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Demo chip"].firstMatch.exists)
+        screenshot("shared-thread-row")
+        row.press(forDuration: 1.2)
+        app.buttons["Archive"].firstMatch.tap()
+        XCTAssertTrue(text("Archive hook: \(title)").waitForExistence(timeout: 5))
+        row.press(forDuration: 1.2)
+        app.buttons["Delete"].firstMatch.tap()
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertFalse(text("Delete hook:").exists)
+        row.press(forDuration: 1.2)
+        app.buttons["Delete"].firstMatch.tap()
+        let confirmation = app.sheets.buttons["Delete"].firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
+        XCTAssertTrue(text("Delete hook: \(title)").waitForExistence(timeout: 5))
+    }
+
+    func testFeedbackUsesTheSharedSentReplyTicks() throws {
+        open("Make the sync button bigger, it's hard to hit")
+        XCTAssertTrue(app.descendants(matching: .any)["reply-ticks-2"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testMainFlows() throws {
         XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.
@@ -107,7 +137,11 @@ final class FeedbackDemoUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         if let folder = ProcessInfo.processInfo.environment["FEEDBACKDEMO_SCREENSHOTS"] {
-            try? shot.pngRepresentation.write(to: URL(fileURLWithPath: folder).appending(path: "\(name).png"))
+            do {
+                try shot.pngRepresentation.write(to: URL(fileURLWithPath: folder).appending(path: "\(name).png"))
+            } catch {
+                XCTFail("Could not keep the rendered demo: \(error)")
+            }
         }
     }
 }

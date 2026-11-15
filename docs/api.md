@@ -10,7 +10,7 @@ App routes, on the app's backend with the app's own auth:
 
 | Route | Body | Answer |
 |---|---|---|
-| `GET /feedback` | | `{threads: [{id, title, createdAt}], builderOnline, notice?}`, newest first |
+| `GET /feedback` | | `{threads: [{id, title, createdAt, thread}], builderOnline, notice?}`, newest first |
 | `POST /feedback` | `{text, build?, images?, client_ref?}` | the new chat |
 | `GET /feedback/{id}` | | the chat; `404` none |
 | `POST /feedback/{id}` | as above | the chat, with the message added |
@@ -25,6 +25,8 @@ App routes, on the app's backend with the app's own auth:
 - `text` at most 8,000 characters; `images` up to four JPEG or PNG `{media_type, data}` of at most 1.5 MB decoded.
   Neither: `400`. A repeat `client_ref` keeps the message once.
 - `isWorking` from a send until the agent's turn ends; `problem` says why the last message was not passed on.
+  Each row's `thread` is the existing coding thread `{host, id}`, or `null` until the runner names it. A host can use it to draw live status and accessories without opening every conversation.
+
   `builderOnline`: the runner polled in the last 90 seconds and said its Mac answers. `notice`, when sending opens a public issue, says so;
   the app shows it above a new chat.
 
