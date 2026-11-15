@@ -49,6 +49,10 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.
         XCTAssertTrue(text("An agent makes the change, tests it and ships a build.").waitForExistence(timeout: 10))
+        // Each request's row says where its agent stands.
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-agent-working"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-agent-needs_you"].exists
+                      || app.descendants(matching: .any)["feedback-agent-idle"].exists)
         screenshot("owner-list")
         open("Make the sync button bigger, it's hard to hit")
         XCTAssertTrue(app.descendants(matching: .any)["feedback-working"].waitForExistence(timeout: 5))

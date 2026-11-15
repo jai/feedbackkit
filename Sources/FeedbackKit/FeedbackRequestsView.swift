@@ -224,7 +224,7 @@ private struct FeedbackListView: View {
             row(
                 route: .thread(thread.id), title: thread.title,
                 date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
-                custom: customLabel?(thread)
+                agent: thread.agent, custom: customLabel?(thread)
             )
         } header: {
             if !model.list.builderOnline {
@@ -256,28 +256,34 @@ private struct FeedbackListView: View {
 
     @ViewBuilder
     private func row(
-        route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, custom: AnyView? = nil
+        route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent? = nil,
+        custom: AnyView? = nil
     ) -> some View {
         if isStacked {
             NavigationLink(value: route) {
-                rowLabel(title: title, date: date, isSelected: false, custom: custom)
+                rowLabel(title: title, date: date, isSelected: false, agent: agent, custom: custom)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("feedback-thread")
         } else {
-            Button { open(route) } label: { rowLabel(title: title, date: date, isSelected: isSelected, custom: custom) }
+            Button { open(route) } label: { rowLabel(title: title, date: date, isSelected: isSelected, agent: agent, custom: custom) }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("feedback-thread")
         }
     }
 
-    private func rowLabel(title: String, date: Date?, isSelected: Bool, custom: AnyView?) -> some View {
+    private func rowLabel(
+        title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent?, custom: AnyView?
+    ) -> some View {
         Group {
             if let custom {
                 custom
             } else {
                 ChatThreadRow(title: title) {
                     HStack(spacing: ChatSpace.sm) {
+                        if let agent {
+                            FeedbackAgentStatus(agent: agent)
+                        }
                         if let date {
                             Text(ThreadTimeFormat().age(date, now: .now))
                                 .chatTextStyle(.meta)
@@ -309,5 +315,29 @@ struct BuilderNote: View {
         .foregroundStyle(theme.toneWaiting)
         .padding(.horizontal, ChatSpace.lg)
         .accessibilityIdentifier("feedback-builder-offline")
+    }
+}
+
+/// A feedback chat's agent on its row: a spinner and what it is doing, "Needs you", or "Idle".
+struct FeedbackAgentStatus: View {
+    @Environment(\.chatTheme) private var theme
+    let agent: FeedbackThreadAgent
+
+    var body: some View {
+        HStack(spacing: ChatSpace.xs) {
+            switch agent.state {
+            case .working:
+                ProgressView().controlSize(.mini)
+                Text(agent.activity ?? "Working").foregroundStyle(theme.inkQuiet)
+            case .needsYou:
+                Text("Needs you").foregroundStyle(theme.toneWaiting).fontWeight(.semibold)
+            case .idle:
+                Text("Idle").foregroundStyle(theme.inkQuiet)
+            }
+        }
+        .chatTextStyle(.meta)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("feedback-agent-\(agent.state.rawValue)")
     }
 }

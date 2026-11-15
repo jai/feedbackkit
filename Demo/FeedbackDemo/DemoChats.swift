@@ -7,7 +7,12 @@ extension DemoRole {
     func samples(now: Date = .now) -> FeedbackSamples {
         let chats = chats
         let list = FeedbackList(
-            threads: chats.map { FeedbackThread(id: $0.chat.id, title: $0.title, createdAt: $0.age.before(now)) },
+            threads: chats.map {
+                FeedbackThread(
+                    id: $0.chat.id, title: $0.title, createdAt: $0.age.before(now),
+                    agent: self == .everyone ? nil : Self.agent(of: $0.chat)
+                )
+            },
             builderOnline: true,
             notice: self == .everyone
                 ? "Sending opens a public GitHub issue on \(DemoRepo.name), where anyone can read it." : nil
@@ -23,6 +28,14 @@ extension DemoRole {
             },
             answer: script.answer
         )
+    }
+
+    /// The list's state for a seeded chat, as the Worker derives it: working, the agent spoke last (needs you), or idle.
+    private static func agent(of chat: FeedbackChat) -> FeedbackThreadAgent {
+        if chat.isWorking {
+            return FeedbackThreadAgent(state: .working, activity: chat.activity)
+        }
+        return chat.messages.last?.role == "agent" ? FeedbackThreadAgent(state: .needsYou) : FeedbackThreadAgent(state: .idle)
     }
 
     private var chats: [SeedChat] {

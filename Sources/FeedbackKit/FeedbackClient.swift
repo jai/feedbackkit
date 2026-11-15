@@ -8,15 +8,20 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
     public let createdAt: String
     /// The coding thread behind this feedback, when the runner has started it. Hosts can show their live row data.
     public let thread: FeedbackAgentThread?
+    /// Where its agent stands, for the row; nil from a Worker before this was served, and for issue chats.
+    public let agent: FeedbackThreadAgent?
 
-    public init(id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil) {
+    public init(
+        id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil, agent: FeedbackThreadAgent? = nil
+    ) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
         self.thread = thread
+        self.agent = agent
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread }
+    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread, agent }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,6 +29,24 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
         title = try container.decode(String.self, forKey: .title)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
+        agent = try? container.decodeIfPresent(FeedbackThreadAgent.self, forKey: .agent)
+    }
+}
+
+/// A feedback chat's agent on the list: working (and at what), waiting on the sender, or idle.
+public struct FeedbackThreadAgent: Decodable, Equatable, Hashable, Sendable {
+    public enum State: String, Decodable, Sendable {
+        case working
+        case needsYou = "needs_you"
+        case idle
+    }
+
+    public let state: State
+    public let activity: String?
+
+    public init(state: State, activity: String? = nil) {
+        self.state = state
+        self.activity = activity
     }
 }
 

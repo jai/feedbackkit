@@ -33,6 +33,31 @@ export interface FeedbackThread {
   createdAt: string;
   /** The chat's coding thread, once the runner has found it; issue chats have none. */
   thread?: AgentSide["thread"];
+  /** Where an agent chat stands, for its row: issue chats have none. */
+  agent?: ThreadAgentState;
+}
+
+/** An agent chat's state on the list: working (with what at), waiting on the sender, or idle. */
+export interface ThreadAgentState {
+  state: "working" | "needs_you" | "idle";
+  activity: string | null;
+}
+
+/**
+ * Working while the agent says so or a message of the sender's has not reached its last look; needs you when the
+ * agent spoke last and stopped; else idle.
+ */
+export function threadAgentState(
+  agent: AgentSide | null, lastSentAt: number | null, lastAgentAt: number | null, waiting: boolean,
+): ThreadAgentState {
+  const unseen = lastSentAt !== null && (agent?.updatedAt ?? 0) < lastSentAt;
+  if (waiting || agent?.isWorking || unseen) {
+    return { state: "working", activity: agent?.isWorking ? agent.activity ?? "Working" : "Starting" };
+  }
+  if (lastAgentAt !== null && (lastSentAt === null || lastAgentAt >= lastSentAt)) {
+    return { state: "needs_you", activity: null };
+  }
+  return { state: "idle", activity: null };
 }
 
 export interface FeedbackImage {
@@ -233,12 +258,25 @@ export function titleOf(text: string): string {
 
 async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"): Promise<FeedbackThread[]> {
   const { results } = await store.db.prepare(
-    "SELECT id, title, created_at, thread_host, thread_id FROM chats WHERE app = ? AND login = ? AND kind = ?"
-      + " ORDER BY created_at DESC",
-  ).bind(store.app, store.login, kind).all<ChatRow>();
+    "SELECT id, title, created_at, thread_host, thread_id, agent,"
+      + " (SELECT max(at) FROM messages WHERE chat = chats.id AND (status IS NULL OR status != 'removed')) AS last_sent_at,"
+      + " (SELECT count(*) FROM messages WHERE chat = chats.id AND status IN ('pending', 'delivering')) AS waiting,"
+      + " (SELECT max(at) FROM agent_messages WHERE chat = chats.id) AS last_agent_at"
+      + " FROM chats WHERE app = ? AND login = ? AND kind = ? ORDER BY created_at DESC",
+  ).bind(store.app, store.login, kind).all<ChatRow & { last_sent_at: number | null; waiting: number; last_agent_at: string | null }>();
   return results.map((row) => ({
     id: row.id, title: row.title, createdAt: new Date(row.created_at).toISOString(),
-    ...(kind === "agent" ? { thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null } : {}),
+    ...(kind === "agent"
+      ? {
+        thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
+        agent: threadAgentState(
+          row.agent ? JSON.parse(row.agent) as AgentSide : null,
+          row.last_sent_at,
+          row.last_agent_at ? Date.parse(row.last_agent_at) : null,
+          row.waiting > 0,
+        ),
+      }
+      : {}),
   }));
 }
 
