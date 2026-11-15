@@ -30,7 +30,8 @@ jobs:
       - run: npm test
   runner:
     # The runner's tests, on the Python the Mac mini's LaunchAgent runs (3.9), standard library only.
-    runs-on: ubuntu-latest
+    # ubuntu-latest is Ubuntu 26.04 now, which has no Python 3.9 build; 24.04 still has one.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
