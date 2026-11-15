@@ -86,3 +86,15 @@ answering `{token, expiresAt}`). It is a JWT, HS256, signed with the app's key, 
 | `iat`, `exp` | Unix seconds, at most 15 minutes apart |
 
 [worker/src/token.ts](../worker/src/token.ts) `issueToken` is the reference for a backend in TypeScript.
+
+### Live
+
+While a chat is open, the app can hold `GET /v2/feedback/{id}/live`, a WebSocket upgrade with the same token. The
+Worker sends the chat as it stands on connect, then again on every change: a message kept, claimed, delivered or
+failed, or the agent's side (its words, working, activity, thread).
+
+- Each frame is text: `{"type": "chat", "chat": <the chat, as GET /v2/feedback/{id} answers it>}`.
+- The app may send the text `ping`; it gets `pong`.
+- Not the sender's chat: `404`. No upgrade: `426`. A token that runs out does not end an open socket; a new socket
+  needs a current one.
+- Closed chats get no frames: pushes ([Pushes](#pushes)) tell the app what changed.

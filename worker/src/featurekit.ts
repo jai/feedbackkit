@@ -11,11 +11,13 @@ import {
 import {
   addIssueFeedback, gitHubIssues, type IssueFeedback, issueChat, issuesNotice, issueThreads, isImageName,
 } from "./feedback-issues.ts";
+import { chatChanged, connectRoom } from "./chat-room.ts";
 import { migrate } from "./migrate.ts";
 import { runnerWake, wakeRunner } from "./runner-wake.ts";
 import { verifyToken } from "./token.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
 
+export { ChatRoom } from "./chat-room.ts";
 export { RunnerWake } from "./runner-wake.ts";
 
 export interface FeatureKitEnv {
@@ -37,6 +39,8 @@ export interface FeatureKitEnv {
   APP_KEYS?: string;
   /** Runs the move from R2 to D1 (`POST /admin/migrate`, migrate.ts); without it that route is `404`. */
   ADMIN_TOKEN?: string;
+  /** Live mode: one room per open chat (chat-room.ts). Without it `/v2/feedback/{id}/live` is `404`. */
+  CHAT_ROOMS?: DurableObjectNamespace;
   /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
   RUNNER_WAKE?: DurableObjectNamespace;
 }
@@ -104,6 +108,7 @@ const IMAGE_PATH = /^\/images\/([^/]+)$/;
 const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
 /** The app's own routes on FeedbackKit's Worker, with a FeedbackKit token (docs/api.md#direct). */
 const DIRECT_FEEDBACK_PATH = /^\/v2\/feedback(?:\/([^/]+))?$/;
+const LIVE_PATH = /^\/v2\/feedback\/([^/]+)\/live$/;
 const DEVICES_PATH = /^\/v2\/devices(?:\/([0-9a-f]{64,200}))?$/;
 const APNS_TOKEN = /^[0-9a-f]{64,200}$/;
 const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait)$/;
@@ -153,7 +158,7 @@ async function feedbackRoute(
     }
     const target = await once(store, id, body, () => addFeedback(store, id ?? null, input, now));
     if (target) {
-      await wakeRunner(env.RUNNER_WAKE);
+      await Promise.all([wakeRunner(env.RUNNER_WAKE), chatChanged(env.CHAT_ROOMS, { app, login, chat: target })]);
     }
     const chat = target ? await feedbackChat(store, target, now) : null;
     return chat ? Response.json(chat) : notFound();
@@ -278,6 +283,9 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
   const message = typeof body?.message === "string" ? body.message : "";
   if (kind === "claim") {
     const claimed = await runnerClaim(sender.store, chat, message, now);
+    if (claimed.ok) {
+      await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+    }
     return claimed.ok ? Response.json({ ...claimed, app: sender.app, login: sender.login, repo: sender.config.repo, role: sender.role })
       : Response.json({ error: claimed.status === 404 ? "no such message" : "not pending" }, { status: claimed.status });
   }
@@ -288,6 +296,9 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
     }
     const detail = typeof body?.detail === "string" ? body.detail.slice(0, 300) : null;
     const status = await runnerResult(sender.store, chat, message, delivered, detail);
+    if (status === 200) {
+      await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+    }
     return Response.json(status === 200 ? { ok: true } : { error: status === 404 ? "no such message" : "not delivering" },
       { status });
   }
@@ -296,6 +307,9 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
     return Response.json({ error: "not an agent side" }, { status: 400 });
   }
   const status = await runnerAgent(sender.store, chat, agent);
+  if (status === 200) {
+    await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+  }
   return Response.json(status === 200 ? { ok: true } : { error: "no such chat" }, { status });
 }
 
@@ -341,6 +355,14 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
     return guarded(() => feedbackRoute(feedback[1], request, env, app, config, login,
       senderName(request.headers.get("X-FeedbackKit-Name"))));
   }
+  const live = LIVE_PATH.exec(pathname);
+  if (live && request.method === "GET") {
+    const sender = await tokenSender(request, env, apps);
+    if (!sender) {
+      return Response.json({ error: "Sign in again." }, { status: 401 });
+    }
+    return guarded(() => liveRoute(live[1], request, env, sender.app, sender.login));
+  }
   const direct = DIRECT_FEEDBACK_PATH.exec(pathname);
   const devices = DEVICES_PATH.exec(pathname);
   if (direct || devices) {
@@ -354,6 +376,18 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
     return guarded(() => feedbackRoute(direct![1], request, env, sender.app, sender.config, sender.login, sender.name));
   }
   return new Response("not found\n", { status: 404 });
+}
+
+/** The app's live socket for one of its sender's agent chats, handed to the chat's room. */
+async function liveRoute(chat: string, request: Request, env: FeatureKitEnv, app: string, login: string): Promise<Response> {
+  if (!env.CHAT_ROOMS || !isFeedbackId(chat)
+    || !(await feedbackChat(senderStore(env.DB, env.FEEDBACK, app, login), chat, Date.now()))) {
+    return notFound();
+  }
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("a WebSocket upgrade, please\n", { status: 426 });
+  }
+  return connectRoom(env.CHAT_ROOMS, { app, login, chat }, request);
 }
 
 async function guarded(route: () => Promise<Response>): Promise<Response> {

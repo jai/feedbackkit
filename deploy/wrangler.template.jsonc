@@ -23,6 +23,15 @@
     { "binding": "DB", "database_name": "feedbackkit", "database_id": "__D1_DATABASE_ID__", "migrations_dir": "../worker/migrations" }
   ],
   // The runner's long poll (worker/src/runner-wake.ts): a message sent wakes the runner's held /runner/wait.
-  "durable_objects": { "bindings": [{ "name": "RUNNER_WAKE", "class_name": "RunnerWake" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RunnerWake"] }]
+  // Live mode (worker/src/chat-room.ts): one room per open chat, holding the app's WebSocket.
+  "durable_objects": {
+    "bindings": [
+      { "name": "RUNNER_WAKE", "class_name": "RunnerWake" },
+      { "name": "CHAT_ROOMS", "class_name": "ChatRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RunnerWake"] },
+    { "tag": "v2", "new_sqlite_classes": ["ChatRoom"] }
+  ]
 }
