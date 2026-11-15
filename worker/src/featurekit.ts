@@ -11,7 +11,10 @@ import {
 import {
   addIssueFeedback, gitHubIssues, type IssueFeedback, issueChat, issuesNotice, issueThreads, isImageName,
 } from "./feedback-issues.ts";
+import { runnerWake, wakeRunner } from "./runner-wake.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
+
+export { RunnerWake } from "./runner-wake.ts";
 
 export interface FeatureKitEnv {
   FEEDBACK: R2Bucket;
@@ -25,6 +28,8 @@ export interface FeatureKitEnv {
   PUBLIC_URL?: string;
   /** Opens the public issues: a token that can open issues on each app's repo. */
   ISSUES_TOKEN?: string;
+  /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
+  RUNNER_WAKE?: DurableObjectNamespace;
 }
 
 export type Role = "owner" | "builder" | "issue";
@@ -94,7 +99,7 @@ export async function takeIssue(store: FeedbackStore, now: number): Promise<bool
 const IMAGES = "images/";
 const IMAGE_PATH = /^\/images\/([^/]+)$/;
 const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
-const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent)$/;
+const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait)$/;
 
 function hasBearer(request: Request, token: string | undefined): boolean {
   return !!token && request.headers.get("Authorization") === `Bearer ${token}`;
@@ -140,6 +145,9 @@ async function feedbackRoute(
       return Response.json({ error: "That feedback can't be sent." }, { status: 400 });
     }
     const target = await once(store, id, body, () => addFeedback(store, id ?? null, input, now));
+    if (target) {
+      await wakeRunner(env.RUNNER_WAKE);
+    }
     const chat = target ? await feedbackChat(store, target, now) : null;
     return chat ? Response.json(chat) : notFound();
   }
@@ -242,6 +250,11 @@ function senderOf(body: Record<string, unknown> | null, apps: Record<string, App
 }
 
 async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>) {
+  if (kind === "wait") {
+    return env.RUNNER_WAKE ? runnerWake(env.RUNNER_WAKE).fetch("https://runner-wake/wait", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: await request.text(),
+    }) : Response.json({ error: "no long poll here" }, { status: 404 });
+  }
   const bucket = r2Store(env.FEEDBACK);
   const body = (await bodyOf(request)) as Record<string, unknown> | null;
   const now = Date.now();

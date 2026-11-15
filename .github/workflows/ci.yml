@@ -28,6 +28,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  runner:
+    # The runner's tests, on the Python the Mac mini's LaunchAgent runs (3.9), standard library only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - run: make -C runner test
   release-script:
     runs-on: ubuntu-latest
     timeout-minutes: 5

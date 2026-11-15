@@ -53,8 +53,8 @@ FeedbackRequestsView(model: feedback)   // the list and New; a chat pushed on iP
 - **The FeedbackKit Worker** (`worker/`): a Cloudflare Worker, deployed as `featurekit`, that keeps every app's
   feedback. It sends owners' and builders' messages to the runner and opens issues for everyone else.
   [docs/worker.md](docs/worker.md) explains who gets what and how to deploy it.
-- **The runner** (in [jai/agent-pager](https://github.com/jai/agent-pager)): the threads hub on Jai's Mac mini. It runs
-  each chat in an Orca project for that app on a builder Mac.
+- **The runner** (`runner/`): a long-running process on Jai's Mac mini. It runs each chat in an Orca project for that
+  app on a builder Mac. [runner/README.md](runner/README.md) explains it and how to install it.
   [Set up a builder Mac for Feedback](https://github.com/jai/agent-pager#set-up-a-builder-mac-for-feedback) has the
   steps.
 
@@ -76,6 +76,7 @@ cd Demo && xcodegen && open FeedbackDemo.xcodeproj    # run the FeedbackDemo sch
 
 - **Package**: `swift test`.
 - **Worker**: in `worker/`, run `npm ci`, `npm test` and `npm run typecheck`.
+- **Runner**: `make -C runner test` (Python 3.9+, standard library only).
 - **Demo UI test**: test the `FeedbackDemo` scheme on an iPhone simulator. `FeedbackDemoUITests` goes through each
   role's main flows. With `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>` set, it also writes the screenshots above.
 
