@@ -16,6 +16,7 @@ final class FeedbackDemoUITests: XCTestCase {
     }
 
     func testMainFlows() throws {
+        XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.
         XCTAssertTrue(text("An agent makes the change, tests it and ships a build.").waitForExistence(timeout: 10))
         screenshot("owner-list")
@@ -51,6 +52,20 @@ final class FeedbackDemoUITests: XCTestCase {
         back()
         role("Owner")
         XCTAssertTrue(row("Add a search field to the notes list").waitForExistence(timeout: 5))
+    }
+
+    func testWorkerBadgeMatchesConnectionMode() {
+        for (direct, label) in [("0", "Live"), ("1", "Direct")] {
+            app.terminate()
+            app.launchEnvironment["FEEDBACKKIT_DEMO_WORKER_URL"] = "http://127.0.0.1:1"
+            app.launchEnvironment["FEEDBACKKIT_DEMO_WORKER_TOKEN"] = "ui-test-token"
+            app.launchEnvironment["FEEDBACKKIT_DEMO_DIRECT"] = direct
+            app.launch()
+
+            let badge = app.staticTexts["demo-badge"]
+            XCTAssertTrue(badge.waitForExistence(timeout: 10))
+            XCTAssertEqual(badge.label, label)
+        }
     }
 
     private func role(_ label: String) {

@@ -77,7 +77,7 @@ private struct DemoBar: View {
     }
 
     private var badge: some View {
-        Text(demo.liveURL == nil ? "Demo" : "Live")
+        Text(demo.liveURL == nil ? "Demo" : (demo.live.isDirect ? "Direct" : "Live"))
             .font(.caption.weight(.bold))
             .foregroundStyle(.white)
             .padding(.horizontal, 8)
