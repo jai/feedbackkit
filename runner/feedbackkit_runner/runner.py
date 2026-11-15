@@ -1,12 +1,12 @@
 """FeedbackKit's runner (runner/README.md): take feedback from the FeedbackKit Worker, which keeps every app's, to a
-Codex chat on a builder Mac, through Orca, and bring the agent's words back. Each chat is one app's, one sender's and
+Claude chat on a builder Mac, through Orca, and bring the agent's words back. Each chat is one app's, one sender's and
 one repo's.
 
 A long-running process on Jais-Mac-mini as jai (service.py), started and kept alive by launchd. It only reaches out: it
 polls FeedbackKit, runs `orca` against each builder's paired Orca and reaches the builders over SSH. A chat starts on the
 first builder in BUILDERS whose Orca answers and stays there. Each app has one Orca project on each builder, a clone at
 ~/Developer/feedback-<app> added on the app's first chat; a chat's first message makes a worktree of it (fb-<id>, off
-origin/main) with Codex launched in it, in one `orca worktree create`. Each later message goes into the same Orca chat,
+origin/main) with Claude launched in it, in one `orca worktree create`. Each later message goes into the same Orca chat,
 as an Agent Pager thread reply does, and waits while that builder is down. The agent's words come from its transcript,
 read with Agent Pager's scanner as its Agents tab reads it, and go back to the Worker. A message is journalled the
 moment its claim succeeds and is never delivered twice. A chat quiet for a day, with every message delivered and its
@@ -42,10 +42,10 @@ BUILDERS = (
 )
 ORCA = "/Applications/Orca.app/Contents/Resources/bin/orca"
 CLONES = "/Users/jai/Developer"
-AGENT = "codex"
-MODEL = "gpt-6.1-sol"
-EFFORT = "medium"
-# A chat's thread: Orca's Codex chats, and the Claude Code chats started before the runner moved to Codex.
+AGENT = "claude"
+MODEL = "claude-opus-5-5"
+EFFORT = "high"
+# A chat's thread: Orca's Claude chats, and the Codex chats started while the runner launched Codex (2026-11-12 to 15).
 AGENT_APPS = ("orca-codex", "orca-claude")
 REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
 LOGIN = re.compile(r"^[A-Za-z0-9-]{1,39}$")
@@ -362,7 +362,7 @@ class Orca:
         return repo_id
 
     def create(self, project: str, name: str, prompt: str) -> str:
-        """A worktree of the project on a new branch `name` off origin/main, with Codex launched in it as a chat and
+        """A worktree of the project on a new branch `name` off origin/main, with Claude launched in it as a chat and
         told `prompt`; its path. A lost reply is asked again with its operation id, which Orca replays."""
         arguments = (
             "worktree",
@@ -780,7 +780,7 @@ class Runner:
         self, builder: Builder, chat: str, message: str, claimed: JsonObject, sender: Sender, who: str = ""
     ) -> Outcome:
         """The app's feedback project on the builder (cloned, fetched and added to Orca the first time), the
-        screenshots under its tmp/, and one `orca worktree create` that makes the chat's worktree and launches Codex.
+        screenshots under its tmp/, and one `orca worktree create` that makes the chat's worktree and launches Claude.
         `who` is how the sender's app names them, else their login."""
         base, name = project_path(sender["app"]), worktree_name(chat)
         builder.cube.clone(base, sender["repo"])

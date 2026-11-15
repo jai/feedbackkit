@@ -70,8 +70,8 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   chat fetches it first.
 - A chat's first message: its screenshots in the project's `tmp/feedback/fb-<8 hex of the chat id>/`, then one
   `orca worktree create --repo id:<project> --name fb-<8 hex> --branch fb-<8 hex> --base-branch origin/main --no-parent
-  --agent codex --model gpt-6.1-sol --effort medium --surface chat --prompt …` that makes the chat's worktree (branch
-  `fb-<8 hex>` off origin/main, where Orca puts worktrees) and launches Codex in it with the brief
+  --agent claude --model claude-opus-5-5 --effort high --surface chat --prompt …` that makes the chat's worktree (branch
+  `fb-<8 hex>` off origin/main, where Orca puts worktrees) and launches Claude in it with the brief
   (`feedbackkit_runner/brief.py`, `prompts/feedback-brief.md`) and the message. A lost reply (`agent_session_operation_unknown`
   with an `operationId`) is asked again, twice at most, with `--retry-launch <operationId>`, which Orca replays without
   launching a second agent. The runner state records the worktree's path (`clone`) and `layout: "worktree"`. The agent
@@ -79,8 +79,8 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   item ([docs/api.md](../docs/api.md#the-brief)). It never removes its worktree.
 - Each later message: into the same Orca chat, as an Agent Pager thread reply goes (its `orca_send`, `agentSession.send`), prefixed
   `<login> via <app name>:` (`jai via Agent Pager:`), its screenshots saved into the
-  worktree's `tmp/feedback/` first. The thread is the chat's Orca Codex thread (`orca-codex`), or its Orca Claude thread (`orca-claude`) for a
-  chat started before the runner moved to Codex. The chat's thread is found by its folder in Agent Pager's threads hub's
+  worktree's `tmp/feedback/` first. The thread is the chat's Orca Claude thread (`orca-claude`), or its Orca Codex thread (`orca-codex`) for a
+  chat started while the runner launched Codex (2026-11-12 to 2026-11-15). The chat's thread is found by its folder in Agent Pager's threads hub's
   last scan of its builder (`last-good-<host>.json`; the hub scans both Cubes); a reply waits for it up to 10 minutes after the launch.
 - The agent's side: whether it is working, and what at, from `orca worktree ps` (live); its words from its transcript,
   read with Agent Pager's scanner `conversation`, page by page from where the last read ended. The runner sends them to

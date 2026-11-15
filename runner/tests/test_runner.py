@@ -968,7 +968,7 @@ class OrcaWorktreeTests(unittest.TestCase):
             ("--name", "fb-01234567"),
             ("--branch", "fb-01234567"),
             ("--base-branch", "origin/main"),
-            ("--agent", "codex"),
+            ("--agent", "claude"),
             ("--surface", "chat"),
             ("--prompt", "brief"),
         ):
