@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-# A newer push to main replaces the run before it: the hourly release takes the newest green commit,
-# so an older commit's run only holds a GitHub macOS runner others are waiting for.
+# One run at a time on main. A run in progress always finishes, so its commit can be released. A newer push
+# replaces a run that is still waiting to start: the hourly release takes the newest green commit anyway.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
