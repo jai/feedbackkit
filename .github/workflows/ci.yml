@@ -115,7 +115,10 @@ jobs:
           [ -n "$id" ] || { xcrun simctl list devices available; echo "::error::no iOS 26+ iPhone simulator"; exit 1; }
           echo "SIMULATOR=$id" >> "$GITHUB_ENV"
           xcrun simctl boot "$id"
+      - run: mkdir -p tmp/demo-screens
       - name: End-to-end UI test
+        env:
+          TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS: ${{ github.workspace }}/tmp/demo-screens
         run: >-
           xcodebuild test -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo
           -destination "platform=iOS Simulator,id=$SIMULATOR" -resultBundlePath e2e.xcresult
@@ -124,3 +127,10 @@ jobs:
         with:
           name: e2e-xcresult
           path: e2e.xcresult
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-screens
+          path: tmp/demo-screens
+          if-no-files-found: ignore

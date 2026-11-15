@@ -6,11 +6,14 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
     public let id: String
     public let title: String
     public let createdAt: String
+    /// The coding thread behind this feedback, when the runner has started it. Hosts can show their live row data.
+    public let thread: FeedbackAgentThread?
 
-    public init(id: String, title: String, createdAt: String) {
+    public init(id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
+        self.thread = thread
     }
 }
 

@@ -20,12 +20,34 @@ struct FeedbackDemoApp: App {
 struct DemoRootView: View {
     @Bindable var demo: DemoState
     @State private var showsWorkerSetting = false
+    @State private var lastThreadAction = ""
+    private var showsThreadControls: Bool { ProcessInfo.processInfo.arguments.contains("-DemoThreadControls") }
 
     var body: some View {
         VStack(spacing: 0) {
             DemoBar(demo: demo, openWorkerSetting: { showsWorkerSetting = true })
             Divider()
+            if !lastThreadAction.isEmpty {
+                Text(lastThreadAction).accessibilityIdentifier("demo-thread-action")
+            }
             FeedbackRequestsView(model: demo.model)
+                .threadRows(label: { thread in
+                    guard showsThreadControls else { return nil }
+                    return AnyView(ChatThreadRow(title: thread.title, context: "Demo agent", about: "Shared conversation row") {
+                        Text("Working")
+                    } chips: {
+                        Text("Demo chip")
+                    })
+                }, actions: { thread in
+                    guard showsThreadControls else { return ChatThreadActions() }
+                    return ChatThreadActions(archive: {
+                        lastThreadAction = "Archive hook: \(thread.title)"
+                        return .success(())
+                    }, delete: {
+                        lastThreadAction = "Delete hook: \(thread.title)"
+                        return .success(())
+                    })
+                })
                 .id(demo.modelKey)
         }
         .sheet(isPresented: $showsWorkerSetting) {

@@ -24,6 +24,21 @@ struct FeedbackConversationTests {
         return model
     }
 
+    @Test func listRowsDecodeTheirCodingThreadAndOlderWorkersWithoutOne() throws {
+        let old = Data(#"{"id":"fb_1","title":"Old feedback","createdAt":"2026-11-15T00:00:00Z"}"#.utf8)
+        #expect(try JSONDecoder().decode(FeedbackThread.self, from: old).thread == nil)
+        let current = Data(#"{"id":"fb_1","title":"Feedback","createdAt":"2026-11-15T00:00:00Z","thread":{"host":"builder","id":"codex:session-1"}}"#.utf8)
+        #expect(try JSONDecoder().decode(FeedbackThread.self, from: current).thread == thread)
+    }
+
+    @Test func feedbackUsesSharedDeliveryTicksWithoutClaimingUnknownOrFailedDelivery() {
+        #expect(FeedbackMessageDelivery.pending.replyState.ticks == .sent)
+        #expect(FeedbackMessageDelivery.delivering.replyState.ticks == .sent)
+        #expect(FeedbackMessageDelivery.delivered.replyState.ticks == .delivered)
+        #expect(FeedbackMessageDelivery.failed.replyState.ticks == nil)
+        #expect(FeedbackMessageDelivery.unknown.replyState.ticks == nil)
+    }
+
     @Test func everyUndeliveredStateKeepsTheExistingFeedbackHistory() async {
         for state in [FeedbackMessageDelivery.pending, .delivering, .failed, .unknown] {
             let model = await model(delivery: ["old-message": state])

@@ -191,3 +191,17 @@ test("a list read logs what the app was told about the builder", () => {
     event: "feedback_list_served", builderOnline: false, runnerPollAgeSeconds: 30, detail: "Orca down", threads: 2,
   });
 });
+
+
+test("the conversation list names its existing coding thread without claiming one before the runner starts", async () => {
+  const store = memoryStore();
+  const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "Shared rows" })!, 1_000))!;
+  assert.equal((await feedbackList(store, 1_001)).threads[0].thread, null);
+  const thread = { host: "builder", id: "codex:session-1" };
+  const agent = parseAgentSide({ messages: [], isWorking: true, activity: "Working", thread }, 2_000)!;
+  assert.equal(await runnerAgent(store, chat, agent), 200);
+  const [row] = (await feedbackList(store, 2_001)).threads;
+  assert.equal(row.id, chat);
+  assert.equal(row.title, "Shared rows");
+  assert.deepEqual(row.thread, thread);
+});

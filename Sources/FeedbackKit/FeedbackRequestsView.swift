@@ -12,6 +12,8 @@ public struct FeedbackRequestsView: View {
     @Environment(\.chatTheme) private var theme
     @State private var model: FeedbackRequestsModel
     private let conversation: ((FeedbackConversation) -> AnyView?)?
+    private var rowLabel: ((FeedbackThread) -> AnyView?)?
+    private var rowActions: (FeedbackThread) -> ChatThreadActions = { _ in ChatThreadActions() }
     /// The wide layout's open conversation.
     @State private var selection: FeedbackRoute?
     /// The narrow layout's conversations, pushed by value onto a stack of its own, so they stay open whatever is
@@ -47,6 +49,18 @@ public struct FeedbackRequestsView: View {
         self.init(model: FeedbackRequestsModel(client: client))
     }
 
+    /// The same shared row as the host's other agent chats. Return nil while the host has no richer row data.
+    /// Hooks define Archive/Delete for this host; FeedbackKit never deletes a coding session on its own.
+    public func threadRows(
+        label: @escaping (FeedbackThread) -> AnyView? = { _ in nil },
+        actions: @escaping (FeedbackThread) -> ChatThreadActions = { _ in ChatThreadActions() }
+    ) -> Self {
+        var view = self
+        view.rowLabel = label
+        view.rowActions = actions
+        return view
+    }
+
     public var body: some View {
         layout
             .task { await model.refresh() }
@@ -69,7 +83,7 @@ public struct FeedbackRequestsView: View {
     /// empty, else a fresh one.
     private var stack: some View {
         NavigationStack(path: $path) {
-            FeedbackListView(model: model, selected: nil, isStacked: true) { _ in }
+            FeedbackListView(model: model, selected: nil, isStacked: true, customLabel: rowLabel, actions: rowActions) { _ in }
                 .inlineNavigationTitle()
                 .featureTitle("Feedback")
                 .toolbar {
@@ -100,7 +114,7 @@ public struct FeedbackRequestsView: View {
 
     private var split: some View {
         NavigationSplitView {
-            FeedbackListView(model: model, selected: selection, isStacked: false) { route in
+            FeedbackListView(model: model, selected: selection, isStacked: false, customLabel: rowLabel, actions: rowActions) { route in
                 withAnimation(ChatMotion.swap) { selection = route }
             }
             // The app's readable width is the window's; this column is narrower than it.
@@ -174,6 +188,8 @@ private struct FeedbackListView: View {
     let selected: FeedbackRoute?
     /// Pushed rows carry a chevron; rows beside their conversation are marked instead.
     let isStacked: Bool
+    let customLabel: ((FeedbackThread) -> AnyView?)?
+    let actions: (FeedbackThread) -> ChatThreadActions
     let open: (FeedbackRoute) -> Void
 
     private var unsent: FeedbackRoute? {
@@ -186,76 +202,78 @@ private struct FeedbackListView: View {
     private var selectedThread: String? { selected.flatMap(model.thread(for:)) }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: ChatSpace.xs) {
-                if !model.list.builderOnline {
-                    BuilderNote()
-                        .padding(.bottom, ChatSpace.xs)
-                }
-                if let unsent {
-                    row(route: unsent, title: "New feedback", date: nil, isSelected: true)
-                        .transition(.opacity)
-                }
-                if model.list.threads.isEmpty, unsent == nil {
-                    Text(model.list.notice ?? FeedbackList.agentNotice)
-                        .font(theme.font(.footnote))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, ChatSpace.lg)
-                        .accessibilityIdentifier("feedback-empty")
-                }
-                ForEach(model.list.threads) { thread in
-                    row(
-                        route: .thread(thread.id), title: thread.title,
-                        date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id
-                    )
-                    .transition(.opacity)
-                }
-                if let error = model.error {
-                    Text(error)
-                        .font(theme.font(.footnote))
-                        .foregroundStyle(theme.toneBad)
-                        .padding(.horizontal, ChatSpace.lg)
-                }
+        ChatThreadList(items: model.list.threads, title: \.title, actions: actions) { thread in
+            row(
+                route: .thread(thread.id), title: thread.title,
+                date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
+                custom: customLabel?(thread)
+            )
+        } header: {
+            if !model.list.builderOnline {
+                BuilderNote().padding(.bottom, ChatSpace.xs)
             }
-            .padding(.vertical, ChatSpace.sm)
-            .animation(ChatMotion.fold, value: model.list)
-            .animation(ChatMotion.fold, value: unsent)
+            if let unsent {
+                row(route: unsent, title: "New feedback", date: nil, isSelected: true)
+                    .transition(.opacity)
+            }
+            if model.list.threads.isEmpty, unsent == nil {
+                Text(model.list.notice ?? FeedbackList.agentNotice)
+                    .font(theme.font(.footnote))
+                    .foregroundStyle(theme.inkQuiet)
+                    .padding(.horizontal, ChatSpace.lg)
+                    .accessibilityIdentifier("feedback-empty")
+            }
+        } footer: {
+            if let error = model.error {
+                Text(error)
+                    .font(theme.font(.footnote))
+                    .foregroundStyle(theme.toneBad)
+                    .padding(.horizontal, ChatSpace.lg)
+            }
         }
-        .background(theme.groundPage)
+        .animation(ChatMotion.fold, value: model.list)
+        .animation(ChatMotion.fold, value: unsent)
         .refreshable { await model.refresh() }
     }
 
     @ViewBuilder
-    private func row(route: FeedbackRoute, title: String, date: Date?, isSelected: Bool) -> some View {
+    private func row(
+        route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, custom: AnyView? = nil
+    ) -> some View {
         if isStacked {
             NavigationLink(value: route) {
-                rowLabel(title: title, date: date, isSelected: false)
+                rowLabel(title: title, date: date, isSelected: false, custom: custom)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("feedback-thread")
         } else {
-            Button { open(route) } label: { rowLabel(title: title, date: date, isSelected: isSelected) }
+            Button { open(route) } label: { rowLabel(title: title, date: date, isSelected: isSelected, custom: custom) }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("feedback-thread")
         }
     }
 
-    private func rowLabel(title: String, date: Date?, isSelected: Bool) -> some View {
-        HStack(spacing: ChatSpace.md) {
-            Text(title)
-                .font(theme.font(.subheadline).weight(.semibold))
-                .foregroundStyle(Color.primary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let date {
-                Text(ThreadTimeFormat().age(date, now: .now))
-                    .font(theme.font(.caption).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if isStacked {
-                Image(systemName: theme.symbols.drillIn)
-                    .font(theme.font(.caption).weight(.semibold))
-                    .foregroundStyle(.tertiary)
+    private func rowLabel(title: String, date: Date?, isSelected: Bool, custom: AnyView?) -> some View {
+        Group {
+            if let custom {
+                custom
+            } else {
+                ChatThreadRow(title: title) {
+                    HStack(spacing: ChatSpace.sm) {
+                        if let date {
+                            Text(ThreadTimeFormat().age(date, now: .now))
+                                .font(theme.font(.caption).monospacedDigit())
+                                .foregroundStyle(theme.inkQuiet)
+                        }
+                        if isStacked {
+                            Image(systemName: theme.symbols.drillIn)
+                                .font(theme.font(.caption).weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } chips: {
+                    EmptyView()
+                }
             }
         }
         .padding(.horizontal, ChatSpace.lg)

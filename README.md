@@ -90,3 +90,32 @@ if a `feat` or `fix` commit is waiting. The commit messages pick the version
 ## License
 
 [MIT](LICENSE)
+
+
+## Shared agent-chat rows and actions
+
+The conversation list uses AgentChatKit's `ChatThreadList` and `ChatThreadRow`; message delivery uses its shared ticks
+and status view. A host can keep its own live status and chip accessories in the same row. Each `FeedbackThread`
+includes `thread: FeedbackAgentThread?` (host and id) once the runner has started that agent; older Workers omit it.
+
+```swift
+FeedbackRequestsView(model: feedbackModel) { conversation in
+    hostedConversation(conversation)
+}
+.threadRows(label: { feedback in
+    guard let reference = feedback.thread else { return nil } // the shared default row while starting
+    return rowForAgentThread(reference)
+}, actions: { feedback in
+    ChatThreadActions(
+        archive: { await hideFeedbackLocally(feedback.id) },
+        delete: { await deleteFeedbackInThisHost(feedback.id) }
+    )
+})
+```
+
+Row labels return `AnyView?`; nil keeps FeedbackKit's shared default. Hooks return
+`Result<Void, ChatActionError>`. Archive and Delete appear only when their hook exists. Delete asks for confirmation;
+pending actions disable the row, and failures show the host's error. The kit never translates an action into removal
+of an Orca workspace, a Rex session or another agent's files. The host defines that operation.
+
+`threadRows` preserves Feedback's value-based navigation, selected conversation, New flow, and draft handoff.
