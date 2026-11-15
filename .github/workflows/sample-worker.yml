@@ -48,6 +48,7 @@ jobs:
           APP_KEY: ${{ secrets.FEEDBACKKIT_DEMO_APP_KEY }}
           USER_TOKEN: ${{ secrets.FEEDBACKKIT_DEMO_USER_TOKEN }}
         run: |
+          set -o pipefail
           npx wrangler deploy --name "$NAME" | tee deploy.log
           printf '%s' "$APP_KEY" | npx wrangler secret put APP_KEY --name "$NAME"
           printf '%s' "$USER_TOKEN" | npx wrangler secret put USER_TOKEN --name "$NAME"
@@ -67,12 +68,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Teardown
         if: inputs.action == 'teardown'
+        # Cloudflare's API itself, not `wrangler delete`: wrangler also lists KV namespaces, which this token may not
+        # read, and its failure there hid whether the Worker went. 200: deleted. 404 (10007, 10090): already gone.
         run: |
-          if npx wrangler delete --name "$NAME" --force 2>&1 | tee delete.log; then
-            result="deleted"
-          elif grep -qiE 'not found|does not exist|10007' delete.log; then
-            result="already gone"
-          else
-            echo "::error::wrangler delete failed"; exit 1
-          fi
+          status=$(curl -s -o delete.json -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$NAME?force=true")
+          case "$status" in
+            200) result="deleted" ;;
+            404) result="already gone" ;;
+            *) echo "::error::Cloudflare answered $status: $(jq -c '.errors' delete.json)"; exit 1 ;;
+          esac
+          echo "Teardown: $result"
           echo "### Sample app backend: $result" >> "$GITHUB_STEP_SUMMARY"
