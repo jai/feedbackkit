@@ -1,14 +1,15 @@
 included:
-  - PRKit/Sources
-  - PRKit/Tests
-  - app/PRHub
-  - app/PRHubTests
-  - app/PRHubUITests
+  - Sources
+  - Tests
+  - Demo/FeedbackDemo
+  - Demo/FeedbackDemoUITests
+  - runner/MenuBar/Sources
+  - runner/MenuBar/Tests
 
 excluded:
-  - app/PRHub.xcodeproj
-  - app/build
   - .build
+  - runner/MenuBar/.build
+  - Demo/FeedbackDemo.xcodeproj
 
 reporter: xcode
 
@@ -19,13 +20,12 @@ line_length:
 
 identifier_name:
   excluded:
+    - at
     - id
-    - kcal
-    - g
-    - mg
-    - ml
-    - tz
-    - op
+    - "on"
+    - up
+    - x
+    - y
 
 trailing_comma:
   mandatory_comma: true
@@ -36,17 +36,3 @@ nesting:
 
 disabled_rules:
   - todo
-
-custom_rules:
-  # A value held in @State survives SwiftUI reusing the view, so one seeded from an argument can end up beside a different
-  # argument: that showed one PR under another's title. PR screens read from `PRSession`.
-  pr_state_seeded_from_arguments:
-    included: ".*/PRKit/Sources/PRKit/.*\\.swift"
-    regex: "State\\(initialValue:"
-    message: "PR state lives in PRSession, not in @State seeded from an argument."
-    severity: error
-  pr_stock_button:
-    included: ".*/PRKit/Sources/PRKit/.*\\.swift"
-    regex: "buttonStyle\\(\\.bordered"
-    message: "A PR's buttons are PRButtonStyle: the system's are capsules (DESIGN.md)."
-    severity: error

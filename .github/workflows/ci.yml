@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   test:
     # GitHub's own Mac runner: free for a public repo.
@@ -44,16 +47,45 @@ jobs:
       - run: npm run typecheck
       - run: npm test
   runner:
-    # The runner's tests, on the Python the Mac mini's LaunchAgent runs (3.9), standard library only.
-    # ubuntu-latest is Ubuntu 26.04 now, which has no Python 3.9 build; 24.04 still has one.
-    runs-on: ubuntu-24.04
+    # The runner's tests, on the Python the Mac mini's LaunchAgent runs (Homebrew's 3.14, runner/install.py),
+    # standard library only.
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.14"
       - run: make -C runner test
+  runner-menu:
+    # The FeedbackKit Runner menu bar app (runner/MenuBar): its tests, and on main a build published as the GitHub
+    # prerelease `runner-menu` (FeedbackKitRunner.zip), which runner/MenuBar/install.sh downloads on Jai's Mac.
+    # Nothing builds on Jai's Macs (jai/ci RULES.md). The tag is not a v* version: the hourly release never reads it.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: runner/MenuBar
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: ./bundle.sh FeedbackKitRunner.zip
+      - name: Publish the runner-menu prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="The FeedbackKit Runner menu bar app, built from ${GITHUB_SHA::7}. Install: runner/MenuBar/README.md."
+          # The tag stays where the release was first made; the zip is replaced, and the notes name its commit.
+          if gh release view runner-menu >/dev/null 2>&1; then
+            gh release edit runner-menu --notes "$notes" --prerelease --latest=false
+          else
+            gh release create runner-menu --target "$GITHUB_SHA" --title "FeedbackKit Runner (menu bar)" \
+              --notes "$notes" --prerelease --latest=false
+          fi
+          gh release upload runner-menu FeedbackKitRunner.zip --clobber
   release-script:
     runs-on: ubuntu-latest
     timeout-minutes: 5

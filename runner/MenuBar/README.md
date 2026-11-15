@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/jai/feedbackkit/main/runner/MenuBar
 
 It downloads the build CI publishes (the GitHub prerelease `runner-menu`), puts it in `~/Applications/FeedbackKit
 Runner.app` and starts it at login (LaunchAgent `com.jai.feedbackkit-runner-menu`). Run it again to update. Nothing is
-built on Jai's Macs: [runner-menu.yml](../../.github/workflows/runner-menu.yml) tests and builds it on GitHub's Mac
+built on Jai's Macs: [ci.yml](../../.github/workflows/ci.yml)'s `runner-menu` job tests and builds it on GitHub's Mac
 runner (`bundle.sh`, ad-hoc signed) for every change on main.
 
 It needs `ssh jais-mac-mini true` to work without a prompt, and Agent Pager on the Mac for Open thread.

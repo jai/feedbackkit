@@ -24,7 +24,8 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent / "feedbackkit_runner"
 LABEL = "com.jai.feedbackkit-runner"
-PYTHON = "/usr/bin/python3"
+# Homebrew's Python 3.14: this path stays put across 3.14.x upgrades; CI tests the runner on 3.14 too.
+PYTHON = "/opt/homebrew/opt/python@3.14/bin/python3.14"
 LOG_NAME = "feedbackkit-runner.log"
 
 

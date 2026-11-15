@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds "FeedbackKit Runner.app" (arm64 and x86_64, ad-hoc signed) and zips it to $1 (default
-# FeedbackKitRunner.zip). CI runs it (.github/workflows/runner-menu.yml); never on Jai's Macs (jai/ci RULES.md).
+# FeedbackKitRunner.zip). CI runs it (.github/workflows/ci.yml, job runner-menu); never on Jai's Macs (jai/ci RULES.md).
 set -eu
 cd "$(dirname "$0")"
 out=${1:-FeedbackKitRunner.zip}
