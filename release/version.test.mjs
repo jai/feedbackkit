@@ -38,3 +38,8 @@ test('notes list breaking changes, features and fixes, and the compare link', ()
     '**Changes:** https://github.com/jai/feedbackkit/compare/v0.2.0...v0.3.0\n',
   ].join('\n\n'));
 });
+
+test('only the package cuts a version', async () => {
+  const { PACKAGE_PATHS } = await import('./version.mjs');
+  assert.deepEqual(PACKAGE_PATHS, ['Sources', 'Package.swift', 'Package.resolved']);
+});

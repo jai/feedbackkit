@@ -22,6 +22,10 @@ export function bumpFor(commits, current) {
   return null;
 }
 
+/** What apps get from a release: the package. Commits touching nothing here (Demo/, runner/, worker/, docs) never
+ * cut a version. */
+export const PACKAGE_PATHS = ['Sources', 'Package.swift', 'Package.resolved'];
+
 export function parseVersion(tag) {
   const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(tag);
   if (!match) throw new Error(`not a version: ${tag}`);

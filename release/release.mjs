@@ -1,10 +1,10 @@
 // The hourly release (.github/workflows/release.yml). Releases the newest commit on main whose `ci` run passed, when
-// the commits since the last tag hold a feat, fix or breaking change (version.mjs), and no release went out in the
-// last hour. Publishes the tag and GitHub Release through the API. If the newest finished `ci` run is red, nothing.
+// the commits since the last tag that change the package (PACKAGE_PATHS) hold a feat, fix or breaking change
+// (version.mjs), and no release went out in the last hour. Publishes the tag and GitHub Release through the API. If the newest finished `ci` run is red, nothing.
 // `node release/release.mjs --dry-run` prints what it would release without publishing.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { nextVersion, releaseNotes } from './version.mjs';
+import { nextVersion, PACKAGE_PATHS, releaseNotes } from './version.mjs';
 
 const repo = process.env.GITHUB_REPOSITORY ?? 'jai/feedbackkit';
 const token = process.env.GITHUB_TOKEN;
@@ -55,7 +55,9 @@ if (age < HOUR) {
 
 const sha = await greenHead(tag);
 if (!sha) process.exit(0);
-const messages = git('log', '--format=%B%x00', `${tag}..${sha}`).split('\0').map((m) => m.trim()).filter(Boolean);
+// Only commits that change what apps get: a demo, runner or Worker commit never cuts a version, whatever its type.
+const messages = git('log', '--format=%B%x00', `${tag}..${sha}`, '--', ...PACKAGE_PATHS)
+  .split('\0').map((m) => m.trim()).filter(Boolean);
 const version = nextVersion(tag, messages);
 if (!version) {
   say(`No feat, fix or breaking change since ${tag}. Nothing released.`);
