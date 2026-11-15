@@ -503,6 +503,22 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
   return { messages: parsed, isWorking, activity: activity as string | null, thread: where, updatedAt: now };
 }
 
+/** One of the sender's screenshots: its bytes and type; null when the chat, message or image is not theirs. */
+export async function messageImage(
+  store: FeedbackStore, chat: string, message: string, index: number,
+): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
+  if (!MESSAGE_ID.test(message) || !Number.isInteger(index) || index < 0 || !(await chatRow(store, chat))) {
+    return null;
+  }
+  const row = await store.db.prepare(
+    "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE i.message = ? AND m.chat = ? AND i.idx = ?",
+  ).bind(message, chat, index).first<{ r2_key: string }>();
+  const image = row ? await (await store.bucket.get(row.r2_key))?.json<FeedbackImage>() : null;
+  return image
+    ? { bytes: Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0)), mediaType: image.media_type }
+    : null;
+}
+
 /** A chat's title and its agent side as it stands, before the runner replaces the side. */
 export async function chatSide(store: FeedbackStore, chat: string): Promise<{ title: string; agent: AgentSide | null } | null> {
   const row = await chatRow(store, chat);

@@ -64,6 +64,7 @@ and bodies are the ones above, under `/v2`:
 | `POST /v2/feedback/{id}` | as above | as `POST /feedback/{id}` |
 | `POST /v2/devices` | `{token, environment: "production" \| "sandbox"}`: the device's APNs token, in hex | `{ok}`; `400` |
 | `DELETE /v2/devices/{token}` | | `{ok}` |
+| `GET /v2/feedback/{id}/images/{message}/{n}` | | the message's `n`th screenshot (from 0), its bytes with their `Content-Type`; `404` |
 
 - Every request carries `Authorization: Bearer <FeedbackKit token>`. None, or one that does not verify: `401`, and
   the app asks its backend for a new one.

@@ -95,3 +95,21 @@ test("a sender registers their devices for pushes, and forgets one", async () =>
   assert.equal((await direct(e, `/v2/devices/${device}`, bearer, undefined, "DELETE")).status, 200);
   assert.equal(e.DB.sqlite.prepare("SELECT count(*) AS n FROM devices").get()!.n, 0);
 });
+
+test("a sender's screenshot is served to them alone, with its type", async () => {
+  const e = env();
+  const PNG = "iVBORw0KGgoAAAANSUhEUg==";
+  const bearer = await token();
+  const chat = await (await direct(e, "/v2/feedback", bearer, {
+    text: "See this", images: [{ media_type: "image/png", data: PNG }],
+  })).json() as { id: string };
+  const message = (e.DB.sqlite.prepare("SELECT id FROM messages WHERE chat = ?").get(chat.id) as { id: string }).id;
+  const image = await direct(e, `/v2/feedback/${chat.id}/images/${message}/0`, bearer);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get("Content-Type"), "image/png");
+  assert.deepEqual(new Uint8Array(await image.arrayBuffer()), Uint8Array.from(atob(PNG), (char) => char.charCodeAt(0)));
+  assert.equal((await direct(e, `/v2/feedback/${chat.id}/images/${message}/1`, bearer)).status, 404);
+  const someone = await issueToken(KEYS.pager, "pager", "someone", null, Date.now());
+  assert.equal((await direct(e, `/v2/feedback/${chat.id}/images/${message}/0`, someone)).status, 404);
+  assert.equal((await serveFeatureKit(new Request(`https://kit.example/v2/feedback/${chat.id}/images/${message}/0`), e)).status, 401);
+});

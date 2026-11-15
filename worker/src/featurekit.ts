@@ -5,7 +5,7 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import {
-  addFeedback, chatOfRef, chatSide, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
+  addFeedback, chatOfRef, chatSide, messageImage, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
   parseAgentSide, parseFeedbackInput, pendingWork, runnerAgent, runnerBeat, runnerClaim, runnerResult, senderStore,
 } from "./feedback.ts";
 import {
@@ -116,6 +116,8 @@ const IMAGE_PATH = /^\/images\/([^/]+)$/;
 const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
 /** The app's own routes on FeedbackKit's Worker, with a FeedbackKit token (docs/api.md#direct). */
 const DIRECT_FEEDBACK_PATH = /^\/v2\/feedback(?:\/([^/]+))?$/;
+/** A screenshot of the sender's own, for the live protocol's `resource_link` (agentchatkit docs/live-protocol.md). */
+const IMAGE_OF_CHAT_PATH = /^\/v2\/feedback\/([^/]+)\/images\/([^/]+)\/(\d{1,2})$/;
 const LIVE_PATH = /^\/v2\/feedback\/([^/]+)\/live$/;
 const DEVICES_PATH = /^\/v2\/devices(?:\/([0-9a-f]{64,200}))?$/;
 const APNS_TOKEN = /^[0-9a-f]{64,200}$/;
@@ -387,6 +389,18 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
     }
     return guarded(() => feedbackRoute(feedback[1], request, env, app, config, login,
       senderName(request.headers.get("X-FeedbackKit-Name"))));
+  }
+  const picture = IMAGE_OF_CHAT_PATH.exec(pathname);
+  if (picture && request.method === "GET") {
+    const sender = await tokenSender(request, env, apps);
+    if (!sender) {
+      return Response.json({ error: "Sign in again." }, { status: 401 });
+    }
+    const found = await messageImage(senderStore(env.DB, env.FEEDBACK, sender.app, sender.login), picture[1], picture[2],
+      Number(picture[3]));
+    return found ? new Response(found.bytes, {
+      headers: { "Content-Type": found.mediaType, "Cache-Control": "private, max-age=86400, immutable" },
+    }) : notFound();
   }
   const live = LIVE_PATH.exec(pathname);
   if (live && request.method === "GET") {
