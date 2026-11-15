@@ -5,7 +5,7 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import {
-  addFeedback, chatOfRef, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
+  addFeedback, chatOfRef, chatSide, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
   parseAgentSide, parseFeedbackInput, pendingWork, runnerAgent, runnerBeat, runnerClaim, runnerResult, senderStore,
 } from "./feedback.ts";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./feedback-issues.ts";
 import { chatChanged, connectRoom } from "./chat-room.ts";
 import { migrate } from "./migrate.ts";
+import { agentPush, type ApnsKey, checkKey, type Device, type Push, sendPush } from "./push.ts";
 import { runnerWake, wakeRunner } from "./runner-wake.ts";
 import { verifyToken } from "./token.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
@@ -37,6 +38,10 @@ export interface FeatureKitEnv {
   ISSUES_TOKEN?: string;
   /** Each app's key for FeedbackKit tokens (token.ts): `{"<app>": "<key>"}`. Without one, an app has no /v2. */
   APP_KEYS?: string;
+  /** The team's APNs key (push.ts): one key pushes to every app's `topic`. Without all three, no pushes. */
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_KEY_P8?: string;
   /** Runs the move from R2 to D1 (`POST /admin/migrate`, migrate.ts); without it that route is `404`. */
   ADMIN_TOKEN?: string;
   /** Live mode: one room per open chat (chat-room.ts). Without it `/v2/feedback/{id}/live` is `404`. */
@@ -54,6 +59,8 @@ export interface AppConfig {
   issues: boolean;
   /** How the app names a sender ("jai": "Jai") when its Worker sends no `X-FeedbackKit-Name`. */
   names: Record<string, string>;
+  /** The app's bundle id: where its pushes go. None: no pushes. */
+  topic: string | null;
 }
 
 const APP_NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -69,6 +76,7 @@ export function parseApps(raw: string): Record<string, AppConfig> {
     names: Object.fromEntries(Object.entries(app.names ?? {})
       .filter(([, name]) => typeof name === "string" && senderName(name) !== null)
       .map(([login, name]) => [login.toLowerCase(), name])),
+    topic: typeof app.topic === "string" && /^[\w.-]{1,155}$/.test(app.topic) ? app.topic : null,
   }]));
 }
 
@@ -254,7 +262,9 @@ function senderOf(body: Record<string, unknown> | null, apps: Record<string, App
     ? { app, login: login.toLowerCase(), config, role, store: senderStore(env.DB, env.FEEDBACK, app, login) } : null;
 }
 
-async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>) {
+async function runnerRoute(
+  kind: string, request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>, later: Later,
+) {
   if (kind === "wait") {
     return env.RUNNER_WAKE ? runnerWake(env.RUNNER_WAKE).fetch("https://runner-wake/wait", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: await request.text(),
@@ -285,6 +295,7 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
     const claimed = await runnerClaim(sender.store, chat, message, now);
     if (claimed.ok) {
       await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+      await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: "delivering" } }));
     }
     return claimed.ok ? Response.json({ ...claimed, app: sender.app, login: sender.login, repo: sender.config.repo, role: sender.role })
       : Response.json({ error: claimed.status === 404 ? "no such message" : "not pending" }, { status: claimed.status });
@@ -298,6 +309,8 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
     const status = await runnerResult(sender.store, chat, message, delivered, detail);
     if (status === 200) {
       await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+      const state = delivered ? "delivered" : "failed";
+      await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: state } }));
     }
     return Response.json(status === 200 ? { ok: true } : { error: status === 404 ? "no such message" : "not delivering" },
       { status });
@@ -306,9 +319,14 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
   if (!agent) {
     return Response.json({ error: "not an agent side" }, { status: 400 });
   }
+  const before = await chatSide(sender.store, chat);
   const status = await runnerAgent(sender.store, chat, agent);
   if (status === 200) {
     await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+    const push = before ? agentPush(sender.app, chat, before.title, before.agent, agent) : null;
+    if (push) {
+      await later(pushTo(env, sender, push));
+    }
   }
   return Response.json(status === 200 ? { ok: true } : { error: "no such chat" }, { status });
 }
@@ -325,7 +343,13 @@ async function imageRoute(name: string, env: FeatureKitEnv): Promise<Response> {
     : new Response("not found\n", { status: 404 });
 }
 
-export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Promise<Response> {
+/** Work that may finish after the answer: `waitUntil` in a Worker, awaited where there is none (tests). */
+type Later = (work: Promise<unknown>) => Promise<void>;
+
+export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?: ExecutionContext): Promise<Response> {
+  const later: Later = ctx ? async (work) => ctx.waitUntil(work) : async (work) => {
+    await work;
+  };
   const { pathname } = new URL(request.url);
   const image = IMAGE_PATH.exec(pathname);
   if (image && request.method === "GET") {
@@ -335,10 +359,19 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
     return hasBearer(request, env.ADMIN_TOKEN) ? Response.json(await migrate(env.FEEDBACK, env.DB))
       : new Response("unauthorized\n", { status: 401 });
   }
+  if (pathname === "/admin/apns-check" && request.method === "POST" && env.ADMIN_TOKEN) {
+    if (!hasBearer(request, env.ADMIN_TOKEN)) {
+      return new Response("unauthorized\n", { status: 401 });
+    }
+    const topic = new URL(request.url).searchParams.get("topic") ?? "";
+    return env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_P8 && topic
+      ? Response.json(await checkKey({ keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 }, topic, Date.now()))
+      : Response.json({ error: "no APNs key, or no topic" }, { status: 400 });
+  }
   const apps = parseApps(env.APPS);
   const runner = RUNNER_PATH.exec(pathname);
   if (runner && request.method === "POST") {
-    return hasBearer(request, env.RUNNER_TOKEN) ? runnerRoute(runner[1], request, env, apps)
+    return hasBearer(request, env.RUNNER_TOKEN) ? runnerRoute(runner[1], request, env, apps, later)
       : new Response("unauthorized\n", { status: 401 });
   }
   const feedback = FEEDBACK_PATH.exec(pathname);
@@ -376,6 +409,21 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
     return guarded(() => feedbackRoute(direct![1], request, env, sender.app, sender.config, sender.login, sender.name));
   }
   return new Response("not found\n", { status: 404 });
+}
+
+/** A push to the sender's devices, when the app has a topic and the Worker the team key; gone devices forgotten. */
+async function pushTo(env: FeatureKitEnv, sender: { app: string; login: string; config: AppConfig }, push: Push) {
+  const key: ApnsKey | null = env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_P8
+    ? { keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 } : null;
+  if (!key || !sender.config.topic) {
+    return;
+  }
+  const { results } = await env.DB.prepare("SELECT token, environment FROM devices WHERE app = ? AND login = ?")
+    .bind(sender.app, sender.login.toLowerCase()).all<Device>();
+  const gone = await sendPush(key, sender.config.topic, results, push, Date.now());
+  if (gone.length) {
+    await env.DB.batch(gone.map((token) => env.DB.prepare("DELETE FROM devices WHERE token = ?").bind(token)));
+  }
 }
 
 /** The app's live socket for one of its sender's agent chats, handed to the chat's room. */
@@ -442,4 +490,6 @@ async function devicesRoute(
   return Response.json({ ok: true });
 }
 
-export default { fetch: serveFeatureKit };
+export default {
+  fetch: (request: Request, env: FeatureKitEnv, ctx: ExecutionContext) => serveFeatureKit(request, env, ctx),
+};

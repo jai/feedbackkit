@@ -493,6 +493,12 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
   return { messages: parsed, isWorking, activity: activity as string | null, thread: where, updatedAt: now };
 }
 
+/** A chat's title and its agent side as it stands, before the runner replaces the side. */
+export async function chatSide(store: FeedbackStore, chat: string): Promise<{ title: string; agent: AgentSide | null } | null> {
+  const row = await chatRow(store, chat);
+  return row ? { title: row.title, agent: row.agent ? JSON.parse(row.agent) as AgentSide : null } : null;
+}
+
 export async function runnerAgent(store: FeedbackStore, chat: string, agent: AgentSide): Promise<404 | 200> {
   const written = await store.db.prepare(
     "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",

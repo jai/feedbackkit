@@ -98,3 +98,18 @@ failed, or the agent's side (its words, working, activity, thread).
 - Not the sender's chat: `404`. No upgrade: `426`. A token that runs out does not end an open socket; a new socket
   needs a current one.
 - Closed chats get no frames: pushes ([Pushes](#pushes)) tell the app what changed.
+
+## Pushes
+
+FeedbackKit's Worker pushes to the sender's own devices (registered with `POST /v2/devices`), through APNs with the
+team's key, to the app's bundle id (`topic` in `APPS`; an app without one gets no pushes).
+
+| When | Push | `feedbackkit` data |
+|---|---|---|
+| An agent takes the chat: its coding thread is found | visible: the chat's title, "An agent has taken this and is starting." | `{chat, app, kind: "taken"}` |
+| The agent writes something new | visible: the chat's title, its newest words (180 characters) | `{chat, app, kind: "reply"}` |
+| A message is claimed, delivered or fails | silent (`content-available`) | `{chat, app, kind: "status", status}` |
+
+- Visible pushes carry `thread-id` = the chat, so a chat's pushes group together, and `mutable-content`.
+- A device APNs answers as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) is forgotten.
+- The app opens the chat named in `feedbackkit.chat` when the push is tapped, and refreshes it on a silent one.
