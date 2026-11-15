@@ -382,9 +382,11 @@ export async function addFeedback(
   } else if (store.name) {
     writes.push(store.db.prepare("UPDATE chats SET sender_name = ? WHERE id = ?").bind(store.name, id));
   }
+  writes.push(bump(store.db, id));
   writes.push(store.db.prepare(
-    "INSERT INTO messages (id, chat, at, text, build, images, first, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
-  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0));
+    "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq)"
+      + " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?))",
+  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id));
   input.images.forEach((image, index) => writes.push(store.db.prepare(
     "INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)",
   ).bind(message, index, keys[index], image.media_type)));
@@ -441,9 +443,13 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
   if (!found) {
     return { ok: false, status: 404 };
   }
-  const claimed = await store.db.prepare(
-    "UPDATE messages SET status = 'delivering', claimed_at = ? WHERE id = ? AND chat = ? AND status = 'pending'",
-  ).bind(now, id, chat).run();
+  const [, claimed] = await store.db.batch([
+    bump(store.db, chat, { message: id, status: "pending" }),
+    store.db.prepare(
+      "UPDATE messages SET status = 'delivering', claimed_at = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
+        + " WHERE id = ? AND chat = ? AND status = 'pending'",
+    ).bind(now, chat, id, chat),
+  ]);
   if (!claimed.meta.changes) {
     return { ok: false, status: 409 };
   }
@@ -465,9 +471,13 @@ export async function runnerResult(
   if (!(await findMessage(store, chat, id))) {
     return 404;
   }
-  const done = await store.db.prepare(
-    "UPDATE messages SET status = ?, detail = ? WHERE id = ? AND chat = ? AND status = 'delivering'",
-  ).bind(delivered ? "delivered" : "failed", delivered ? null : detail, id, chat).run();
+  const [, done] = await store.db.batch([
+    bump(store.db, chat, { message: id, status: "delivering" }),
+    store.db.prepare(
+      "UPDATE messages SET status = ?, detail = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
+        + " WHERE id = ? AND chat = ? AND status = 'delivering'",
+    ).bind(delivered ? "delivered" : "failed", delivered ? null : detail, chat, id, chat),
+  ]);
   return done.meta.changes ? 200 : 409;
 }
 
@@ -500,8 +510,44 @@ export async function chatSide(store: FeedbackStore, chat: string): Promise<{ ti
 }
 
 export async function runnerAgent(store: FeedbackStore, chat: string, agent: AgentSide): Promise<404 | 200> {
-  const written = await store.db.prepare(
+  const before = await chatSide(store, chat);
+  if (!before) {
+    return 404;
+  }
+  const { results } = await store.db.prepare("SELECT id, text, at FROM agent_messages WHERE chat = ?")
+    .bind(chat).all<{ id: string; text: string; at: string | null }>();
+  const held = new Map(results.map((row) => [row.id, row]));
+  // Each new or changed message takes its own seq; the chat's state takes the last, when anything moved.
+  const changed = agent.messages.filter((one) => {
+    const known = held.get(one.id);
+    return !known || known.text !== one.text || known.at !== one.at;
+  });
+  const was = before.agent;
+  const stateMoved = !was || was.isWorking !== agent.isWorking || was.activity !== agent.activity
+    || was.thread?.host !== agent.thread?.host || was.thread?.id !== agent.thread?.id;
+  const steps = changed.length + (changed.length || stateMoved ? 1 : 0);
+  const writes: D1PreparedStatement[] = [];
+  if (steps) {
+    writes.push(store.db.prepare("UPDATE chats SET seq = seq + ? WHERE id = ?").bind(steps, chat));
+    changed.forEach((one, index) => writes.push(store.db.prepare(
+      "INSERT INTO agent_messages (chat, id, seq, text, at) VALUES (?, ?, (SELECT seq FROM chats WHERE id = ?) - ?, ?, ?)"
+        + " ON CONFLICT (chat, id) DO UPDATE SET seq = excluded.seq, text = excluded.text, at = excluded.at",
+    ).bind(chat, one.id, chat, steps - 1 - index, one.text, one.at)));
+  }
+  writes.push(store.db.prepare(
     "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
-  ).bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, chat, store.app, store.login).run();
-  return written.meta.changes ? 200 : 404;
+  ).bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, chat, store.app, store.login));
+  await store.db.batch(writes);
+  return 200;
+}
+
+/**
+ * Moves the chat's change counter on by one, the seq the change it goes with takes. With `only`, it moves only while
+ * that message still has that status, so a claim or result that loses its race moves nothing.
+ */
+function bump(db: D1Database, chat: string, only?: { message: string; status: MessageStatus }): D1PreparedStatement {
+  return only
+    ? db.prepare("UPDATE chats SET seq = seq + 1 WHERE id = ? AND EXISTS (SELECT 1 FROM messages WHERE id = ? AND chat = ? AND status = ?)")
+      .bind(chat, only.message, chat, only.status)
+    : db.prepare("UPDATE chats SET seq = seq + 1 WHERE id = ?").bind(chat);
 }

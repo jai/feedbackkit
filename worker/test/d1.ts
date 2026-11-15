@@ -5,11 +5,12 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
  * D1 as the Worker uses it, on SQLite in memory with the Worker's own migrations: prepare, bind, first, all, run and
  * batch (one transaction). Real SQL, so the tests check the queries themselves.
  */
-export function memoryD1(): D1Database & { sqlite: DatabaseSync } {
+export function memoryD1(before?: string): D1Database & { sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
   const folder = new URL("../migrations/", import.meta.url);
-  for (const file of readdirSync(folder).filter((name) => name.endsWith(".sql")).sort()) {
+  // `before`: only the migrations named before it, to test the next one on a database as it was.
+  for (const file of readdirSync(folder).filter((name) => name.endsWith(".sql") && (!before || name < before)).sort()) {
     sqlite.exec(readFileSync(new URL(file, folder), "utf8"));
   }
   const values = (params: unknown[]): SQLInputValue[] =>

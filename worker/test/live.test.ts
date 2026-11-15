@@ -71,6 +71,10 @@ test("the live socket is only for the token's own chat, and only as a WebSocket 
   assert.equal((await live(`/v2/feedback/${chat}/live`, { Authorization: `Bearer ${someone}`, Upgrade: "websocket" })).status, 404);
   assert.equal((await live("/v2/feedback/fb_0000000000000000/live", { Authorization: `Bearer ${bearer}`, Upgrade: "websocket" })).status, 404);
   assert.equal((await live(`/v2/feedback/${chat}/live`, { Authorization: `Bearer ${bearer}` })).status, 426);
+  (e.DB as ReturnType<typeof memoryD1>).sqlite.exec("INSERT INTO chats (id, app, login, kind, title, created_at, issue_number, issue_url)"
+    + " VALUES ('fb_1111111111111111', 'pager', 'octocat', 'issue', 'An issue', 1, 7, 'https://github.com/acme/pager/issues/7')");
+  assert.equal((await live("/v2/feedback/fb_1111111111111111/live", { Authorization: `Bearer ${bearer}`, Upgrade: "websocket" })).status, 404,
+    "an issue chat has no change source, so no live");
   assert.equal((await live(`/v2/feedback/${chat}/live`, { Authorization: `Bearer ${bearer}`, Upgrade: "websocket" })).status, 200);
   assert.deepEqual(calls.map(({ room, path, chat: one, upgrade }) => [room, path, one, upgrade]),
     [[chat, "/connect", chat, "websocket"]]);
