@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Callable, Literal, NamedTuple, Protocol, TypedDict
 
-from .brief import first_prompt
+from .brief import app_name, fields, first_prompt, later_prefix
 from .util import IMAGE_EXTENSIONS, HttpJsonError, JsonObject, image_note, json_object, post_json, write_private_json
 
 STATE_DIR = Path.home() / "Library" / "Application Support" / "feedbackkit-runner"
@@ -41,15 +41,10 @@ BUILDERS = (
     ("borg-cube-04", "Borg Cube 04", "564e1156-4425-493e-812a-2da638992675"),
 )
 ORCA = "/Applications/Orca.app/Contents/Resources/bin/orca"
-# Agent Pager's owner: his messages go in prefixed REPLY_PREFIX, as his thread replies do.
-AGENT_PAGER_OWNER: Sender = {"app": "agent-pager", "login": "jai", "repo": "jai/agent-pager", "role": "owner"}
 CLONES = "/Users/jai/Developer"
-# An app's Orca project is named "Feedback <this>"; an app not listed gets its id in words ("agent-pager": Agent Pager).
-PROJECT_NAMES = {"prhub": "PR Hub"}
 AGENT = "codex"
 MODEL = "gpt-6.1-sol"
 EFFORT = "medium"
-REPLY_PREFIX = "Jai via Agent Pager: "
 # A chat's thread: Orca's Codex chats, and the Claude Code chats started before the runner moved to Codex.
 AGENT_APPS = ("orca-codex", "orca-claude")
 REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
@@ -531,7 +526,7 @@ def project_path(app: str) -> str:
 
 def project_name(app: str) -> str:
     """The project's name in Orca: "Feedback Agent Pager", "Feedback PR Hub"."""
-    return "Feedback " + PROJECT_NAMES.get(app, app.replace("-", " ").title())
+    return "Feedback " + app_name(app)
 
 
 def worktree_name(chat: str) -> str:
@@ -780,16 +775,15 @@ class Runner:
         project = builder.orca.project(base, project_name(sender["app"]))
         paths = builder.cube.save_images(first_screenshots(sender["app"], chat), message, claimed.get("images") or [])
         prompt = first_prompt(
-            name,
-            chat,
-            str(claimed.get("title") or ""),
-            str(claimed.get("build") or ""),
-            str(claimed.get("text") or ""),
-            paths,
-            builder.name,
-            sender["repo"],
-            sender["role"],
-            "Jai" if sender == AGENT_PAGER_OWNER else sender["login"],
+            fields(
+                sender["app"],
+                sender["login"],
+                sender["role"],
+                sender["repo"],
+                str(claimed.get("build") or ""),
+                paths,
+                str(claimed.get("text") or ""),
+            )
         )
         worktree = builder.orca.create(project, name, prompt)
         now = self.clock()
@@ -844,8 +838,11 @@ class Runner:
             builder.cube.clone(clone, sender["repo"])
             known["removed"] = False
         paths = builder.cube.save_images(f"{clone}/tmp/feedback", message, claimed.get("images") or [])
-        prefix = REPLY_PREFIX if sender == AGENT_PAGER_OWNER else f"{sender['login']} via Feedback: "
-        text = prefix + str(claimed.get("text") or "") + (image_note(paths) if paths else "")
+        text = (
+            later_prefix(sender["app"], sender["login"])
+            + str(claimed.get("text") or "")
+            + (image_note(paths, sender["login"]) if paths else "")
+        )
         job: DeliveryJob = {"app": thread["app"], "session_id": thread["session_id"], "cwd": clone, "text": text}
         outcome = self.deliver(builder.cube.machine, job)
         queued_id = outcome.get("queued_id")

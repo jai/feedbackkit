@@ -108,10 +108,10 @@ def write_private_json(path: Path, value: object) -> None:
             os.unlink(temporary)
 
 
-def image_note(paths: list[str]) -> str:
-    """What the agent reads after Jai's words: where each screenshot is, and that it should look before answering.
-    The same words as Agent Pager's thread replies (hub/reply_target.py)."""
+def image_note(paths: list[str], sender: str) -> str:
+    """What the agent reads after a later message's words: where each screenshot is, and that it should look before
+    answering."""
     what = "a screenshot" if len(paths) == 1 else f"{len(paths):d} screenshots"
-    return "\n\n[Jai attached {}. Open each image file and look at it before you answer: {}]".format(
-        what, ", ".join(paths)
+    return "\n\n[{} attached {}. Open each image file and look at it before you answer: {}]".format(
+        sender, what, ", ".join(paths)
     )

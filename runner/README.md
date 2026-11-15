@@ -75,13 +75,10 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   (`feedbackkit_runner/brief.py`, `prompts/feedback-brief.md`) and the message. A lost reply (`agent_session_operation_unknown`
   with an `operationId`) is asked again, twice at most, with `--retry-launch <operationId>`, which Orca replays without
   launching a second agent. The runner state records the worktree's path (`clone`) and `layout: "worktree"`. The agent
-  is told the screenshots' paths. The brief: Agent Pager's own
-  for its owner; for any other repo the general one, which tells the agent to follow that repo's AGENTS.md and, for an
-  owner, ship as it says, or, for a builder, open a pull request for Jai and never push to main, merge, ship, release
-  or deploy, whatever that AGENTS.md says. The agent rebases its branch on origin/main and an owner pushes with
-  `git push origin HEAD:main` (main stays checked out in the project's clone). It never removes its worktree.
-- Each later message: into the same Orca chat, as an Agent Pager thread reply goes (its `orca_send`, `agentSession.send`), prefixed `Jai via Agent
-  Pager:` (Agent Pager's owner's chats) or `<login> via Feedback:` (everyone else's), its screenshots saved into the
+  is told the screenshots' paths. The brief is FeedbackKit's one template, filled from declared fields of the work
+  item ([docs/api.md](../docs/api.md#the-brief)). It never removes its worktree.
+- Each later message: into the same Orca chat, as an Agent Pager thread reply goes (its `orca_send`, `agentSession.send`), prefixed
+  `<login> via <app name>:` (`jai via Agent Pager:`), its screenshots saved into the
   worktree's `tmp/feedback/` first. The thread is the chat's Orca Codex thread (`orca-codex`), or its Orca Claude thread (`orca-claude`) for a
   chat started before the runner moved to Codex. The chat's thread is found by its folder in Agent Pager's threads hub's
   last scan of its builder (`last-good-<host>.json`; the hub scans both Cubes); a reply waits for it up to 10 minutes after the launch.
@@ -109,13 +106,11 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   (the CLI cannot remove an Orca project, so removing the folder left a ghost project): it logs it once a day for Jai to
   remove by hand.
 
-**The agent's brief.** Pull; ask one short question if the request is unclear; change and test (`builder/test.sh` on
-its builder); push to main; for an app change, bump the build (`builder/next-build.sh`), push it, and follow the ios-ci `release` job with
-
 ## The brief
 
-`prompts/feedback-brief.md` is the coding thread's first message, filled by `feedbackkit_runner/brief.py`; the tests
-fail when the two differ.
+`prompts/feedback-brief.md` is the coding thread's first message (approved by Jai, 2026-11-15, v3), declared with its
+fields in [docs/api.md](../docs/api.md#the-brief) and filled by `feedbackkit_runner/brief.py`. The tests fail when the
+two differ, when a field is left unfilled, or when anything but the fields is added.
 
 ## Logs
 

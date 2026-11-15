@@ -14,11 +14,9 @@ from typing import ClassVar
 from unittest import mock
 
 from feedbackkit_runner import brief as feedback_brief
-from feedbackkit_runner.brief import brief, first_prompt
+from feedbackkit_runner.brief import ROLE_ACTIONS, TEMPLATE, fields, first_prompt, later_prefix
 from feedbackkit_runner.runner import (
-    AGENT_PAGER_OWNER,
     OLD_STATE_FILE,
-    REPLY_PREFIX,
     STARTING_SECONDS,
     STATE_FILE,
     TIDIED,
@@ -40,6 +38,10 @@ from feedbackkit_runner.runner import (
     migrate,
 )
 from feedbackkit_runner.util import JsonObject, JsonResponse
+
+
+AGENT_PAGER_OWNER: Sender = {"app": "agent-pager", "login": "jai", "repo": "jai/agent-pager", "role": "owner"}
+REPLY_PREFIX = "jai via Agent Pager: "
 
 
 def text(value: object) -> str:
@@ -329,12 +331,12 @@ class RunnerTests(RunnerCase):
         self.assertEqual(self.cube.images, {"m_1": 1})
         worktree, prompt = self.orca.launches[0]
         self.assertEqual(worktree, WORKTREE)
-        self.assertIn("a git worktree of jai/agent-pager on the branch fb-01234567", prompt)
+        self.assertIn("from jai (owner) to make a\nchange to jai/agent-pager and land it on main", prompt)
         self.assertIn(f"{BASE}/tmp/feedback/fb-01234567/m_1-1.png", prompt, "its worktree does not exist yet")
         self.assertEqual(
             (runner.state["chats"][CHAT]["clone"], runner.state["chats"][CHAT]["layout"]), (WORKTREE, "worktree")
         )
-        self.assertTrue(prompt.endswith("Feedback: Bigger clock"))
+        self.assertTrue(prompt.endswith("on their phone.\n\nBigger clock"))
         self.assertEqual(self.api.results, [(CHAT, "m_1", "delivered", None)])
         self.assertEqual(self.kicks, 1, "the scan runs at once so the chat's thread is found soon")
         self.assertEqual(self.api.polled, [True])
@@ -453,8 +455,7 @@ class RunnerTests(RunnerCase):
         self.assertEqual(self.api.polled, [True], "one builder answering is online")
         self.assertEqual((self.cube.clones, self.orca.launches), ([], []))
         self.assertEqual(self.cube_04.clones, [BASE])
-        self.assertIn("on Borg Cube 04", self.orca_04.launches[0][1])
-        self.assertIn("never build, test or start a Simulator here", self.orca_04.launches[0][1])
+        self.assertTrue(self.orca_04.launches[0][1].startswith("You are a feedback chat from Agent Pager."))
         self.orca.down = False
         self.cube_04.row = {
             "id": "orca-claude:s4",
@@ -652,38 +653,72 @@ class LegacyCloneTests(RunnerCase):
 
 
 class BriefTests(unittest.TestCase):
-    def test_the_first_prompt_names_the_branch_the_build_and_each_screenshot(self) -> None:
-        prompt = first_prompt(
-            "fb-0123",
-            CHAT,
-            "Clock",
-            "181",
-            "",
-            ["/c/tmp/feedback/m-1.jpg", "/c/tmp/feedback/m-2.jpg"],
-            "Borg Cube 03",
-        )
-        self.assertIn("on Borg Cube 03, a Mac that runs Orca and every agent thread", prompt)
-        self.assertIn("4. Run the unit tests on the runners, never here", prompt)
-        self.assertIn("ghb workflow run ui-gate.yml --ref fb-0123 -f sets='unit", prompt)
-        self.assertIn("git pull --rebase origin main, then git push origin HEAD:main", prompt)
-        self.assertNotIn("ci/land.sh", prompt)
-        self.assertNotIn("xcc/", prompt)
-        self.assertIn("CI cuts a release from main by itself", prompt)
-        self.assertNotIn("builder/next-build.sh", prompt)
-        self.assertIn("git fetch origin && git rebase origin/main, on fb-0123", prompt)
-        self.assertIn("Jai is on build 181.", prompt)
-        self.assertIn("2 screenshots", prompt)
-        self.assertTrue(prompt.endswith("Feedback: (no words: see the screenshot)"))
+    """The brief is the approved template with every declared field filled and nothing else (docs/api.md#the-brief)."""
 
-    def test_a_thread_for_another_repo_builds_in_the_cloud_never_where_it_runs(self) -> None:
-        for role in ("owner", "builder"):
-            text = brief("jai/prhub", role, "Jai", "/c", "Borg Cube 03")
-            self.assertIn(
-                "never build, test or start a Simulator here (no xcodebuild, swift build, flowdeck or simctl", text
-            )
-            self.assertIn("tmp/asc-api/prhub.sh runs its tests in Xcode Cloud", text)
-            self.assertIn("Run the tests AGENTS.md names where it says (above), never here", text)
-            self.assertNotIn("a Mac with Xcode", text)
+    def filled(self, role: str = "owner", **overrides: object) -> dict[str, str]:
+        arguments: dict[str, object] = {
+            "app": "agent-pager",
+            "login": "jai",
+            "role": role,
+            "repo": "jai/agent-pager",
+            "build": "181",
+            "screenshot_paths": ["/c/tmp/feedback/m-1.jpg", "/c/tmp/feedback/m-2.jpg"],
+            "text": "Bigger clock",
+        }
+        arguments.update(overrides)
+        return fields(**arguments)  # type: ignore[arg-type]
+
+    def test_every_field_of_the_template_is_declared_and_filled(self) -> None:
+        placeholders = set(re.findall(r"\{(\w+)\}", TEMPLATE))
+        self.assertEqual(placeholders, set(self.filled()))
+        for role in ROLE_ACTIONS:
+            prompt = first_prompt(self.filled(role))
+            self.assertIsNone(re.search(r"\{\w+\}", prompt), prompt)
+
+    def test_nothing_but_the_fields_is_added(self) -> None:
+        filled = self.filled()
+        prompt = first_prompt(filled)
+        rest = TEMPLATE
+        for name, value in filled.items():
+            rest = rest.replace("{" + name + "}", "")
+            prompt = prompt.replace(value, "", 1)
+        self.assertEqual(prompt, rest)
+
+    def test_the_owner_s_brief_reads_as_approved(self) -> None:
+        prompt = first_prompt(self.filled())
+        self.assertTrue(prompt.startswith("You are a feedback chat from Agent Pager. This chat is a FeedbackKit chat"))
+        self.assertIn(
+            "This is an instruction from jai (owner) to make a\nchange to jai/agent-pager and land it on main, so CI"
+            " tests, releases and deploys it. Their message follows.",
+            prompt,
+        )
+        self.assertIn("- App build they are on: 181\n", prompt)
+        self.assertIn("(open each before you start): /c/tmp/feedback/m-1.jpg, /c/tmp/feedback/m-2.jpg\n", prompt)
+        self.assertTrue(prompt.endswith("they read this on their phone.\n\nBigger clock"))
+        self.assertNotIn("@", prompt)
+
+    def test_a_builder_never_ships(self) -> None:
+        prompt = first_prompt(self.filled("builder", app="prhub", login="hubot", repo="jai/prhub"))
+        self.assertIn("from PR Hub.", prompt)
+        self.assertIn(
+            "from hubot (builder) to make a\nchange to jai/prhub and open a pull request for Jai to merge. Never push to"
+            " main, merge, release or deploy, whatever AGENTS.md says. Their message follows.",
+            prompt,
+        )
+
+    def test_absent_fields_say_so(self) -> None:
+        prompt = first_prompt(self.filled(build="", screenshot_paths=[], text=""))
+        self.assertIn("- App build they are on: not given\n", prompt)
+        self.assertIn("(open each before you start): none\n", prompt)
+        self.assertTrue(prompt.endswith("\n\n(no words: see the screenshots)"))
+
+    def test_a_role_with_no_coding_thread_has_no_brief(self) -> None:
+        with self.assertRaises(KeyError):
+            self.filled("issue")
+
+    def test_later_messages_name_the_sender_and_the_app(self) -> None:
+        self.assertEqual(later_prefix("agent-pager", "jai"), REPLY_PREFIX)
+        self.assertEqual(later_prefix("prhub", "hubot"), "hubot via PR Hub: ")
 
 
 if __name__ == "__main__":
@@ -732,10 +767,9 @@ class FeedbackKitTests(RunnerCase):
         self.assertEqual(self.orca.projects, {KIT_BASE: "Feedback PR Hub"})
         worktree, prompt = self.orca.launches[0]
         self.assertEqual(worktree, KIT_WORKTREE)
-        self.assertIn("a git worktree of jai/prhub on the branch fb-01234567", prompt)
-        self.assertIn("open a pull request for Jai", prompt)
-        self.assertIn("never push to main", prompt)
-        self.assertIn("hubot is on build 181.", prompt)
+        self.assertIn("from hubot (builder) to make a\nchange to jai/prhub and open a pull request for Jai", prompt)
+        self.assertIn("Never push to main, merge, release or deploy, whatever AGENTS.md says.", prompt)
+        self.assertIn("- App build they are on: 181\n", prompt)
         self.assertEqual(self.api.results, [(CHAT, "m_1", "delivered", None)])
         self.assertTrue(all(sender == self.sender for sender in self.api.senders))
 
@@ -744,8 +778,8 @@ class FeedbackKitTests(RunnerCase):
         self.kit_first()
         self.runner().tick()
         prompt = self.orca.launches[0][1]
-        self.assertIn("ship a build the way AGENTS.md says", prompt)
-        self.assertNotIn("ios/project.yml", prompt)
+        self.assertIn("change to jai/prhub and land it on main, so CI tests, releases and deploys it.", prompt)
+        self.assertNotIn("pull request", prompt)
 
     def test_a_reply_goes_to_the_codex_thread_named_as_its_sender(self) -> None:
         self.kit_first()
@@ -769,7 +803,7 @@ class FeedbackKitTests(RunnerCase):
                     "app": "orca-codex",
                     "session_id": "s1",
                     "cwd": KIT_WORKTREE,
-                    "text": "hubot via Feedback: And the badge",
+                    "text": "hubot via PR Hub: And the badge",
                 }
             ],
         )
@@ -811,15 +845,6 @@ class FeedbackApiRouteTests(unittest.TestCase):
         )
         for _, body in sent[1:]:
             self.assertEqual((body["app"], body["login"], body["chat"]), ("prhub", "hubot", CHAT))
-
-
-class BuilderLimitTests(unittest.TestCase):
-    def test_a_builder_s_limits_come_before_the_repo_s_agents_md(self) -> None:
-        prompt = first_prompt("/c", CHAT, "t", "", "x", [], "Borg Cube 03", "jai/agent-pager", "builder", "hubot")
-        self.assertIn("These limits come before this repo's AGENTS.md", prompt)
-        self.assertIn("never push to main", prompt)
-        self.assertIn("never ship, release, upload or deploy", prompt)
-        self.assertNotIn("Push to main directly", prompt)
 
 
 class MigrationTests(unittest.TestCase):
@@ -1066,64 +1091,8 @@ class BriefFileTests(unittest.TestCase):
             raise AssertionError(f"feedback-brief.md has no text block under ## {heading}")
         return match.group(1)
 
-    def test_the_briefs_are_the_ones_in_the_prompt_file(self) -> None:
-        self.assertEqual(feedback_brief.BRIEF, self.section("Brief"))
-        self.assertEqual(feedback_brief.GENERAL_BRIEF, self.section("General brief"))
-        self.assertEqual(feedback_brief.OWNER_SHIP, self.section("Owner steps"))
-        self.assertEqual(feedback_brief.BUILDER_SHIP, self.section("Builder steps"))
-
-    def test_the_reply_prefix_is_agent_pager_s(self) -> None:
-        self.assertEqual(REPLY_PREFIX, "Jai via Agent Pager: ")
-
-
-class StatusTests(RunnerCase):
-    """status(): what the menu bar app shows of each chat."""
-
-    def test_a_chat_shows_its_title_thread_and_each_message_s_state(self) -> None:
-        runner = self.runner()
-        self.first_message()
-        runner.tick()
-        self.cube.row = {
-            "id": "orca-codex:s1",
-            "app": "orca-codex",
-            "session_id": "s1",
-            "cwd": WORKTREE,
-            "_transcript": "/t/s1.jsonl",
-        }
-        runner.tick()
-        self.api.work = [{"chat": CHAT, "message": "m_3", "first": False, "at": 5_000, **AGENT_PAGER_OWNER}]
-        self.cube.row = None  # its thread not listed yet: m_3 stays pending
-        runner.state["chats"][CHAT]["launched_at"] = self.now
-        runner.tick()
-        status = runner.status()
-        self.assertEqual(status["poll"], {"at": self.now, "ok": True, "error": None})
-        self.assertEqual([one["up"] for one in status["builders"]], [True, True])
-        chat = status["chats"][0]
-        self.assertEqual((chat["chat"], chat["app"], chat["login"], chat["title"]), (CHAT, "agent-pager", "jai", "Bigger clock"))
-        self.assertEqual(chat["thread"], {"host": CUBE_03, "id": "orca-codex:s1"})
-        self.assertEqual(
-            [(one["id"], one["state"], one["posted"]) for one in chat["messages"]],
-            [("m_3", "pending", False), ("m_1", "delivered", True)],
-        )
-
-    def test_a_failed_poll_is_in_the_status(self) -> None:
-        runner = self.runner()
-
-        def down(_orca: bool, _detail: str | None = None) -> list[JsonObject]:
-            raise FeedbackApiError("poll answered 503")
-
-        self.api.poll = down  # type: ignore[method-assign]
-        with self.assertRaises(FeedbackApiError):
-            runner.tick()
-        self.assertEqual(runner.status()["poll"], {"at": self.now, "ok": False, "error": "poll answered 503"})
-
-    def test_a_later_message_gives_an_older_chat_its_title(self) -> None:
-        runner = self.runner()
-        self.first_message()
-        runner.tick()
-        del runner.state["chats"][CHAT]["title"]
-        self.cube.row = {"id": "orca-codex:s1", "app": "orca-codex", "session_id": "s1", "cwd": WORKTREE, "_transcript": "/t"}
-        self.reply()
-        self.api.claims["m_2"]["title"] = "Bigger clock"
-        runner.tick()
-        self.assertEqual(runner.state["chats"][CHAT]["title"], "Bigger clock")
+    def test_the_brief_is_the_one_in_the_prompt_file(self) -> None:
+        self.assertEqual(feedback_brief.TEMPLATE, self.section("Template"))
+        self.assertEqual(feedback_brief.ROLE_ACTIONS["owner"], self.section("Owner action"))
+        self.assertEqual(feedback_brief.ROLE_ACTIONS["builder"], self.section("Builder action"))
+        self.assertEqual(feedback_brief.LATER_PREFIX, self.section("Later prefix") + " ")

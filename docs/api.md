@@ -28,3 +28,25 @@ App routes, on the app's backend with the app's own auth:
   `builderOnline`: the runner polled in the last 90 seconds and said its Mac answers. `notice`, when sending opens a public issue, says so;
   the app shows it above a new chat.
 
+
+## The brief
+
+The first message of an owner's or a builder's coding thread is FeedbackKit's brief: one template, filled from these
+fields of the work item and nothing else. The text is in
+[runner/prompts/feedback-brief.md](../runner/prompts/feedback-brief.md) (approved by Jai, 2026-11-15, v3); the runner
+fills it ([runner/feedbackkit_runner/brief.py](../runner/feedbackkit_runner/brief.py)).
+
+| Field | From | When absent |
+|---|---|---|
+| `app_name` | the work item's `app`, in words (`agent-pager`: Agent Pager, `prhub`: PR Hub) | never absent |
+| `sender` | the work item's `login`: the sender's GitHub login | never absent |
+| `role` | the work item's `role`: `owner` or `builder` | never absent |
+| `repo` | the work item's `repo` (`owner/name`) | never absent |
+| `role_action` | by `role`: owner `and land it on main, so CI tests, releases and deploys it.`; builder `and open a pull request for Jai to merge. Never push to main, merge, release or deploy, whatever AGENTS.md says.` | never absent |
+| `build` | the message's `build` | `not given` |
+| `screenshot_paths` | where the runner saved the message's `images` on the builder, comma-separated | `none` |
+| `message` | the message's `text` | `(no words: see the screenshots)` |
+
+- Everyone else's feedback never reaches a coding thread: it becomes a GitHub issue.
+- Each later message goes into the same thread as `{sender} via {app_name}: {text}`, and when it has screenshots,
+  `[{sender} attached … Open each image file and look at it before you answer: {paths}]` after the words.
