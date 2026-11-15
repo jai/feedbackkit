@@ -287,11 +287,7 @@ async function builderOnline(store: FeedbackStore, now: number): Promise<boolean
 
 export async function feedbackList(store: FeedbackStore, now: number) {
   const [list, status] = await Promise.all([threads(store), builderStatus(store, now)]);
-  const rows = await Promise.all(list.map(async (row) => {
-    const agent = await store.get<AgentSide>(agentKey(row.id));
-    return { ...row, thread: agent?.value.thread ?? null };
-  }));
-  return { threads: rows, builderOnline: status.online, builderStatus: status };
+  return { threads: list, builderOnline: status.online, builderStatus: status };
 }
 
 /** The one log line a list read leaves (`feedback_list_served`): what the app was told about the builder, and why. */
