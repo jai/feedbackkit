@@ -80,6 +80,9 @@ cd Demo && xcodegen && open FeedbackDemo.xcodeproj    # run the FeedbackDemo sch
 - **Demo UI test**: test the `FeedbackDemo` scheme on an iPhone simulator. `FeedbackDemoUITests` goes through each
   role's main flows. With `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>` set, it also writes the screenshots above.
 
+[docs/end-to-end-walkthrough.md](docs/end-to-end-walkthrough.md) is the whole path by hand: the demo, a
+sample backend deployed and torn down by one workflow, a coding thread that changes the demo, and the rebuilt demo.
+
 CI runs all three on every push to main. Each hour, a release job tags the newest commit on main that passed CI,
 if a `feat` or `fix` commit is waiting. The commit messages pick the version
 ([Conventional Commits](https://www.conventionalcommits.org)).
