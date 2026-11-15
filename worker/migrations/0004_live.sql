@@ -2,7 +2,7 @@
 -- - the chat's state as last sent, and the seq of its own latest change (live.ts settles it on each read);
 -- - each message's `clientRef`, so a repeated prompt answers the first message;
 -- - `removed`, for a message the person took back before the runner claimed it.
--- SQLite cannot change a CHECK, so the messages table is made again with its rows, ids and seqs as they are.
+-- SQLite cannot change a CHECK, so the messages table (and images, which refers to it) is made again with its rows as they are.
 
 PRAGMA defer_foreign_keys = true;
 
@@ -25,8 +25,20 @@ CREATE TABLE messages_new (
 );
 INSERT INTO messages_new (id, chat, at, text, build, images, first, status, claimed_at, detail, seq)
   SELECT id, chat, at, text, build, images, first, status, claimed_at, detail, seq FROM messages;
+-- `images` refers to `messages`: it is made again too, over the new table, and dropped first, so no row ever refers
+-- to a message that is gone. Renaming `messages_new` to `messages` moves `images_new`'s reference with it.
+CREATE TABLE images_new (
+  message TEXT NOT NULL REFERENCES messages_new (id),
+  idx INTEGER NOT NULL,
+  r2_key TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  PRIMARY KEY (message, idx)
+);
+INSERT INTO images_new (message, idx, r2_key, media_type) SELECT message, idx, r2_key, media_type FROM images;
+DROP TABLE images;
 DROP TABLE messages;
 ALTER TABLE messages_new RENAME TO messages;
+ALTER TABLE images_new RENAME TO images;
 CREATE INDEX messages_by_chat ON messages (chat, at);
 CREATE INDEX messages_pending ON messages (at) WHERE status = 'pending';
 CREATE INDEX messages_by_seq ON messages (chat, seq);
