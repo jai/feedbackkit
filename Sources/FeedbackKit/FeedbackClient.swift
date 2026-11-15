@@ -10,18 +10,22 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
     public let thread: FeedbackAgentThread?
     /// Where its agent stands, for the row; nil from a Worker before this was served, and for issue chats.
     public let agent: FeedbackThreadAgent?
+    /// What its feedback shipped, for the row's accessories; nil until the runner found any.
+    public let shipped: FeedbackShipped?
 
     public init(
-        id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil, agent: FeedbackThreadAgent? = nil
+        id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil, agent: FeedbackThreadAgent? = nil,
+        shipped: FeedbackShipped? = nil
     ) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
         self.thread = thread
         self.agent = agent
+        self.shipped = shipped
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread, agent }
+    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread, agent, shipped }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -30,6 +34,7 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
         createdAt = try container.decode(String.self, forKey: .createdAt)
         thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
         agent = try? container.decodeIfPresent(FeedbackThreadAgent.self, forKey: .agent)
+        shipped = FeedbackShipped.decodeLenient(container, forKey: .shipped)
     }
 }
 
@@ -139,13 +144,15 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
     public var screenshots: [String: Int]
     /// Only the sender's messages have delivery states; agent messages do not travel through the runner's queue.
     public var delivery: [String: FeedbackMessageDelivery]
+    /// What the feedback shipped, for the chat's header; nil until the runner found any.
+    public var shipped: FeedbackShipped?
 
     public var hasUndeliveredMessages: Bool { delivery.values.contains { $0 != .delivered } }
 
     public init(
         id: String, messages: [Message], isWorking: Bool, activity: String?, problem: String?,
         costCents: Int?, builderOnline: Bool, screenshots: [String: Int] = [:], thread: FeedbackAgentThread? = nil,
-        delivery: [String: FeedbackMessageDelivery] = [:]
+        delivery: [String: FeedbackMessageDelivery] = [:], shipped: FeedbackShipped? = nil
     ) {
         self.id = id
         self.messages = messages
@@ -157,10 +164,11 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         self.thread = thread
         self.screenshots = screenshots
         self.delivery = delivery
+        self.shipped = shipped
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, messages, isWorking, activity, problem, costCents, builderOnline, thread
+        case id, messages, isWorking, activity, problem, costCents, builderOnline, thread, shipped
     }
 
     /// The screenshot count and persisted delivery state; a Worker from before either field sends none.
@@ -180,6 +188,7 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         costCents = try container.decodeIfPresent(Int.self, forKey: .costCents)
         builderOnline = try container.decode(Bool.self, forKey: .builderOnline)
         thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
+        shipped = FeedbackShipped.decodeLenient(container, forKey: .shipped)
         let metadata = try container.decode([MessageMetadata].self, forKey: .messages)
         screenshots = Dictionary(metadata.compactMap { message in
             message.images.flatMap { $0 > 0 ? (message.id, $0) : nil }

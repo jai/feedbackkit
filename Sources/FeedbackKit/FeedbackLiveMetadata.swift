@@ -6,14 +6,16 @@ struct FeedbackLiveMetadata: Decodable {
     var builderOnline: Bool?
     var thread: FeedbackAgentThread?
     var costCents: Int?
+    var shipped: FeedbackShipped?
 
-    private enum CodingKeys: CodingKey { case builderOnline, thread, costCents }
+    private enum CodingKeys: CodingKey { case builderOnline, thread, costCents, shipped }
 
     init(from decoder: any Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         builderOnline = try fields.decodeIfPresent(Bool.self, forKey: .builderOnline)
         thread = try FeedbackAgentThread.decodeNamed(fields, forKey: .thread)
         costCents = try fields.decodeIfPresent(Int.self, forKey: .costCents)
+        shipped = FeedbackShipped.decodeLenient(fields, forKey: .shipped)
     }
 
     static func decode(_ extra: JSONValue?) -> Self? {
@@ -47,7 +49,8 @@ extension FeedbackChat {
                 default: .unknown
                 }
                 return ($0.id, status)
-            })
+            }),
+            shipped: live.state == nil ? bootstrap?.shipped : metadata?.shipped
         )
     }
 }

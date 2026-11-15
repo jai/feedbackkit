@@ -99,6 +99,9 @@ struct FeedbackChatView: View {
                 }
             },
             header: {
+                if let shipped = chat?.shipped {
+                    FeedbackShippedSection(shipped: shipped)
+                }
                 if chat?.builderOnline == false || (isNew && !model.list.builderOnline) {
                     BuilderNote()
                 }

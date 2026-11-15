@@ -10,7 +10,7 @@ extension DemoRole {
             threads: chats.map {
                 FeedbackThread(
                     id: $0.chat.id, title: $0.title, createdAt: $0.age.before(now),
-                    agent: self == .everyone ? nil : Self.agent(of: $0.chat)
+                    agent: self == .everyone ? nil : Self.agent(of: $0.chat), shipped: $0.chat.shipped
                 )
             },
             builderOnline: true,
@@ -70,7 +70,7 @@ private struct SeedChat {
 
     init(_ id: String, age: Age, messages: [(String, String)], isWorking: Bool = false, activity: String? = nil,
          problem: String? = nil, costCents: Int? = nil, delivery: FeedbackMessageDelivery = .delivered,
-         screenshots: [String: Int] = [:]) {
+         screenshots: [String: Int] = [:], shipped: FeedbackShipped? = nil) {
         let messages = messages.enumerated().map { index, message in
             FeedbackChat.Message(id: "m\(index + 1)", role: message.0, text: message.1)
         }
@@ -79,7 +79,8 @@ private struct SeedChat {
         chat = FeedbackChat(
             id: id, messages: messages, isWorking: isWorking, activity: activity, problem: problem,
             costCents: costCents, builderOnline: true, screenshots: screenshots,
-            delivery: Dictionary(uniqueKeysWithValues: messages.filter(\.isJai).map { ($0.id, delivery) })
+            delivery: Dictionary(uniqueKeysWithValues: messages.filter(\.isJai).map { ($0.id, delivery) }),
+            shipped: shipped
         )
     }
 
@@ -102,7 +103,12 @@ private struct SeedChat {
             ("you", "Perfect, thanks"),
             ("agent", "Anytime."),
         ],
-        costCents: 86
+        costCents: 86,
+        shipped: FeedbackShipped(commits: [
+            .init(sha: "4f2c9a1e0b7d3c5a8e6f1d2b9c0a7e3f5d8b1c46", title: "fix(settings): follow the system appearance",
+                  url: URL(string: "\(DemoRepo.url)/commit/4f2c9a1e0b7d3c5a8e6f1d2b9c0a7e3f5d8b1c46")!, checks: .success,
+                  release: .init(tag: "build-41", name: "Build 41", url: URL(string: "\(DemoRepo.url)/releases/tag/build-41")!)),
+        ], prs: [])
     )
 
     /// Owner: the builder Mac never took the message.
@@ -129,7 +135,11 @@ private struct SeedChat {
             ("you", "Typo on the paywall: \"Unlimted\""),
             ("agent", "Fixed. I opened [pull request #57](\(DemoRepo.url)/pull/57). It ships once an owner merges it."),
         ],
-        costCents: 18
+        costCents: 18,
+        shipped: FeedbackShipped(commits: [], prs: [
+            .init(number: 57, title: "Fix the paywall's typo", url: URL(string: "\(DemoRepo.url)/pull/57")!, state: .open,
+                  checks: .pending),
+        ])
     )
 
     /// Everyone else: a public issue, with a comment from the owner on GitHub.

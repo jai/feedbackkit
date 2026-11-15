@@ -40,6 +40,21 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertTrue(text("Delete hook: \(title)").waitForExistence(timeout: 5))
     }
 
+    func testRowsAndChatsSayWhatTheFeedbackShipped() throws {
+        // A row is one button: its accessories are in its label.
+        XCTAssertTrue(text("In Build 41").waitForExistence(timeout: 10), "the owner's shipped chat: its release")
+        XCTAssertTrue(text("Checks passed").exists)
+        screenshot("shipped-row")
+        open("Settings should follow dark mode")
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-shipped-header"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(text("fix(settings): follow the system appearance").exists, "the commit, a link")
+        screenshot("shipped-header")
+        back()
+        role("Builder")
+        XCTAssertTrue(text("PR open").waitForExistence(timeout: 5), "the builder's chat: its pull request is open")
+        XCTAssertTrue(text("Pull request 57, open").exists)
+    }
+
     func testFeedbackUsesTheSharedSentReplyTicks() throws {
         open("Make the sync button bigger, it's hard to hit")
         XCTAssertTrue(app.descendants(matching: .any)["reply-ticks-2"].firstMatch.waitForExistence(timeout: 5))

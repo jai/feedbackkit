@@ -227,7 +227,7 @@ private struct FeedbackListView: View {
             row(
                 route: .thread(thread.id), title: thread.title,
                 date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
-                agent: thread.agent, custom: customLabel?(thread)
+                agent: thread.agent, shipped: thread.shipped, custom: customLabel?(thread)
             )
         } header: {
             if !model.list.builderOnline {
@@ -260,23 +260,26 @@ private struct FeedbackListView: View {
     @ViewBuilder
     private func row(
         route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent? = nil,
-        custom: AnyView? = nil
+        shipped: FeedbackShipped? = nil, custom: AnyView? = nil
     ) -> some View {
         if isStacked {
             NavigationLink(value: route) {
-                rowLabel(title: title, date: date, isSelected: false, agent: agent, custom: custom)
+                rowLabel(title: title, date: date, isSelected: false, agent: agent, shipped: shipped, custom: custom)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("feedback-thread")
         } else {
-            Button { open(route) } label: { rowLabel(title: title, date: date, isSelected: isSelected, agent: agent, custom: custom) }
+            Button { open(route) } label: {
+                rowLabel(title: title, date: date, isSelected: isSelected, agent: agent, shipped: shipped, custom: custom)
+            }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("feedback-thread")
         }
     }
 
     private func rowLabel(
-        title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent?, custom: AnyView?
+        title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent?, shipped: FeedbackShipped?,
+        custom: AnyView?
     ) -> some View {
         Group {
             if let custom {
@@ -295,7 +298,9 @@ private struct FeedbackListView: View {
                         }
                     }
                 } chips: {
-                    EmptyView()
+                    if let shipped {
+                        FeedbackShippedChips(shipped: shipped)
+                    }
                 }
             }
         }
