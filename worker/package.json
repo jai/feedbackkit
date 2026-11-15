@@ -10,5 +10,8 @@
     "@cloudflare/workers-types": "^5.20261029.1",
     "typescript": "^7.0.2",
     "wrangler": "^4.156.0"
+  },
+  "dependencies": {
+    "@jai/agentchat-live": "file:vendor/jai-agentchat-live-bb26cdc.tgz"
   }
 }

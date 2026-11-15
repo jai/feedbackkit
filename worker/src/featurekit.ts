@@ -11,14 +11,17 @@ import {
 import {
   addIssueFeedback, gitHubIssues, type IssueFeedback, issueChat, issuesNotice, issueThreads, isImageName,
 } from "./feedback-issues.ts";
-import { chatChanged, connectRoom } from "./chat-room.ts";
+import { createLiveRoom, handleAcp, type LiveRooms, notifyChat } from "@jai/agentchat-live";
+import { liveAdapter, type LiveWho } from "./live.ts";
 import { migrate } from "./migrate.ts";
 import { agentPush, type ApnsKey, checkKey, type Device, type Push, sendPush } from "./push.ts";
 import { runnerWake, wakeRunner } from "./runner-wake.ts";
 import { verifyToken } from "./token.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
 
-export { ChatRoom } from "./chat-room.ts";
+/** Live mode: one room per followed chat (live.ts, the package `@jai/agentchat-live`). Read again every 15 s while
+ * followed, for changes no write makes. */
+export const FeedbackLiveRoom = createLiveRoom((env: FeatureKitEnv) => liveAdapter(liveDeps(env)), { refreshEvery: 15_000 });
 export { RunnerWake } from "./runner-wake.ts";
 
 export interface FeatureKitEnv {
@@ -44,8 +47,9 @@ export interface FeatureKitEnv {
   APNS_KEY_P8?: string;
   /** Runs the move from R2 to D1 (`POST /admin/migrate`, migrate.ts); without it that route is `404`. */
   ADMIN_TOKEN?: string;
-  /** Live mode: one room per open chat (chat-room.ts). Without it `/v2/feedback/{id}/live` is `404`. */
-  CHAT_ROOMS?: DurableObjectNamespace;
+  /** Live mode (live.ts): the rooms, and the secret that signs ACP connection ids. Without both, `/v2/acp` is `404`. */
+  LIVE_ROOMS?: DurableObjectNamespace;
+  ACP_SECRET?: string;
   /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
   RUNNER_WAKE?: DurableObjectNamespace;
 }
@@ -118,7 +122,6 @@ const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
 const DIRECT_FEEDBACK_PATH = /^\/v2\/feedback(?:\/([^/]+))?$/;
 /** A screenshot of the sender's own, for the live protocol's `resource_link` (agentchatkit docs/live-protocol.md). */
 const IMAGE_OF_CHAT_PATH = /^\/v2\/feedback\/([^/]+)\/images\/([^/]+)\/(\d{1,2})$/;
-const LIVE_PATH = /^\/v2\/feedback\/([^/]+)\/live$/;
 const DEVICES_PATH = /^\/v2\/devices(?:\/([0-9a-f]{64,200}))?$/;
 const APNS_TOKEN = /^[0-9a-f]{64,200}$/;
 const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait)$/;
@@ -168,7 +171,7 @@ async function feedbackRoute(
     }
     const target = await once(store, id, body, () => addFeedback(store, id ?? null, input, now));
     if (target) {
-      await Promise.all([wakeRunner(env.RUNNER_WAKE), chatChanged(env.CHAT_ROOMS, { app, login, chat: target })]);
+      await Promise.all([wakeRunner(env.RUNNER_WAKE), chatChanged(env, target)]);
     }
     const chat = target ? await feedbackChat(store, target, now) : null;
     return chat ? Response.json(chat) : notFound();
@@ -296,7 +299,7 @@ async function runnerRoute(
   if (kind === "claim") {
     const claimed = await runnerClaim(sender.store, chat, message, now);
     if (claimed.ok) {
-      await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+      await chatChanged(env, chat);
       await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: "delivering" } }));
     }
     return claimed.ok ? Response.json({ ...claimed, app: sender.app, login: sender.login, repo: sender.config.repo, role: sender.role })
@@ -310,7 +313,7 @@ async function runnerRoute(
     const detail = typeof body?.detail === "string" ? body.detail.slice(0, 300) : null;
     const status = await runnerResult(sender.store, chat, message, delivered, detail);
     if (status === 200) {
-      await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+      await chatChanged(env, chat);
       const state = delivered ? "delivered" : "failed";
       await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: state } }));
     }
@@ -324,7 +327,7 @@ async function runnerRoute(
   const before = await chatSide(sender.store, chat);
   const status = await runnerAgent(sender.store, chat, agent);
   if (status === 200) {
-    await chatChanged(env.CHAT_ROOMS, { app: sender.app, login: sender.login, chat });
+    await chatChanged(env, chat);
     const push = before ? agentPush(sender.app, chat, before.title, before.agent, agent) : null;
     if (push) {
       await later(pushTo(env, sender, push));
@@ -402,13 +405,10 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
       headers: { "Content-Type": found.mediaType, "Cache-Control": "private, max-age=86400, immutable" },
     }) : notFound();
   }
-  const live = LIVE_PATH.exec(pathname);
-  if (live && request.method === "GET") {
-    const sender = await tokenSender(request, env, apps);
-    if (!sender) {
-      return Response.json({ error: "Sign in again." }, { status: 401 });
-    }
-    return guarded(() => liveRoute(live[1], request, env, sender.app, sender.login));
+  if (pathname === "/v2/acp") {
+    return env.LIVE_ROOMS && env.ACP_SECRET
+      ? handleAcp(request, { adapter: liveAdapter(liveDeps(env)), rooms: liveRooms(env.LIVE_ROOMS), secret: env.ACP_SECRET })
+      : notFound();
   }
   const direct = DIRECT_FEEDBACK_PATH.exec(pathname);
   const devices = DEVICES_PATH.exec(pathname);
@@ -440,16 +440,29 @@ async function pushTo(env: FeatureKitEnv, sender: { app: string; login: string; 
   }
 }
 
-/** The app's live socket for one of its sender's agent chats, handed to the chat's room. */
-async function liveRoute(chat: string, request: Request, env: FeatureKitEnv, app: string, login: string): Promise<Response> {
-  if (!env.CHAT_ROOMS || !isFeedbackId(chat)
-    || !(await feedbackChat(senderStore(env.DB, env.FEEDBACK, app, login), chat, Date.now()))) {
-    return notFound();
+function liveRooms(namespace: DurableObjectNamespace): LiveRooms {
+  return namespace as unknown as LiveRooms;
+}
+
+/** Tells the chat's live room it changed. A failure is logged by the package, never answered. */
+async function chatChanged(env: FeatureKitEnv, chat: string): Promise<void> {
+  if (env.LIVE_ROOMS) {
+    await notifyChat(liveRooms(env.LIVE_ROOMS), chat);
   }
-  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
-    return new Response("a WebSocket upgrade, please\n", { status: 426 });
-  }
-  return connectRoom(env.CHAT_ROOMS, { app, login, chat }, request);
+}
+
+/** What live.ts needs of the Worker: D1, R2, who a token names, and the runner's wake. */
+function liveDeps(env: FeatureKitEnv) {
+  return {
+    db: env.DB,
+    bucket: env.FEEDBACK,
+    verify: async (request: Request): Promise<LiveWho | null> => {
+      const sender = await tokenSender(request, env, parseApps(env.APPS));
+      return sender && roleOf(sender.config, sender.login) !== "issue" && roleOf(sender.config, sender.login) !== null
+        ? { app: sender.app, login: sender.login.toLowerCase(), name: sender.name } : null;
+    },
+    sent: async () => wakeRunner(env.RUNNER_WAKE),
+  };
 }
 
 async function guarded(route: () => Promise<Response>): Promise<Response> {

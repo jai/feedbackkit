@@ -104,3 +104,9 @@ From `worker/`: copy `../deploy/wrangler.template.jsonc` to `../deploy/wrangler.
 with `wrangler secret put`: `CALLER_TOKEN` (the backends'), `RUNNER_TOKEN` (the runner's), `ISSUES_TOKEN` (opens
 issues) and `ADMIN_TOKEN` (the migration). Fill `__D1_DATABASE_ID__` with the `feedbackkit` database's id and apply
 its migrations first: `npx wrangler d1 migrations apply feedbackkit --remote --config ../deploy/wrangler.jsonc`. A new app is one entry in `APPS` and a deploy.
+
+The live protocol's server is `@jai/agentchat-live`, vendored as `worker/vendor/jai-agentchat-live-bb26cdc.tgz`: built
+from [jai/agentchatkit](https://github.com/jai/agentchatkit) `server/` at bb26cdc (`npm ci && npm run build && npm
+pack`), because no release carries it yet. When one does, depend on its tarball URL instead and delete the vendored
+file. Its conformance suite runs in `worker/test/acp.test.ts`. Deploying it needs the secret `ACP_SECRET` (signs ACP
+connection ids; any long random string) and D1 migration 0004.

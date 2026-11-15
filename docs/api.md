@@ -90,15 +90,24 @@ answering `{token, expiresAt}`). It is a JWT, HS256, signed with the app's key, 
 
 ### Live
 
-While a chat is open, the app can hold `GET /v2/feedback/{id}/live`, a WebSocket upgrade with the same token. The
-Worker sends the chat as it stands on connect, then again on every change: a message kept, claimed, delivered or
-failed, or the agent's side (its words, working, activity, thread).
+A chat the app has open follows live through `POST/GET/DELETE /v2/acp`: our ACP v2 profile, written once for every
+app ([agentchatkit docs/live-protocol.md](https://github.com/jai/agentchatkit/blob/main/docs/live-protocol.md)), with
+the same token. FeedbackKit's side is [worker/src/live.ts](../worker/src/live.ts) over the package
+`@jai/agentchat-live`.
 
-- Each frame is text: `{"type": "chat", "chat": <the chat, as GET /v2/feedback/{id} answers it>}`.
-- The app may send the text `ping`; it gets `pong`.
-- Not the sender's chat: `404`. No upgrade: `426`. A token that runs out does not end an open socket; a new socket
-  needs a current one.
-- Closed chats get no frames: pushes ([Pushes](#pushes)) tell the app what changed.
+- A chat is a session: `sessionId` is its id. The app `session/resume`s it; it never calls `session/new`. New chats
+  and the list stay on `POST /v2/feedback` and `GET /v2/feedback`.
+- The person's messages are `user_message`s with `_meta.agentchatkit` `{at, sender, status, clientRef?, detail}`:
+  `pending` (one tick), `delivering`, `delivered` (two ticks), `failed`, `removed`. Screenshots are `resource_link`s to
+  `/v2/feedback/{id}/images/{message}/{n}`. The agent's words are `agent_message`s. The chat's state is a
+  `state_update`, `running` or `idle`, with `activity`, `problem` and `extra` `{builderOnline, thread}`.
+- The cursor is the chat's change counter. A cursor FeedbackKit can't resume from answers `-32602`; resume from start.
+- Writes: `session/prompt` sends a message at once (a repeat `clientRef` answers the first). `_agentchatkit/edit`
+  changes a message's words and `_agentchatkit/remove` takes it back, while it is still `pending`; after the runner
+  claims it, `-32009`. FeedbackKit never queues, so `force` changes nothing, and it asks no questions.
+- Issue chats (everyone else's, a public GitHub issue) are not served live: `404`.
+- The room reads again every 15 s while a chat is followed, so a delivery stuck for 15 minutes and the builder going
+  offline reach the app with no write.
 
 ## Pushes
 

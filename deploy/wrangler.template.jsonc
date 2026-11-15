@@ -23,15 +23,17 @@
     { "binding": "DB", "database_name": "feedbackkit", "database_id": "__D1_DATABASE_ID__", "migrations_dir": "../worker/migrations" }
   ],
   // The runner's long poll (worker/src/runner-wake.ts): a message sent wakes the runner's held /runner/wait.
-  // Live mode (worker/src/chat-room.ts): one room per open chat, holding the app's WebSocket.
+  // Live mode (worker/src/live.ts, the package @jai/agentchat-live): one room per followed chat, behind /v2/acp.
+  // ChatRoom was the WebSocket room before it (v2); v3 deletes it.
   "durable_objects": {
     "bindings": [
       { "name": "RUNNER_WAKE", "class_name": "RunnerWake" },
-      { "name": "CHAT_ROOMS", "class_name": "ChatRoom" }
+      { "name": "LIVE_ROOMS", "class_name": "FeedbackLiveRoom" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RunnerWake"] },
-    { "tag": "v2", "new_sqlite_classes": ["ChatRoom"] }
+    { "tag": "v2", "new_sqlite_classes": ["ChatRoom"] },
+    { "tag": "v3", "new_sqlite_classes": ["FeedbackLiveRoom"], "deleted_classes": ["ChatRoom"] }
   ]
 }

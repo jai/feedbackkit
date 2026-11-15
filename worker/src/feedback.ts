@@ -48,7 +48,7 @@ export interface FeedbackInput {
   images: FeedbackImage[];
 }
 
-export type MessageStatus = "pending" | "delivering" | "delivered" | "failed";
+export type MessageStatus = "pending" | "delivering" | "delivered" | "failed" | "removed";
 
 /** One of Jai's messages, as kept. Only the app's POST writes a new one; only the runner's claim and result change it. */
 export interface StoredMessage {
@@ -301,7 +301,8 @@ export function listServedLog(status: BuilderStatus, threadCount: number, now: n
 
 async function messagesOf(store: FeedbackStore, chat: string): Promise<StoredMessage[]> {
   const { results } = await store.db.prepare(
-    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages WHERE chat = ? ORDER BY at, id",
+    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages"
+      + " WHERE chat = ? AND status IS NOT 'removed' ORDER BY at, id",
   ).bind(chat).all<MessageRow>();
   return results.map(stored);
 }
@@ -367,6 +368,13 @@ export function chatView(
 export async function addFeedback(
   store: FeedbackStore, chat: string | null, input: FeedbackInput, now: number,
 ): Promise<string | null> {
+  return (await addMessage(store, chat, input, now))?.chat ?? null;
+}
+
+/** As `addFeedback`, answering the message's id too; `clientRef` is the app's own id for it (the live protocol's). */
+export async function addMessage(
+  store: FeedbackStore, chat: string | null, input: FeedbackInput, now: number, clientRef: string | null = null,
+): Promise<{ chat: string; message: string } | null> {
   if (chat && !(await chatRow(store, chat))) {
     return null;
   }
@@ -384,14 +392,35 @@ export async function addFeedback(
   }
   writes.push(bump(store.db, id));
   writes.push(store.db.prepare(
-    "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq)"
-      + " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?))",
-  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id));
+    "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq, client_ref)"
+      + " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?), ?)",
+  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id, clientRef));
   input.images.forEach((image, index) => writes.push(store.db.prepare(
     "INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)",
   ).bind(message, index, keys[index], image.media_type)));
   await store.db.batch(writes);
-  return id;
+  return { chat: id, message };
+}
+
+/**
+ * The person's change to a message the runner has not claimed: new words, or taking it back (`removed`). False when it
+ * is not theirs, not there, or no longer `pending`.
+ */
+export async function changePending(
+  store: FeedbackStore, chat: string, message: string, change: { text: string } | "remove",
+): Promise<boolean> {
+  if (!MESSAGE_ID.test(message) || !(await chatRow(store, chat))) {
+    return false;
+  }
+  const [, changed] = await store.db.batch([
+    bump(store.db, chat, { message, status: "pending" }),
+    change === "remove"
+      ? store.db.prepare("UPDATE messages SET status = 'removed', seq = (SELECT seq FROM chats WHERE id = ?)"
+        + " WHERE id = ? AND chat = ? AND status = 'pending'").bind(chat, message, chat)
+      : store.db.prepare("UPDATE messages SET text = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
+        + " WHERE id = ? AND chat = ? AND status = 'pending'").bind(change.text, chat, message, chat),
+  ]);
+  return changed.meta.changes === 1;
 }
 
 // --- The runner ------------------------------------------------------------------------------------------------------
