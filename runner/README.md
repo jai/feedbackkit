@@ -96,13 +96,15 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   checks Orca's existing queue on later polls; only after Orca takes it does FeedbackKit receive `delivered`.
   A queued message, an unavailable queue check or a failed result post does not stop the runner polling for later
   feedback. Older queued journal entries recover their target from the chat's thread without resending the words.
-- What the chat shipped ([docs/api.md](../docs/api.md#shipped)): `feedbackkit_runner/shipped_probe.py`, sent over SSH
-  to the chat's builder and run there by its `python3`, with `gh` from `/opt/homebrew/bin`. The commits are those the
-  worktree's HEAD reflog made (commits, amends, a rebase's picks; never a rebase's start, which is others' work) that
-  are on origin/main; the runner keeps their SHAs (`shipped_shas`) and the branch, so after the worktree is tidied it
-  goes on asking about them in the app's project clone. Every 5 minutes while the worktree lives, then hourly until
-  settled (each commit released with its checks done, no pull request open). A failed look keeps the last answer and
-  logs `FEEDBACK_SHIPPED_FAILED`. Sent as the side's `shipped`.
+- What the chat shipped ([docs/api.md](../docs/api.md#shipped)), in two halves. The commits: `feedbackkit_runner/shipped_probe.py`,
+  sent over SSH to the chat's builder and run there by its `python3`, git only: those the worktree's HEAD reflog made
+  (commits, amends, a rebase's picks; never a rebase's start, which is others' work) that are on origin/main, each
+  with the tags that contain it. GitHub's side, from the runner's own Mac with its `gh` (`feedbackkit_runner/github.py`;
+  a builder's `gh` may keep its login in a keychain an SSH session cannot read): each commit's first release and checks,
+  and the pull requests from the worktree's branch. The runner keeps the commits' SHAs (`shipped_shas`) and the branch,
+  so after the worktree is tidied it goes on asking about them in the app's project clone. Every 5 minutes while the
+  worktree lives, then hourly until settled (each commit released with its checks done, no pull request open). A failed
+  look keeps the last answer and logs `FEEDBACK_SHIPPED_FAILED`. Sent as the side's `shipped`.
 - Builder online: the runner polled in the last 90 s and `orca worktree ps` answered for at least one builder.
   When none did, the poll carries why (`detail`).
 - Clean-up, by the runner (the agent never removes its own worktree: the runner reads its transcript, and a later

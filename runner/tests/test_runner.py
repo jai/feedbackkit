@@ -37,6 +37,7 @@ from feedbackkit_runner.runner import (
     in_clone,
     migrate,
 )
+from feedbackkit_runner.github import GitHub
 from feedbackkit_runner.util import JsonObject, JsonResponse
 
 
@@ -148,8 +149,8 @@ class FakeCube(Cube):
         self.gone = False
         self.folders: list[str] = []
         self.checked: list[str] = []
-        self.found: JsonObject = {"commits": [], "prs": [], "shas": [], "branch": None}
-        self.probes: list[tuple[str, str, str, list[str], str | None]] = []
+        self.found: JsonObject = {"commits": [], "branch": None}
+        self.probes: list[tuple[str, str, list[str], str | None]] = []
         self.probe_fails = False
 
     def clone(self, path: str, repo: str) -> None:
@@ -174,11 +175,29 @@ class FakeCube(Cube):
     def remove_folder(self, folder: str) -> None:
         self.removed.append(folder)
 
-    def shipped(self, worktree: str, project: str, repo: str, shas: list[str], branch: str | None) -> JsonObject:
-        self.probes.append((worktree, project, repo, shas, branch))
+    def shipped(self, worktree: str, project: str, shas: list[str], branch: str | None) -> JsonObject:
+        self.probes.append((worktree, project, shas, branch))
         if self.probe_fails:
-            raise RuntimeError("gh release: HTTP 502")
+            raise RuntimeError("git fetch: could not read from remote")
         return self.found
+
+
+class FakeGitHub(GitHub):
+    def __init__(self) -> None:
+        # Not GitHub.__init__: no gh is run.
+        self.released: JsonObject | None = None
+        self.asked: list[tuple[str, list[str], str | None]] = []
+
+    def shipped(self, repo: str, commits: list[JsonObject], branch: str | None) -> JsonObject:
+        self.asked.append((repo, [str(one["sha"]) for one in commits], branch))
+        return {
+            "commits": [
+                {"sha": one["sha"], "title": one["title"], "at": one["at"], "url": f"https://github.com/{repo}/commit/{one['sha']}",
+                 "ci": "success", "release": self.released}
+                for one in commits
+            ],
+            "prs": [],
+        }
 
 
 class FakeReader:
@@ -213,6 +232,7 @@ class RunnerCase(unittest.TestCase):
         self.queue_outcome: Outcome = {"status": "queued", "how": "orca_send", "detail": None}
         self.now = 1_000.0
         self.kicks = 0
+        self.github = FakeGitHub()
 
     def runner(self) -> Runner:
         def deliver(_machine: Machine, job: DeliveryJob) -> Outcome:
@@ -240,6 +260,7 @@ class RunnerCase(unittest.TestCase):
             clock=lambda: self.now,
             kick=kick,
             check_queue=check_queue,
+            github=self.github,
         )
 
     def reply(self, message: str = "m_2") -> None:
@@ -621,18 +642,16 @@ class RunnerTests(RunnerCase):
         self.assertFalse(any("FEEDBACK_WORKTREE" in line for line in self.runner().tick()), "not asked again")
 
 
-SHIPPED_COMMIT: JsonObject = {
-    "sha": "a" * 40,
-    "title": "fix: bigger clock",
-    "at": "2026-11-15T10:00:00+07:00",
-    "url": "https://github.com/jai/agent-pager/commit/" + "a" * 40,
-    "ci": "success",
-    "release": None,
+LANDED: JsonObject = {"sha": "a" * 40, "title": "fix: bigger clock", "at": "2026-11-15T10:00:00+07:00", "tags": []}
+RELEASE: JsonObject = {
+    "tag": "mac-557", "name": "Build 557", "url": "https://github.com/jai/agent-pager/releases/tag/mac-557",
+    "prerelease": False,
 }
 
 
 class ShippedTests(RunnerCase):
-    """What a chat shipped (shipped_probe.py): looked for on its builder, sent with the agent's side."""
+    """What a chat shipped: its commits from its builder (shipped_probe.py), GitHub's side from the runner's own gh,
+    sent with the agent's side."""
 
     def started(self) -> Runner:
         self.first_message()
@@ -641,39 +660,41 @@ class ShippedTests(RunnerCase):
         return runner
 
     def test_what_shipped_goes_with_the_side_and_is_looked_for_every_5_minutes(self) -> None:
-        self.cube.found = {"commits": [SHIPPED_COMMIT], "prs": [], "shas": ["a" * 40], "branch": "fb-01234567"}
+        self.cube.found = {"commits": [LANDED], "branch": "fb-01234567"}
         runner = self.started()
-        self.assertEqual(self.api.sides[-1]["shipped"], {"commits": [SHIPPED_COMMIT], "prs": []})
-        self.assertEqual(self.cube.probes, [(WORKTREE, BASE, "jai/agent-pager", [], None)])
+        shipped = self.api.sides[-1]["shipped"]
+        self.assertEqual([one["sha"] for one in shipped["commits"]], ["a" * 40])
+        self.assertEqual(shipped["prs"], [])
+        self.assertEqual(self.cube.probes, [(WORKTREE, BASE, [], None)])
+        self.assertEqual(self.github.asked, [("jai/agent-pager", ["a" * 40], "fb-01234567")])
         runner.tick()
         self.assertEqual(len(self.cube.probes), 1, "not again within 5 minutes")
         self.now += 301
         runner.tick()
-        self.assertEqual(self.cube.probes[-1], (WORKTREE, BASE, "jai/agent-pager", ["a" * 40], "fb-01234567"),
-                         "what was found before is asked about again, after the worktree goes too")
+        self.assertEqual(self.cube.probes[-1], (WORKTREE, BASE, ["a" * 40], "fb-01234567"),
+                         "what was found before is asked about again, so it is not lost once the worktree goes")
 
     def test_a_failed_look_keeps_what_was_found_and_says_why(self) -> None:
-        self.cube.found = {"commits": [SHIPPED_COMMIT], "prs": [], "shas": ["a" * 40], "branch": None}
+        self.cube.found = {"commits": [LANDED], "branch": None}
         runner = self.started()
         self.cube.probe_fails = True
         self.now += 301
         lines = runner.tick()
-        self.assertTrue(any(line.startswith(f"FEEDBACK_SHIPPED_FAILED chat={CHAT} gh release") for line in lines))
-        self.assertEqual(self.api.sides[-1]["shipped"]["commits"], [SHIPPED_COMMIT])
+        self.assertTrue(any(line.startswith(f"FEEDBACK_SHIPPED_FAILED chat={CHAT} git fetch") for line in lines))
+        self.assertEqual([one["sha"] for one in self.api.sides[-1]["shipped"]["commits"]], ["a" * 40])
 
     def test_a_tidied_chat_is_looked_at_hourly_until_its_commit_is_released(self) -> None:
-        self.cube.found = {"commits": [SHIPPED_COMMIT], "prs": [], "shas": ["a" * 40], "branch": None}
+        self.cube.found = {"commits": [LANDED], "branch": None}
         runner = self.started()
         runner.state["chats"][CHAT]["removed"] = True
         self.now += 301
         runner.tick()
         self.assertEqual(len(self.cube.probes), 1, "a tidied chat waits an hour")
         self.now += 3600
-        released = {**SHIPPED_COMMIT, "release": {"tag": "mac-557", "name": "Build 557", "url": "https://github.com/jai/agent-pager/releases/tag/mac-557", "prerelease": False}}
-        self.cube.found = {"commits": [released], "prs": [], "shas": ["a" * 40], "branch": None}
+        self.github.released = RELEASE
         runner.tick()
         self.assertEqual(len(self.cube.probes), 2)
-        self.assertEqual(self.api.sides[-1]["shipped"]["commits"], [released])
+        self.assertEqual(self.api.sides[-1]["shipped"]["commits"][0]["release"], RELEASE)
         self.assertIs(self.api.sides[-1]["isWorking"], False)
         self.now += 7200
         runner.tick()

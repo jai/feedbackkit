@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, Literal, NamedTuple, Protocol, TypedDict
 
 from .brief import app_name, fields, first_prompt, later_prefix
+from .github import GitHub
 from .util import IMAGE_EXTENSIONS, HttpJsonError, JsonObject, image_note, json_object, post_json, write_private_json
 
 STATE_DIR = Path.home() / "Library" / "Application Support" / "feedbackkit-runner"
@@ -500,13 +501,13 @@ class Cube:
             folder,
         )
 
-    def shipped(self, worktree: str, project: str, repo: str, shas: list[str], branch: str | None) -> JsonObject:
-        """What the chat shipped, found on this builder by shipped_probe.py; RuntimeError when git or gh failed."""
+    def shipped(self, worktree: str, project: str, shas: list[str], branch: str | None) -> JsonObject:
+        """The commits the chat landed and its branch, found on this builder by shipped_probe.py (git only);
+        RuntimeError when git failed."""
         answer = self.sh(
             'PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; exec python3 - "$@"',
             worktree,
             project,
-            repo,
             ",".join(shas),
             branch or "",
             stdin=PROBE.read_bytes(),
@@ -604,6 +605,7 @@ class Runner:
         clock: Callable[[], float] = time.time,
         kick: Callable[[], str] = lambda: "skipped",
         check_queue: CheckQueue | None = None,
+        github: GitHub | None = None,
     ) -> None:
         """`deliver` and `check_queue` are Agent Pager's reply_delivery.deliver_on_machine, `kick` its
         scan_kick.kickstart_scan (agent_pager.py); a test's stand-ins otherwise."""
@@ -616,6 +618,7 @@ class Runner:
         self.clock = clock
         self.kick = kick
         self.check_queue = check_queue or deliver
+        self.github = github or GitHub()
         self.state: RunnerState
         try:
             self.state = json.loads(state_path.read_text("utf-8"))  # the runner's own file, as save() wrote it
@@ -1020,20 +1023,16 @@ class Runner:
         known["shipped_at"] = self.clock()
         project = known["clone"] if known["layout"] == "clone" else project_path(sender["app"])
         try:
-            found = builder.cube.shipped(
-                known["clone"], project, sender["repo"], known.get("shipped_shas", []), known.get("branch")
-            )
+            found = builder.cube.shipped(known["clone"], project, known.get("shipped_shas", []), known.get("branch"))
+            listed = found.get("commits")
+            commits = [one for one in listed if isinstance(one, dict) and one.get("sha")] if isinstance(listed, list) else []
+            branch = found.get("branch") if isinstance(found.get("branch"), str) else known.get("branch")
+            known["shipped"] = self.github.shipped(sender["repo"], commits, branch or None)
         except RuntimeError as failure:
             return f"FEEDBACK_SHIPPED_FAILED chat={chat} {str(failure)[:200]}"
-        commits, prs = found.get("commits"), found.get("prs")
-        known["shipped"] = {
-            "commits": commits if isinstance(commits, list) else [],
-            "prs": prs if isinstance(prs, list) else [],
-        }
-        shas = found.get("shas")
-        known["shipped_shas"] = [str(sha) for sha in shas] if isinstance(shas, list) else []
-        if isinstance(found.get("branch"), str) and found["branch"]:
-            known["branch"] = found["branch"]
+        known["shipped_shas"] = [str(one["sha"]) for one in commits]
+        if branch:
+            known["branch"] = branch
         return None
 
     def tidy(self, builder: Builder, chat: str, known: ChatState) -> str:
