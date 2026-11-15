@@ -13,6 +13,7 @@ import {
 } from "./feedback-issues.ts";
 import { migrate } from "./migrate.ts";
 import { runnerWake, wakeRunner } from "./runner-wake.ts";
+import { verifyToken } from "./token.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
 
 export { RunnerWake } from "./runner-wake.ts";
@@ -32,6 +33,8 @@ export interface FeatureKitEnv {
   PUBLIC_URL?: string;
   /** Opens the public issues: a token that can open issues on each app's repo. */
   ISSUES_TOKEN?: string;
+  /** Each app's key for FeedbackKit tokens (token.ts): `{"<app>": "<key>"}`. Without one, an app has no /v2. */
+  APP_KEYS?: string;
   /** Runs the move from R2 to D1 (`POST /admin/migrate`, migrate.ts); without it that route is `404`. */
   ADMIN_TOKEN?: string;
   /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
@@ -99,6 +102,10 @@ export async function takeIssue(store: FeedbackStore, now: number): Promise<bool
 const IMAGES = "images/";
 const IMAGE_PATH = /^\/images\/([^/]+)$/;
 const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
+/** The app's own routes on FeedbackKit's Worker, with a FeedbackKit token (docs/api.md#direct). */
+const DIRECT_FEEDBACK_PATH = /^\/v2\/feedback(?:\/([^/]+))?$/;
+const DEVICES_PATH = /^\/v2\/devices(?:\/([0-9a-f]{64,200}))?$/;
+const APNS_TOKEN = /^[0-9a-f]{64,200}$/;
 const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait)$/;
 
 function hasBearer(request: Request, token: string | undefined): boolean {
@@ -118,6 +125,7 @@ const notFound = () => Response.json({ error: "Not found." }, { status: 404 });
 /** The sender's chats: an agent's (owner, builder) or issues, by their role in the app. */
 async function feedbackRoute(
   id: string | undefined, request: Request, env: FeatureKitEnv, app: string, config: AppConfig, login: string,
+  name: string | null,
 ): Promise<Response> {
   if (id !== undefined && !isFeedbackId(id)) {
     return notFound();
@@ -126,7 +134,7 @@ async function feedbackRoute(
   if (!role) {
     return Response.json({ error: "Feedback is not open to you in this app." }, { status: 403 });
   }
-  const store = senderStore(env.DB, env.FEEDBACK, app, login, senderName(request.headers.get("X-FeedbackKit-Name")));
+  const store = senderStore(env.DB, env.FEEDBACK, app, login, name);
   const now = Date.now();
   if (role !== "issue") {
     if (request.method !== "POST") {
@@ -330,14 +338,74 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
     if (!config || !LOGIN.test(login)) {
       return Response.json({ error: "Unknown app or sender." }, { status: 400 });
     }
-    try {
-      return await feedbackRoute(feedback[1], request, env, app, config, login);
-    } catch (error) {
-      console.error("feedback failed", error);
-      return Response.json({ error: "Your feedback couldn't be kept. Try again." }, { status: 502 });
+    return guarded(() => feedbackRoute(feedback[1], request, env, app, config, login,
+      senderName(request.headers.get("X-FeedbackKit-Name"))));
+  }
+  const direct = DIRECT_FEEDBACK_PATH.exec(pathname);
+  const devices = DEVICES_PATH.exec(pathname);
+  if (direct || devices) {
+    const sender = await tokenSender(request, env, apps);
+    if (!sender) {
+      return Response.json({ error: "Sign in again." }, { status: 401 });
     }
+    if (devices) {
+      return guarded(() => devicesRoute(devices[1], request, env, sender.app, sender.login));
+    }
+    return guarded(() => feedbackRoute(direct![1], request, env, sender.app, sender.config, sender.login, sender.name));
   }
   return new Response("not found\n", { status: 404 });
+}
+
+async function guarded(route: () => Promise<Response>): Promise<Response> {
+  try {
+    return await route();
+  } catch (error) {
+    console.error("feedback failed", error);
+    return Response.json({ error: "Your feedback couldn't be kept. Try again." }, { status: 502 });
+  }
+}
+
+/** The sender a request's FeedbackKit token names, when its app's key signed it, it is current and the app is known. */
+async function tokenSender(request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>) {
+  const bearer = /^Bearer (\S+)$/.exec(request.headers.get("Authorization") ?? "")?.[1];
+  let keys: Record<string, string> = {};
+  try {
+    keys = JSON.parse(env.APP_KEYS ?? "{}") as Record<string, string>;
+  } catch {
+    console.error("APP_KEYS is not JSON");
+  }
+  const claims = bearer ? await verifyToken(bearer, keys, Date.now()) : null;
+  const config = claims ? apps[claims.app] : undefined;
+  return claims && config ? { ...claims, config } : null;
+}
+
+/**
+ * The sender's devices, for pushes: `POST /v2/devices {token, environment}` keeps one (a token moves to whoever
+ * registers it last), `DELETE /v2/devices/{token}` forgets it.
+ */
+async function devicesRoute(
+  token: string | undefined, request: Request, env: FeatureKitEnv, app: string, login: string,
+): Promise<Response> {
+  const lower = login.toLowerCase();
+  if (request.method === "DELETE" && token) {
+    await env.DB.prepare("DELETE FROM devices WHERE token = ? AND app = ? AND login = ?").bind(token, app, lower).run();
+    return Response.json({ ok: true });
+  }
+  if (request.method !== "POST" || token) {
+    return notFound();
+  }
+  const body = (await bodyOf(request)) as { token?: unknown; environment?: unknown } | null;
+  const device = typeof body?.token === "string" ? body.token.toLowerCase() : "";
+  const environment = body?.environment === "sandbox" ? "sandbox" : body?.environment === "production" ? "production" : null;
+  if (!APNS_TOKEN.test(device) || !environment) {
+    return Response.json({ error: "token (hex) and environment (production or sandbox) are required" }, { status: 400 });
+  }
+  await env.DB.prepare(
+    "INSERT INTO devices (token, app, login, environment, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (token)"
+      + " DO UPDATE SET app = excluded.app, login = excluded.login, environment = excluded.environment,"
+      + " updated_at = excluded.updated_at",
+  ).bind(device, app, lower, environment, Date.now()).run();
+  return Response.json({ ok: true });
 }
 
 export default { fetch: serveFeatureKit };

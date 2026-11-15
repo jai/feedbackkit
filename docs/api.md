@@ -50,3 +50,39 @@ fills it ([runner/feedbackkit_runner/brief.py](../runner/feedbackkit_runner/brie
 - Everyone else's feedback never reaches a coding thread: it becomes a GitHub issue.
 - Each later message goes into the same thread as `{sender} via {app_name}: {text}`, and when it has screenshots,
   `[{sender} attached … Open each image file and look at it before you answer: {paths}]` after the words.
+
+## Direct
+
+The app can talk to FeedbackKit's Worker itself, with a FeedbackKit token, instead of through its backend. The routes
+and bodies are the ones above, under `/v2`:
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /v2/feedback` | | as `GET /feedback` |
+| `POST /v2/feedback` | `{text, build?, images?, client_ref?}` | as `POST /feedback` |
+| `GET /v2/feedback/{id}` | | as `GET /feedback/{id}` |
+| `POST /v2/feedback/{id}` | as above | as `POST /feedback/{id}` |
+| `POST /v2/devices` | `{token, environment: "production" \| "sandbox"}`: the device's APNs token, in hex | `{ok}`; `400` |
+| `DELETE /v2/devices/{token}` | | `{ok}` |
+
+- Every request carries `Authorization: Bearer <FeedbackKit token>`. None, or one that does not verify: `401`, and
+  the app asks its backend for a new one.
+- A message's answer is its first checkmark: FeedbackKit has it stored (`pending`). `delivered` is the second: it is
+  in the coding thread.
+- A device token belongs to whoever registered it last.
+
+### Tokens
+
+The app's backend issues the token for its signed-in user (one endpoint of its own, e.g. `POST /feedback/token`,
+answering `{token, expiresAt}`). It is a JWT, HS256, signed with the app's key, which FeedbackKit's Worker also holds
+(`APP_KEYS`, one key per app):
+
+| Claim | Value |
+|---|---|
+| `iss` | the app: its key in `APPS` (`agent-pager`, `prhub`, `trips`) |
+| `sub` | the sender's GitHub login |
+| `name` | optional: how the app names them ("Jai"); the agent is told this name |
+| `aud` | `feedbackkit` |
+| `iat`, `exp` | Unix seconds, at most 15 minutes apart |
+
+[worker/src/token.ts](../worker/src/token.ts) `issueToken` is the reference for a backend in TypeScript.
