@@ -20,7 +20,8 @@ actor TokenSource {
     }
 
     /// A token with more than a minute left, and FeedbackKit's `/v2` root it is for; a new one when it runs low.
-    func token() async throws -> (token: String, root: URL) {
+    func token(renew: Bool = false) async throws -> (token: String, root: URL) {
+        if renew { current = nil }
         if let current, current.until.timeIntervalSinceNow > 60 {
             return (current.token, current.root)
         }

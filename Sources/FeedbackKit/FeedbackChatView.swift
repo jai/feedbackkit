@@ -1,18 +1,22 @@
 import AgentChatKit
+import AgentChatLive
 import SwiftUI
 
 /// One conversation: what Jai said and what the agent did with it, with a box to say more. A new one is empty, with
 /// the box ready; its first message makes the thread, and the conversation goes on here.
 struct FeedbackChatView: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var model: FeedbackRequestsModel
     let route: FeedbackRoute
     let conversation: ((FeedbackConversation) -> AnyView?)?
+    var identifiers = FeedbackLiveIdentifiers()
     @FocusState private var isWriting: Bool
 
     private var box: String { route.box }
     private var thread: String? { model.thread(for: route) }
-    private var chat: FeedbackChat? { thread.flatMap { model.chats[$0] } }
+    private var chat: FeedbackChat? { model.chat(for: route) }
+    private var live: LiveChatModel? { model.live(for: route) }
     private var isNew: Bool { thread == nil && !model.isSending(box) }
     /// Legacy messages stay visible until delivered; the host also decides whether its thread is ready to draw.
     var hostedConversation: AnyView? {
@@ -38,7 +42,7 @@ struct FeedbackChatView: View {
         return sent + [FeedbackChat.Message(id: Self.pendingID, role: "you", text: pending.text, anchor: nil)]
     }
 
-    private static let pendingID = "pending"
+    private static let pendingID = "__feedbackkit_sending__"
 
     private func screenshots(_ message: FeedbackChat.Message) -> Int {
         message.id == Self.pendingID ? model.pending[box]?.screenshots ?? 0 : chat?.screenshots[message.id] ?? 0
@@ -46,6 +50,7 @@ struct FeedbackChatView: View {
 
     /// Whether Jai was reading the end of the chat when he last scrolled it: a new message then keeps him there.
     @State private var readsEnd = true
+    @State private var screenshotViewing = SentScreenshotViewing()
 
     var body: some View {
         let hosted = hostedConversation
@@ -59,33 +64,37 @@ struct FeedbackChatView: View {
             }
         }
         .background(theme.groundPage)
+        .presentsSentScreenshots(screenshotViewing, identifiers: identifiers.screenshots)
         .task(id: thread) {
             if thread == nil {
                 isWriting = true
             }
         }
         .task(id: FollowKey(
-            thread: thread, isLive: chat?.isWorking == true || model.isSending(box), isHosted: hosted != nil
+            thread: thread,
+            isLive: model.client.direct == nil && (chat?.isWorking == true || model.isSending(box)),
+            isHosted: hosted != nil, foreground: scenePhase == .active
         )) {
-            if hosted == nil {
-                await model.follow(route, mode: conversation == nil ? .whileWorking : .untilHandoff)
-            }
+            await model.follow(route, mode: conversation == nil ? .whileWorking : .untilHandoff,
+                               isForeground: scenePhase == .active, isHosted: hosted != nil)
         }
         .task { await model.seedScreenshot(in: box) }
     }
 
     private var feedbackConversation: some View {
         ChatView(
-            messages: messages.map {
-                ChatMessage(
-                    id: $0.id, role: $0.isJai ? .mine : .theirs,
-                    text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0)),
-                    hasExtras: $0.isJai && delivery(for: $0.id) != nil
-                )
-            },
-            sent: messages.count(where: \.isJai), readsEnd: $readsEnd, focus: $isWriting,
+            messages: displayedMessages,
+            sent: displayedMessages.count(where: { $0.role == .mine }), readsEnd: $readsEnd, focus: $isWriting,
             extras: { message in
-                if message.role == .mine, let state = delivery(for: message.id) {
+                if let live, let controls = model.controls(for: route),
+                   live.chat.message(message.id) != nil {
+                    LiveReplyStatus(controls: controls, messageID: message.id,
+                                    identifiers: identifiers.replies(message.id), retry: model.client.direct?.retry)
+                    if let direct = model.client.direct {
+                        LiveScreenshotStrip(live: live, messageID: message.id,
+                                            identifiers: identifiers.screenshots, load: direct.loadScreenshot)
+                    }
+                } else if message.role == .mine, let state = delivery(for: message.id) {
                     SentReplyStatus(state: state.replyState, text: state.statusText, about: message.text)
                 }
             },
@@ -99,17 +108,53 @@ struct FeedbackChatView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
-                        .padding(.horizontal, ChatSpace.lg)
+                        .padding(.horizontal, theme.spacing.lg)
                         .transition(.opacity)
                         .accessibilityIdentifier("feedback-new-hint")
                 }
             },
             footer: {
+                if let controls = model.controls(for: route) {
+                    LiveQuestionView(controls: controls, identifiers: identifiers.question)
+                }
+                if let live, live.phase == .reconnecting {
+                    Text("Reconnecting…").chatTextStyle(.meta).accessibilityIdentifier("feedback-reconnecting")
+                } else if let live, case .stopped = live.phase {
+                    Text("Live feedback is unavailable.").chatTextStyle(.meta)
+                        .accessibilityIdentifier("feedback-live-stopped")
+                }
                 status
                     .animation(ChatMotion.fold, value: chat?.isWorking)
             },
             composer: { composer }
         )
+    }
+
+    private var displayedMessages: [ChatMessage] {
+        if let live, live.chat.cursor != nil || live.chat.state != nil {
+            var rows = live.conversationMessages.map { row in
+                var row = row
+                if let message = live.chat.message(row.id) {
+                    row.hasExtras = message.kind == .user || !message.attachments.isEmpty
+                    if message.kind == .user, message.status != nil {
+                        row.ticks = nil // LiveReplyStatus owns the ticks, once.
+                        if message.ticks != nil { row.date = nil }
+                    }
+                }
+                return row
+            }
+            if let pending = model.pending[box],
+               !live.chat.messages.contains(where: { $0.clientRef == pending.clientRef }) {
+                rows.append(ChatMessage(id: Self.pendingID, role: .mine,
+                                        text: ScreenshotLine.bubbleText(pending.text, screenshots: pending.screenshots)))
+            }
+            return rows
+        }
+        return messages.map {
+            ChatMessage(id: $0.id, role: $0.isJai ? .mine : .theirs,
+                        text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0)),
+                        hasExtras: $0.isJai && delivery(for: $0.id) != nil)
+        }
     }
 
     private func delivery(for messageID: String) -> FeedbackMessageDelivery? {
@@ -121,28 +166,29 @@ struct FeedbackChatView: View {
         let thread: String?
         let isLive: Bool
         let isHosted: Bool
+        let foreground: Bool
     }
 
     @ViewBuilder private var status: some View {
         if showsWorking {
-            HStack(spacing: ChatSpace.sm) {
+            HStack(spacing: theme.spacing.sm) {
                 ProgressView().controlSize(.small)
                 Text(activity)
                     .font(theme.font(.caption))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, ChatSpace.md)
+            .padding(.horizontal, theme.spacing.md)
             .accessibilityIdentifier("feedback-working")
         } else if let problem = handoffProblem {
             Text(problem)
                 .font(theme.font(.footnote))
                 .foregroundStyle(theme.toneBad)
-                .padding(.horizontal, ChatSpace.md)
+                .padding(.horizontal, theme.spacing.md)
         } else if let cents = chat?.costCents, !messages.isEmpty {
             Text("\((Double(cents) / 100).formatted(.currency(code: "USD"))) so far, of $10")
                 .font(theme.font(.caption))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, ChatSpace.md)
+                .padding(.horizontal, theme.spacing.md)
         } else {
             Color.clear.frame(height: 0)
         }
@@ -173,7 +219,10 @@ struct FeedbackChatView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: ChatSpace.xs) {
+        VStack(alignment: .leading, spacing: theme.spacing.xs) {
+            if let controls = model.controls(for: route) {
+                LiveQueuedReplies(controls: controls, draft: model.binding(for: box), identifiers: identifiers.queue)
+            }
             if let error = model.error {
                 Text(error)
                     .font(theme.font(.footnote))

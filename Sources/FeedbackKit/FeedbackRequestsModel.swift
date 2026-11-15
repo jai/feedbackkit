@@ -1,12 +1,14 @@
 import Foundation
 import Observation
 import AgentChatKit
+import AgentChatLive
 import SwiftUI
 
 /// Words on their way, shown as sent until the chat has them.
 struct PendingMessage: Equatable, Sendable {
     var text: String
     var screenshots: Int
+    var clientRef: String? = nil
 }
 
 /// A conversation open on the screen: one started here and not sent yet (or just sent), or one in the list. A new one
@@ -59,7 +61,23 @@ public final class FeedbackRequestsModel {
     private(set) var sending: Set<String> = []
     /// The boxes the sample screenshot went into once.
     @ObservationIgnored private var seeded: Set<String> = []
-    private let client: FeedbackClient
+    let client: FeedbackClient
+    /// Cached state, not a second stream-fed transcript. REST chats are bootstrap/legacy snapshots only.
+    private(set) var liveChats: [String: LiveChatModel] = [:]
+    private(set) var liveControls: [String: LiveChatControls] = [:]
+    @ObservationIgnored private var followers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored private var bootstrapped: Set<String> = []
+    @ObservationIgnored private var attempted: [String: FeedbackMessage] = [:]
+
+    func live(for route: FeedbackRoute) -> LiveChatModel? { thread(for: route).flatMap { liveChats[$0] } }
+    func controls(for route: FeedbackRoute) -> LiveChatControls? { thread(for: route).flatMap { liveControls[$0] } }
+
+    /// A fresh projection on read, never saved back into `chats` by the stream.
+    func chat(for route: FeedbackRoute) -> FeedbackChat? {
+        guard let id = thread(for: route) else { return nil }
+        guard let live = liveChats[id], live.chat.cursor != nil || live.chat.state != nil else { return chats[id] }
+        return FeedbackChat(live: live.chat, id: id, bootstrap: chats[id])
+    }
 
     public init(client: FeedbackClient) {
         self.client = client
@@ -130,7 +148,7 @@ public final class FeedbackRequestsModel {
             list = try await client.list()
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = client.direct == nil ? error.localizedDescription : "Could not load feedback. Try again."
         }
     }
 
@@ -161,16 +179,24 @@ public final class FeedbackRequestsModel {
             pending[box] = nil
         }
         do {
+            let images = screenshots.map { MessageImage(jpeg: $0.jpeg) }
+            let previous = attempted[box]
             let message = FeedbackMessage(
-                text: text, build: build, images: screenshots.map { MessageImage(jpeg: $0.jpeg) },
-                client_ref: UUID().uuidString
+                text: text, build: previous?.build ?? build, images: images,
+                client_ref: previous.flatMap { $0.text == text && $0.images == images ? $0.client_ref : nil }
+                    ?? UUID().uuidString
             )
+            attempted[box] = message
+            pending[box]?.clientRef = message.client_ref
             if let samples = client.samples {
                 try await sendSample(message, thread: thread, route: route, answer: samples.answer)
+                attempted[box] = nil
                 return
             }
             let chat = try await client.send(message, to: thread)
-            chats[chat.id] = chat
+            // Once ACP has a snapshot, REST writes must not replace the visible transcript.
+            if liveChats[chat.id]?.chat.cursor == nil { chats[chat.id] = chat }
+            attempted[box] = nil
             if case .new(let id) = route, thread == nil {
                 started[id] = chat.id
                 await refresh()
@@ -178,7 +204,7 @@ public final class FeedbackRequestsModel {
         } catch {
             drafts[box] = text
             attachments.restore(screenshots)
-            self.error = error.localizedDescription
+            self.error = client.direct == nil ? error.localizedDescription : "Could not send feedback. Try again."
         }
     }
 
@@ -214,11 +240,19 @@ public final class FeedbackRequestsModel {
         }
     }
 
-    /// While a chat shows: every few seconds while the agent works or a message is on its way, and once otherwise.
-    func follow(_ route: FeedbackRoute, mode: FeedbackFollowMode = .whileWorking) async {
+    /// Direct/v2 follows ACP while visible, including idle; legacy connections keep their original read behavior.
+    func follow(
+        _ route: FeedbackRoute, mode: FeedbackFollowMode = .whileWorking,
+        isForeground: Bool = true, isHosted: Bool = false
+    ) async {
         guard let thread = thread(for: route) else {
             return
         }
+        if let direct = client.direct {
+            await followLive(thread, configuration: direct, active: isForeground && !isHosted)
+            return
+        }
+        guard isForeground, !isHosted else { return }
         if let samples = client.samples {
             if chats[thread] == nil {
                 chats[thread] = samples.chat(thread)
@@ -237,6 +271,43 @@ public final class FeedbackRequestsModel {
             }
             try? await Task.sleep(for: Self.pollInterval)
         }
+    }
+
+    private func followLive(_ thread: String, configuration: FeedbackDirect, active: Bool) async {
+        let previous = followers[thread]?.task
+        previous?.cancel()
+        guard active else { return }
+        guard configuration.baseURL.scheme?.lowercased() == "https" else {
+            error = "Direct feedback requires an HTTPS Worker root."
+            return
+        }
+        let id = UUID()
+        let live: LiveChatModel
+        if let cached = liveChats[thread] { live = cached }
+        else {
+            live = configuration.makeLive(thread)
+            liveChats[thread] = live
+            liveControls[thread] = LiveChatControls(live: live)
+        }
+        // Follow inline through completion, rather than awaiting a reader inside a cancellation handler:
+        // that awaited-reader pattern aborts on the macOS 26 runtime (AgentChatKit a834e3a).
+        let (completion, finished) = AsyncStream<Void>.makeStream()
+        let task = Task { @MainActor in
+            defer { finished.finish() }
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            // One metadata bootstrap; failures do not turn into a REST refresh loop.
+            if self.chats[thread] == nil, self.bootstrapped.insert(thread).inserted {
+                if let snapshot = try? await self.client.chat(thread) { self.chats[thread] = snapshot }
+            }
+            guard !Task.isCancelled else { return }
+            await live.follow()
+        }
+        finished.onTermination = { _ in task.cancel() }
+        followers[thread] = (id, task)
+        for await _ in completion {}
+        await task.value
+        if followers[thread]?.id == id { followers[thread] = nil }
     }
 
     /// `FeedbackSamples.screenshot`: a box starts with it in its tray, once.

@@ -12,6 +12,7 @@ public struct FeedbackRequestsView: View {
     @Environment(\.chatTheme) private var theme
     @State private var model: FeedbackRequestsModel
     private let conversation: ((FeedbackConversation) -> AnyView?)?
+    private var liveIdentifiers = FeedbackLiveIdentifiers()
     private var rowLabel: ((FeedbackThread) -> AnyView?)?
     private var rowActions: (FeedbackThread) -> ChatThreadActions = { _ in ChatThreadActions() }
     /// The wide layout's open conversation.
@@ -61,6 +62,12 @@ public struct FeedbackRequestsView: View {
         return view
     }
 
+    public func liveControls(identifiers: FeedbackLiveIdentifiers) -> Self {
+        var view = self
+        view.liveIdentifiers = identifiers
+        return view
+    }
+
     public var body: some View {
         layout
             .task { await model.refresh() }
@@ -107,14 +114,15 @@ public struct FeedbackRequestsView: View {
                     }
                 }
                 .navigationDestination(for: FeedbackRoute.self) { route in
-                    FeedbackChatView(model: model, route: route, conversation: conversation)
+                    FeedbackChatView(model: model, route: route, conversation: conversation, identifiers: liveIdentifiers)
                 }
         }
     }
 
     private var split: some View {
         NavigationSplitView {
-            FeedbackListView(model: model, selected: selection, routeSelection: $selection, isStacked: false, customLabel: rowLabel, actions: rowActions) { route in
+            FeedbackListView(model: model, selected: selection, routeSelection: $selection,
+                             isStacked: false, customLabel: rowLabel, actions: rowActions) { route in
                 withAnimation(ChatMotion.swap) { selection = route }
             }
             // The app's readable width is the window's; this column is narrower than it.
@@ -133,7 +141,7 @@ public struct FeedbackRequestsView: View {
             NavigationStack {
                 ZStack {
                     if let selection {
-                        FeedbackChatView(model: model, route: selection, conversation: conversation)
+                        FeedbackChatView(model: model, route: selection, conversation: conversation, identifiers: liveIdentifiers)
                             .id(selection)
                             .transition(.opacity)
                     } else {

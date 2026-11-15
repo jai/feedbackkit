@@ -119,3 +119,58 @@ pending actions disable the row, and failures show the host's error. The kit nev
 of an Orca workspace, a Rex session or another agent's files. The host defines that operation.
 
 `threadRows` preserves Feedback's value-based navigation, selected conversation, New flow, and draft handoff.
+
+## Direct/v2 live adoption
+
+For a host migrating to the Worker's app-signed tokens, use an explicit **Worker root before `/v2`**:
+
+```swift
+let feedback = FeedbackRequestsModel(client: FeedbackClient(direct: FeedbackDirect(
+    baseURL: feedbackWorkerRoot,
+    token: { renew in try await appTokens.feedbackKitToken(renew: renew) }
+)))
+
+FeedbackRequestsView(model: feedback)
+    .threadRows(label: { thread in hostRow(thread) }, actions: { thread in hostActions(thread) })
+    .liveControls(identifiers: FeedbackLiveIdentifiers())
+```
+
+`token(true)` must invalidate the app's cached token and ask its backend for a new one. A request refused with 401 is
+retried once with the same body and `client_ref`; other failures are not retried automatically. A manual resend of
+the unchanged restored draft keeps its original key. Creation, normal replies (including build and screenshots),
+and listing use `/v2/feedback`. Open conversations use `/v2/acp`, including when idle. Reconnects never switch to
+REST polling. Issue chats are not served by ACP; their bootstrap/POST response remains visible with an unavailable
+live notice. Hosts needing the old issue refresh behavior can retain a legacy connection until migrating that flow.
+
+FeedbackKit caches one `LiveChatModel` and its shared `LiveChatControls` per conversation. It derives the visible
+transcript and FeedbackKit metadata from the live state; the optional one-time REST snapshot is not updated by the
+stream. Following stops on disappearance, background, or successful host-conversation handoff. Handoff still waits
+for confirmed delivery and a nonblank `{host,id}`, and passes the same draft binding and attachment tray.
+
+The chat uses `LiveQueuedReplies`, `LiveReplyStatus`, `LiveQuestionView`, and `LiveScreenshotStrip`. Queued messages
+appear only in the strip. Pending/queued Cancel uses remove; Send now and question answers use the shared live APIs.
+FeedbackKit itself never queues or asks questions; the adapters can still render these when a compatible host supplies
+them. Failed Retry uses the live model’s force-edit operation, preserving the message ID and client reference.
+`FeedbackDirect(retry:)` optionally overrides that operation for a host.
+
+Screenshots resolve relative to the ACP endpoint. Only same-origin HTTPS images receive the FeedbackKit bearer;
+external signed HTTPS images receive none. Other schemes and embedded credentials are refused. Image requests use
+DurableNetworking’s quick transport by default; hosts can supply their image transport policy.
+Screenshot accessibility identifiers use message id and original attachment index, never a signed URI.
+
+`FeedbackDirect` accepts `http`, `streams`, `images`, and an optional `liveFactory` for deterministic hosts, previews,
+and tests. Its defaults are DurableNetworking's `URLSessionTransport(policy: .quick)` and
+`URLSessionStreamingTransport(quietLimit: 40)`. FeedbackKit declares a direct DurableNetworking dependency because
+its public configuration accepts these transport protocols and supplies those concrete defaults. AgentChatLive and
+AgentChatLiveTesting are products of AgentChatKit; the integrating parent must set its released minimum version.
+The existing dependency floor is intentionally unchanged here; there is no local-path pin.
+
+Legacy `FeedbackConnection`, `URLFeedbackConnection`, `FeedbackClient(baseURL:bearer:samples:)`, samples, and
+`Feature*` aliases remain source-compatible. A legacy backend URL is never used to infer an ACP endpoint.
+
+The demo's `FEEDBACKKIT_LIVE_FIXTURE=status|queue|question|screenshots` launch environment selects an in-memory
+ACP fixture through this public direct API. `FEEDBACKKIT_DEMO_APPEARANCE=light|dark|large` controls capture variants.
+The screenshot resource is a copy of the existing captured FeedbackKit demo list, not a synthetic screen. Shared UI
+tests attach real `XCUIScreen` captures and optionally write them under `FEEDBACKDEMO_SCREENSHOTS`.
+`FeedbackDemoMac` adds Mac UI coverage and needs parent CI wiring; no workflow is changed here. All new tests and
+capture cases are authored only until the parent runs them on its authorized CI lane.

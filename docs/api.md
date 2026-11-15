@@ -125,3 +125,15 @@ team's key, to the app's bundle id (`topic` in `APPS`; an app without one gets n
 - Visible pushes carry `thread-id` = the chat, so a chat's pushes group together, and `mutable-content`.
 - A device APNs answers as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) is forgotten.
 - The app opens the chat named in `feedbackkit.chat` when the push is tapped, and refreshes it on a silent one.
+
+### Swift direct client
+
+`FeedbackClient(direct: FeedbackDirect(baseURL:token:))` takes the Worker root **before `/v2`**, and an
+`@Sendable (Bool) async throws -> String` app-token provider. The Boolean requests renewal after 401. It appends only the
+explicit direct routes: REST `/v2/feedback` and ACP `/v2/acp`. Legacy/proxy constructors keep their prior semantics.
+
+The Swift UI uses AgentChatLive's shared controls and sole live transcript, with one cached model per session and
+no REST polling on reconnect. REST replies preserve `build`, `images`, and `client_ref`; ACP broadcasts the result.
+A 401 can repeat the exact HTTP request once; an unknown network error cannot trigger an automatic resend.
+Failed-message Retry is a host hook until the protocol owner defines a supported operation. See
+[README direct adoption](../README.md#directv2-live-adoption) for configuration, lifecycle, screenshot auth and fixtures.

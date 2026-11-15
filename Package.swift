@@ -10,9 +10,19 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/jai/agentchatkit", from: "0.1.0"),
+        .package(url: "https://github.com/jai/durable-networking", from: "0.1.0"),
     ],
     targets: [
-        .target(name: "FeedbackKit", dependencies: [.product(name: "AgentChatKit", package: "agentchatkit")]),
-        .testTarget(name: "FeedbackKitTests", dependencies: ["FeedbackKit"]),
+        .target(name: "FeedbackKit", dependencies: [
+            .product(name: "AgentChatKit", package: "agentchatkit"),
+            .product(name: "AgentChatLive", package: "agentchatkit"),
+            .product(name: "DurableNetworking", package: "durable-networking"),
+        ]),
+        .testTarget(name: "FeedbackKitTests", dependencies: [
+            "FeedbackKit",
+            .product(name: "AgentChatLive", package: "agentchatkit"),
+            .product(name: "AgentChatLiveTesting", package: "agentchatkit"),
+            .product(name: "DurableNetworking", package: "durable-networking"),
+        ]),
     ]
 )

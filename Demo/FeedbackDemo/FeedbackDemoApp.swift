@@ -21,7 +21,16 @@ struct DemoRootView: View {
     @Bindable var demo: DemoState
     @State private var showsWorkerSetting = false
     @State private var lastThreadAction = ""
+    private var isFixture: Bool { ProcessInfo.processInfo.environment["FEEDBACKKIT_LIVE_FIXTURE"] != nil }
     private var showsThreadControls: Bool { ProcessInfo.processInfo.arguments.contains("-DemoThreadControls") }
+
+    private var captureScheme: ColorScheme? {
+        switch ProcessInfo.processInfo.environment["FEEDBACKKIT_DEMO_APPEARANCE"] {
+        case "dark": .dark
+        case "light", "large": .light
+        default: nil
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,26 +39,41 @@ struct DemoRootView: View {
             if !lastThreadAction.isEmpty {
                 Text(lastThreadAction).accessibilityIdentifier("demo-thread-action")
             }
-            FeedbackRequestsView(model: demo.model)
-                .threadRows(label: { thread in
-                    guard showsThreadControls else { return nil }
-                    return AnyView(ChatThreadRow(title: thread.title, context: "Demo agent", about: "Shared conversation row") {
-                        Text("Working")
-                    } chips: {
-                        Text("Demo chip")
+            if let error = demo.directError {
+                Text(error).accessibilityIdentifier("demo-direct-error")
+            }
+            if demo.needsDirectConnection {
+                if demo.directError == nil {
+                    ProgressView("Connecting direct feedback…")
+                }
+                Spacer()
+            } else {
+                FeedbackRequestsView(model: demo.model)
+                    .threadRows(label: { thread in
+                        guard showsThreadControls || isFixture else { return nil }
+                        return AnyView(ChatThreadRow(title: thread.title, context: "Demo agent", about: "Shared conversation row") {
+                            Text("Working")
+                        } chips: {
+                            Text("Demo chip")
+                        })
+                    }, actions: { thread in
+                        guard showsThreadControls || isFixture else { return ChatThreadActions() }
+                        return ChatThreadActions(archive: {
+                            lastThreadAction = "Archive hook: \(thread.title)"
+                            return .success(())
+                        }, delete: {
+                            lastThreadAction = "Delete hook: \(thread.title)"
+                            return .success(())
+                        })
                     })
-                }, actions: { thread in
-                    guard showsThreadControls else { return ChatThreadActions() }
-                    return ChatThreadActions(archive: {
-                        lastThreadAction = "Archive hook: \(thread.title)"
-                        return .success(())
-                    }, delete: {
-                        lastThreadAction = "Delete hook: \(thread.title)"
-                        return .success(())
-                    })
-                })
-                .id(demo.modelKey)
+                    .id(demo.modelKey)
+            }
         }
+        .preferredColorScheme(captureScheme)
+        .transformEnvironment(\.dynamicTypeSize) { size in
+            if ProcessInfo.processInfo.environment["FEEDBACKKIT_DEMO_APPEARANCE"] == "large" { size = .accessibility3 }
+        }
+        .task(id: demo.live) { await demo.resolveDirect() }
         .sheet(isPresented: $showsWorkerSetting) {
             LiveWorkerSheet(settings: demo.live) { demo.apply($0) }
         }

@@ -3,7 +3,7 @@ import Security
 
 /// The hidden setting: point the demo at a real Worker instead of the mock. Off unless someone turns it on. The URL is
 /// a preference; the token stays in this device's Keychain, never in the repo.
-struct LiveWorker: Equatable {
+struct LiveWorker: Hashable {
     static let enabledKey = "liveWorkerEnabled"
     static let urlKey = "liveWorkerURL"
     static let directKey = "liveWorkerDirect"

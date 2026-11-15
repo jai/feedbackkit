@@ -204,12 +204,21 @@ public struct FeedbackClient: Sendable {
     static let root = "feedback"
 
     let connection: any FeedbackConnection
+    public let direct: FeedbackDirect?
     /// Set: nothing leaves the device (`FeedbackSamples`).
     public let samples: FeedbackSamples?
 
     public init(connection: any FeedbackConnection, samples: FeedbackSamples? = nil) {
         self.connection = connection
         self.samples = samples
+        self.direct = nil
+    }
+
+    /// Direct/v2 with REST creation and list, and ACP live conversations.
+    public init(direct: FeedbackDirect) {
+        self.direct = direct
+        connection = DirectFeedbackConnection(configuration: direct)
+        samples = nil
     }
 
     /// Straight to a Worker with `URLSession`: its root, and the bearer each request carries.
