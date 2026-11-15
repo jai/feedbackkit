@@ -1,11 +1,9 @@
-# The hourly release: once an hour (jai/ci's release-clock Worker, GitHub's cron as backup) or by hand, the newest commit on main whose `ci` run passed (the package's tests,
+# The hourly release: once an hour (jai/ci's release-clock Worker) or by hand, the newest commit on main whose `ci` run passed (the package's tests,
 # the Worker's and the demo's end-to-end UI test) becomes the next version's tag and GitHub Release, when the commits
 # since the last tag hold a feat, fix or breaking change (release/version.mjs). PRHub and Agent Pager pin these tags.
 name: release
 
 on:
-  schedule:
-    - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions:
