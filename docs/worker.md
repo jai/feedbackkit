@@ -103,7 +103,10 @@ From `worker/`: copy `../deploy/wrangler.template.jsonc` to `../deploy/wrangler.
 `__CLOUDFLARE_ACCOUNT_ID__` and `__PUBLIC_URL__`, then `npx wrangler deploy --config ../deploy/wrangler.jsonc`. Secrets,
 with `wrangler secret put`: `CALLER_TOKEN` (the backends'), `RUNNER_TOKEN` (the runner's), `ISSUES_TOKEN` (opens
 issues) and `ADMIN_TOKEN` (the migration). Fill `__D1_DATABASE_ID__` with the `feedbackkit` database's id and apply
-its migrations first: `npx wrangler d1 migrations apply feedbackkit --remote --config ../deploy/wrangler.jsonc`. A new app is one entry in `APPS` and a deploy.
+its migrations first: `npx wrangler d1 migrations apply feedbackkit --remote --config ../deploy/wrangler.jsonc`. Then
+check that `npx wrangler d1 migrations list feedbackkit --remote --config ../deploy/wrangler.jsonc` lists none still
+to apply, and only then deploy: code that needs a column the database lacks fails every request that touches it
+(2026-11-15: migration 0004 failed D1's foreign-key check, and the Worker went out before anyone saw). A new app is one entry in `APPS` and a deploy.
 
 The live protocol's server is `@jai/agentchat-live`, vendored as `worker/vendor/jai-agentchat-live-bb26cdc.tgz`: built
 from [jai/agentchatkit](https://github.com/jai/agentchatkit) `server/` at bb26cdc (`npm ci && npm run build && npm
