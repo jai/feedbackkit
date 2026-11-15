@@ -14,6 +14,7 @@ import fcntl
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -35,9 +36,11 @@ from .runner import (
     Runner,
     migrate,
 )
-from .util import credential_record
+from .util import JsonObject, credential_record, write_private_json
 
 CREDENTIALS = Path.home() / ".credentials" / "feedbackkit"
+# What the menu bar app reads (runner/README.md#statusjson), beside the state file.
+STATUS_FILE = "status.json"
 FULL_TICK_SECONDS = 15
 # A full tick slower than this is logged: wakes inside it wait for the chat being read.
 SLOW_TICK_SECONDS = 20
@@ -75,7 +78,9 @@ def hold_lock(state_dir: Path) -> IO[str] | None:
 
 class Service:
     """The loop: a full tick every FULL_TICK_SECONDS, a fast tick whenever the Worker wakes the runner. The long poll
-    runs on its own thread (Waiter), so a wake is seen even in the middle of a full tick, between two chats."""
+    runs on its own thread (Waiter), so a wake is seen even in the middle of a full tick, between two chats. After each
+    tick it writes status.json for the menu bar app. SIGTERM (launchctl kickstart -k, a reinstall) stops it at the next
+    safe point: after the delivery in progress, never in the middle of one."""
 
     def __init__(
         self,
@@ -83,31 +88,58 @@ class Service:
         api: FeedbackApi,
         clock: Callable[[], float] = time.monotonic,
         old_runner: Callable[[], str | None] = lambda: None,
+        status_path: Path | None = None,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         self.runner = runner
         self.api = api
         self.clock = clock
         self.old_runner = old_runner
+        self.status_path = status_path
+        self.wall = wall
         self.woke = threading.Event()
-        self.waiter = Waiter(api, self.woke)
+        self.waiter = Waiter(api, self.woke, wall=wall)
+        self.started_at = wall()
+        self.last_full: JsonObject | None = None
+        self.last_fast: JsonObject | None = None
+        self.stopping = False
+
+    def stop(self, *_signal: object) -> None:
+        """SIGTERM's handler: only a flag, and a wake so a wait ends now. The loop stops at its next safe point."""
+        self.stopping = True
+        self.woke.set()
+
+    def finish(self) -> None:
+        self.runner.save()
+        log("FEEDBACK_RUNNER_STOPPED", reason="SIGTERM")
+        self.write_status()
+        raise SystemExit(0)
 
     def tick(self, fast: bool) -> None:
-        started = self.clock()
+        started, at = self.clock(), self.wall()
         try:
             lines = self.runner.tick(fast=fast, between=None if fast else self.between)
         except FeedbackApiError as failure:
             self.runner.save()
             log("FEEDBACK_POLL_FAILED", logging.WARNING, reason=str(failure), fast=fast)
-            return
+            lines = []
+        seconds = round(self.clock() - started, 2)
         for line in lines:
             LOG.info(line)
-        if fast and lines:
-            log("FEEDBACK_FAST_TICK", seconds=round(self.clock() - started, 2))
-        elif not fast and self.clock() - started > SLOW_TICK_SECONDS:
-            log("FEEDBACK_SLOW_TICK", seconds=round(self.clock() - started, 2))
+        if fast:
+            self.last_fast = {"at": at, "seconds": seconds}
+            if lines:
+                log("FEEDBACK_FAST_TICK", seconds=seconds)
+        else:
+            self.last_full = {"at": at, "seconds": seconds}
+            if seconds > SLOW_TICK_SECONDS:
+                log("FEEDBACK_SLOW_TICK", seconds=seconds)
+        self.write_status()
 
     def between(self) -> None:
-        """Within a full tick: a fast tick now if a message woke the runner."""
+        """Within a full tick: stop if asked; else a fast tick now if a message woke the runner."""
+        if self.stopping:
+            self.finish()
         if self.woke.is_set():
             self.woke.clear()
             self.tick(fast=True)
@@ -122,10 +154,33 @@ class Service:
             raise SystemExit(0)
         next_full = self.clock() + FULL_TICK_SECONDS
         self.tick(fast=False)
-        while (remaining := next_full - self.clock()) > 0:
-            if self.woke.wait(remaining):
+        while not self.stopping and (remaining := next_full - self.clock()) > 0:
+            if self.woke.wait(remaining) and not self.stopping:
                 self.woke.clear()
                 self.tick(fast=True)
+        if self.stopping:
+            self.finish()
+
+    def status(self) -> JsonObject:
+        return {
+            "version": 1,
+            "written_at": self.wall(),
+            "pid": os.getpid(),
+            "started_at": self.started_at,
+            "stopping": self.stopping,
+            "last_full_tick": self.last_full,
+            "last_fast_tick": self.last_fast,
+            "long_poll": {"on": not self.waiter.ended, "last_wake": self.waiter.woke_at, "error": self.waiter.error},
+            **self.runner.status(),
+        }
+
+    def write_status(self) -> None:
+        if self.status_path is None:
+            return
+        try:
+            write_private_json(self.status_path, self.status())
+        except (OSError, TypeError, ValueError) as failure:
+            log("FEEDBACK_STATUS_NOT_WRITTEN", logging.WARNING, reason=f"{type(failure).__name__}: {failure}")
 
     def run(self) -> None:
         self.waiter.start()
@@ -137,12 +192,23 @@ class Waiter(threading.Thread):
     """Holds the Worker's long poll and sets `woke` each time the count moves. It only waits and signals: the runner's
     state is the main thread's alone. A Worker without `/runner/wait` ends it; the full ticks go on."""
 
-    def __init__(self, api: FeedbackApi, woke: threading.Event, sleep: Callable[[float], None] = time.sleep) -> None:
+    def __init__(
+        self,
+        api: FeedbackApi,
+        woke: threading.Event,
+        sleep: Callable[[float], None] = time.sleep,
+        wall: Callable[[], float] = time.time,
+    ) -> None:
         super().__init__(name="runner-wait", daemon=True)
         self.api = api
         self.woke = woke
         self.sleep = sleep
+        self.wall = wall
         self.seq: int | None = None
+        # For status.json: when a message last woke the runner, the last failed wait's reason, and whether it ended.
+        self.woke_at: float | None = None
+        self.error: str | None = None
+        self.ended = False
 
     def once(self) -> bool:
         """One wait; False when the Worker has no long poll."""
@@ -150,12 +216,16 @@ class Waiter(threading.Thread):
             seq = self.api.wait(self.seq)
         except FeedbackApiError as failure:
             log("FEEDBACK_WAIT_FAILED", logging.WARNING, reason=str(failure))
+            self.error = str(failure)[:200]
             self.sleep(5)
             return True
+        self.error = None
         if seq is None:
             log("FEEDBACK_NO_LONG_POLL", reason="the Worker has no /runner/wait; full ticks only")
+            self.ended = True
             return False
         if self.seq is not None and seq != self.seq:
+            self.woke_at = self.wall()
             self.woke.set()
         self.seq = seq
         return True
@@ -206,7 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         check_queue=hub.check_queue,
     )
     log("FEEDBACK_RUNNER_STARTED", pid=os.getpid())
-    Service(runner, api, old_runner=old_runner_running).run()
+    service = Service(runner, api, old_runner=old_runner_running, status_path=args.state_dir / STATUS_FILE)
+    signal.signal(signal.SIGTERM, service.stop)
+    service.run()
     return 0
 
 

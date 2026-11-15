@@ -47,6 +47,9 @@ def job(home: Path) -> dict[str, object]:
         "KeepAlive": True,
         # A runner that exits at once (no credentials, the old runner still loaded) is started again after this long.
         "ThrottleInterval": 15,
+        # On SIGTERM the runner finishes the delivery in progress (a first message's `orca worktree create` can take
+        # 300 s) before it exits; launchd waits this long before it kills it.
+        "ExitTimeOut": 330,
         "ProcessType": "Standard",
         "StandardOutPath": log,
         "StandardErrorPath": log,

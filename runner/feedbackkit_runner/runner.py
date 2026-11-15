@@ -77,6 +77,8 @@ TIDY_AFTER_SECONDS = 86400
 TIDIED = "This chat was tidied away after a day with nothing left to do. Start new feedback instead."
 JOURNAL_KEPT_SECONDS = 14 * 86400
 MAX_AGENT_MESSAGES = 500
+# Each chat's newest messages in status.json.
+STATUS_MESSAGES = 10
 READ_PAGES = 5
 DETAIL_MAX = 200
 ACTIVITIES = {
@@ -186,6 +188,12 @@ class ChatState(_ChatFields, total=False):
     last_activity: float
     told_at: float
     posted_at: float
+    # For status.json (the menu bar app): the chat's title from its claims, its coding thread once a scan found it, and
+    # what its agent was doing at the last look.
+    title: str
+    thread: JsonObject
+    working: bool
+    activity: str | None
 
 
 class RunnerState(TypedDict):
@@ -585,6 +593,9 @@ class Runner:
         # Each builder's agents at the last full tick, and why each down one did not answer: what a fast tick uses.
         self.last_agents: dict[str, dict[str, JsonObject] | None] | None = None
         self.last_down: list[str] = []
+        # The last poll (when, whether the Worker answered, why not) and its work: for status().
+        self.last_poll: JsonObject | None = None
+        self.last_work: list[JsonObject] = []
 
     def save(self) -> None:
         write_private_json(self.state_path, self.state)
@@ -633,7 +644,13 @@ class Runner:
         """Poll and take: a full tick's first half, and all of a fast one. It adds to what is waiting and owed, so a fast
         tick in the middle of a full one leaves the full one's view whole."""
         online = any(found is not None for found in agents.values())
-        work = self.api.poll(online, None if online else "; ".join(down))
+        try:
+            work = self.api.poll(online, None if online else "; ".join(down))
+        except FeedbackApiError as failure:
+            self.last_poll = {"at": self.clock(), "ok": False, "error": str(failure)[:DETAIL_MAX]}
+            raise
+        self.last_poll = {"at": self.clock(), "ok": True, "error": None}
+        self.last_work = work
         self.owed |= {str(item.get("chat")) for item in work}
         if online:
             for item in sorted(work, key=_arrival):
@@ -788,6 +805,7 @@ class Runner:
             "posted": None,
             "removed": False,
             "sender": sender,
+            "title": str(claimed.get("title") or ""),
         }
         self.kick()
         return {"status": "delivered", "how": "orca_launch", "detail": None}
@@ -811,6 +829,8 @@ class Runner:
                 "sender": sender,
             },
         )
+        if claimed.get("title") and not known.get("title"):
+            known["title"] = str(claimed["title"])  # chats from before titles were kept get theirs here
         if known.get("removed") and known["layout"] == "worktree":
             return {"status": "failed", "how": None, "detail": TIDIED}
         thread = builder.cube.thread(clone)
@@ -909,6 +929,9 @@ class Runner:
     def post_side(self, chat: str, known: ChatState, side: JsonObject, now: float) -> str | None:
         """Sends the agent's side when it changed, or a minute after the last send; a chat the Worker does not have
         is dropped, with a log line."""
+        known["working"], known["activity"] = bool(side.get("isWorking")), _text_or_none(side.get("activity"))
+        if isinstance(side.get("thread"), dict):
+            known["thread"] = json_object(side["thread"])
         digest = hashlib.sha256(json.dumps(side, sort_keys=True).encode("utf-8")).hexdigest()
         if digest != known.get("posted") or now - known.get("posted_at", 0) > RESEND_SECONDS:
             if not self.api.agent(chat, side, known.get("sender")):
@@ -943,6 +966,76 @@ class Runner:
             for key, entry in self.state["journal"].items()
             if not entry.get("posted") or now - entry["claimed_at"] < JOURNAL_KEPT_SECONDS
         }
+
+    def status(self) -> JsonObject:
+        """What the runner knows, for status.json (docs: runner/README.md#statusjson): the last poll, each builder, and
+        each chat with its thread and its messages' states. A message's state is the runner's view: `pending` (in the
+        last poll's work), `delivering` (claimed, no outcome yet), `queued` (Orca holds it), `delivered` or `failed`,
+        and `posted` says whether the Worker has the outcome."""
+        builders = [
+            {
+                "host": host,
+                "name": builder.name,
+                "up": self.last_agents is not None and self.last_agents.get(host) is not None,
+                "detail": next((down for down in self.last_down if down.startswith(builder.name + ":")), None),
+            }
+            for host, builder in self.builders.items()
+        ]
+        messages: dict[str, list[JsonObject]] = {}
+        for key, entry in self.state["journal"].items():
+            chat, message = key.split("/", 1)
+            outcome = entry.get("outcome")
+            messages.setdefault(chat, []).append(
+                {
+                    "id": message,
+                    "state": outcome["status"] if outcome else "delivering",
+                    "detail": outcome.get("detail") if outcome else None,
+                    "at": entry["claimed_at"],
+                    "posted": bool(entry.get("posted")),
+                }
+            )
+        journalled = set(self.state["journal"])
+        for item in self.last_work:
+            chat, message = str(item.get("chat")), str(item.get("message"))
+            if f"{chat}/{message}" not in journalled:
+                at = _arrival(item) / 1000 or None
+                messages.setdefault(chat, []).append(
+                    {"id": message, "state": "pending", "detail": None, "at": at, "posted": False}
+                )
+        chats: list[JsonObject] = []
+        for chat in set(self.state["chats"]) | set(messages):
+            known = self.state["chats"].get(chat)
+            sender = (known.get("sender") if known else None) or next(
+                (sender_of(item) for item in self.last_work if item.get("chat") == chat), None
+            )
+            mine = sorted(messages.get(chat, []), key=lambda one: float(str(one.get("at") or 0)))
+            chats.append(
+                {
+                    "chat": chat,
+                    "app": sender["app"] if sender else None,
+                    "login": sender["login"] if sender else None,
+                    "title": known.get("title") if known else None,
+                    "host": known["host"] if known else None,
+                    "thread": known.get("thread") if known else None,
+                    "worktree": known["clone"] if known else None,
+                    "removed": bool(known.get("removed")) if known else False,
+                    "working": bool(known.get("working")) if known else False,
+                    "activity": known.get("activity") if known else None,
+                    "last_activity": (known.get("last_activity") or known["launched_at"]) if known else None,
+                    "messages": mine[-STATUS_MESSAGES:],
+                }
+            )
+        chats.sort(key=lambda one: -max([float(str(one.get("last_activity") or 0))] + _ats(one)))
+        return {"poll": self.last_poll, "builders": builders, "chats": chats}
+
+
+def _ats(chat: JsonObject) -> list[float]:
+    found = chat.get("messages")
+    return [float(str(one.get("at") or 0)) for one in found if isinstance(one, dict)] if isinstance(found, list) else []
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _agents_or_failure(orca: Orca) -> dict[str, JsonObject] | RuntimeError:

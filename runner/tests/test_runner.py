@@ -1074,3 +1074,56 @@ class BriefFileTests(unittest.TestCase):
 
     def test_the_reply_prefix_is_agent_pager_s(self) -> None:
         self.assertEqual(REPLY_PREFIX, "Jai via Agent Pager: ")
+
+
+class StatusTests(RunnerCase):
+    """status(): what the menu bar app shows of each chat."""
+
+    def test_a_chat_shows_its_title_thread_and_each_message_s_state(self) -> None:
+        runner = self.runner()
+        self.first_message()
+        runner.tick()
+        self.cube.row = {
+            "id": "orca-codex:s1",
+            "app": "orca-codex",
+            "session_id": "s1",
+            "cwd": WORKTREE,
+            "_transcript": "/t/s1.jsonl",
+        }
+        runner.tick()
+        self.api.work = [{"chat": CHAT, "message": "m_3", "first": False, "at": 5_000, **AGENT_PAGER_OWNER}]
+        self.cube.row = None  # its thread not listed yet: m_3 stays pending
+        runner.state["chats"][CHAT]["launched_at"] = self.now
+        runner.tick()
+        status = runner.status()
+        self.assertEqual(status["poll"], {"at": self.now, "ok": True, "error": None})
+        self.assertEqual([one["up"] for one in status["builders"]], [True, True])
+        chat = status["chats"][0]
+        self.assertEqual((chat["chat"], chat["app"], chat["login"], chat["title"]), (CHAT, "agent-pager", "jai", "Bigger clock"))
+        self.assertEqual(chat["thread"], {"host": CUBE_03, "id": "orca-codex:s1"})
+        self.assertEqual(
+            [(one["id"], one["state"], one["posted"]) for one in chat["messages"]],
+            [("m_3", "pending", False), ("m_1", "delivered", True)],
+        )
+
+    def test_a_failed_poll_is_in_the_status(self) -> None:
+        runner = self.runner()
+
+        def down(_orca: bool, _detail: str | None = None) -> list[JsonObject]:
+            raise FeedbackApiError("poll answered 503")
+
+        self.api.poll = down  # type: ignore[method-assign]
+        with self.assertRaises(FeedbackApiError):
+            runner.tick()
+        self.assertEqual(runner.status()["poll"], {"at": self.now, "ok": False, "error": "poll answered 503"})
+
+    def test_a_later_message_gives_an_older_chat_its_title(self) -> None:
+        runner = self.runner()
+        self.first_message()
+        runner.tick()
+        del runner.state["chats"][CHAT]["title"]
+        self.cube.row = {"id": "orca-codex:s1", "app": "orca-codex", "session_id": "s1", "cwd": WORKTREE, "_transcript": "/t"}
+        self.reply()
+        self.api.claims["m_2"]["title"] = "Bigger clock"
+        runner.tick()
+        self.assertEqual(runner.state["chats"][CHAT]["title"], "Bigger clock")

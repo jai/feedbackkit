@@ -3,6 +3,7 @@ no long poll, and never two runners at once."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import threading
@@ -48,6 +49,9 @@ class FakeRunner:
 
     def save(self) -> None:
         self.saved += 1
+
+    def status(self) -> dict[str, object]:
+        return {"chats": []}
 
 
 class FakeApi:
@@ -117,6 +121,47 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(runner.ticks, [])
 
 
+class StopTests(unittest.TestCase):
+    """SIGTERM stops the runner at a safe point, saved, with its status written."""
+
+    def test_a_stop_during_a_full_tick_ends_it_between_two_chats(self) -> None:
+        loop, runner, _ = service()
+        original = runner.tick
+
+        def tick(fast: bool = False, between: Callable[[], None] | None = None) -> list[str]:
+            loop.stop()
+            return original(fast, between)
+
+        runner.tick = tick  # type: ignore[method-assign]
+        with self.assertRaises(SystemExit):
+            loop.step()
+        self.assertEqual((runner.ticks, runner.saved), (["full"], 1))
+
+    def test_a_stop_while_waiting_ends_the_wait_without_a_tick(self) -> None:
+        loop, runner, clock = service()
+        runner.full_seconds = 1.0
+        timer = threading.Timer(0.05, loop.stop)
+        timer.start()
+        with self.assertRaises(SystemExit):
+            loop.step()
+        timer.join()
+        self.assertEqual(runner.ticks, ["full"])
+
+    def test_the_status_file_says_what_the_runner_did(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            loop, runner, _ = service()
+            loop.status_path = Path(folder) / "status.json"
+            runner.full_seconds = 0
+            loop.clock = lambda: 1e9 if runner.ticks else 0.0
+            loop.step()
+            written = json.loads(loop.status_path.read_text("utf-8"))
+            self.assertEqual(written["version"], 1)
+            self.assertEqual(written["last_full_tick"]["seconds"], 1e9)
+            self.assertEqual(written["long_poll"], {"on": True, "last_wake": None, "error": None})
+            self.assertEqual((written["chats"], written["stopping"]), ([], False))
+            self.assertEqual(loop.status_path.stat().st_mode & 0o777, 0o600)
+
+
 class WaiterTests(unittest.TestCase):
     def waiter(self, answers: list[int | None | Exception]) -> tuple[Waiter, FakeApi, list[float]]:
         api, slept = FakeApi(answers), []
@@ -129,11 +174,13 @@ class WaiterTests(unittest.TestCase):
         self.assertFalse(waiter.woke.is_set())
         self.assertTrue(waiter.once())
         self.assertTrue(waiter.woke.is_set())
+        self.assertIsNotNone(waiter.woke_at)
         self.assertEqual(api.calls, [None, 5, 5])
 
     def test_a_worker_without_the_long_poll_ends_the_waiter(self) -> None:
         waiter, _, _ = self.waiter([None])
         self.assertFalse(waiter.once())
+        self.assertTrue(waiter.ended)
 
     def test_a_failed_wait_pauses_and_tries_again(self) -> None:
         waiter, _, slept = self.waiter([FeedbackApiError("down")])

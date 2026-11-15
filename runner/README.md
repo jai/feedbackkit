@@ -19,6 +19,25 @@ thread's words back. It runs on Jais-Mac-mini as jai: `python3 -m feedbackkit_ru
   (`feedbackkit_runner/agent_pager.py`; a LaunchAgent's python may not read `~/Developer`), and its scans of the
   builders. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager hub.
 
+- **Stopping.** SIGTERM (`launchctl kickstart -k`, a reinstall) stops it after the delivery in progress, between two
+  chats of a full tick or in a wait, never in the middle of a delivery. launchd waits up to 330 s for that.
+
+## status.json
+
+After each tick the runner writes `~/Library/Application Support/feedbackkit-runner/status.json` (`0600`), which the
+menu bar app on Jai's Mac reads over SSH ([MenuBar/](MenuBar/README.md)). Times are Unix seconds.
+
+- `version` (1), `written_at`, `pid`, `started_at`, `stopping`.
+- `last_full_tick`, `last_fast_tick`: `{at, seconds}` or null.
+- `long_poll`: `{on, last_wake, error}`. `on` is false when the Worker has no `/runner/wait`.
+- `poll`: the last `/runner/poll`, `{at, ok, error}`: whether the Worker answered.
+- `builders`: `[{host, name, up, detail}]`, from the last full tick's `orca worktree ps`.
+- `chats`, most recent first: `{chat, app, login, title, host, thread: {host, id} | null, worktree, removed, working,
+  activity, last_activity, messages}`. `messages` are the newest 10 the runner knows: `{id, state, detail, at,
+  posted}`, `state` one of `pending` (in the last poll's work), `delivering` (claimed, no outcome yet), `queued` (Orca
+  holds it), `delivered`, `failed`; `posted` says whether the Worker has the outcome. A chat started before titles
+  were kept has none until its next message.
+
 ## Install
 
 On the Mac mini, as jai:
@@ -103,4 +122,5 @@ fail when the two differ.
 `~/Library/Logs/feedbackkit-runner.log`: `FEEDBACK chat=… message=… outcome=…` per message, `FEEDBACK_ORCA_DOWN
 host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
 JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
-`FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`.
+`FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_STOPPED`,
+`FEEDBACK_STATUS_NOT_WRITTEN`.
