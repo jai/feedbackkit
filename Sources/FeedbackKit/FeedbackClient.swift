@@ -15,6 +15,16 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
         self.createdAt = createdAt
         self.thread = thread
     }
+
+    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
+    }
 }
 
 /// The requests and whether the builder Mac is taking work.
@@ -39,6 +49,18 @@ public struct FeedbackAgentThread: Codable, Equatable, Hashable, Sendable {
     public init(host: String, id: String) {
         self.host = host
         self.id = id
+    }
+}
+
+extension FeedbackAgentThread {
+    /// Both response boundaries share the same metadata rule; unnamed references keep the default Feedback row/chat.
+    static func decodeNamed<Key: CodingKey>(
+        _ container: KeyedDecodingContainer<Key>, forKey key: Key
+    ) throws -> Self? {
+        guard let thread = try container.decodeIfPresent(Self.self, forKey: key),
+              !thread.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !thread.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return thread
     }
 }
 
@@ -134,13 +156,7 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         problem = try container.decodeIfPresent(String.self, forKey: .problem)
         costCents = try container.decodeIfPresent(Int.self, forKey: .costCents)
         builderOnline = try container.decode(Bool.self, forKey: .builderOnline)
-        if let agentThread = try container.decodeIfPresent(FeedbackAgentThread.self, forKey: .thread),
-           !agentThread.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !agentThread.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            thread = agentThread
-        } else {
-            thread = nil
-        }
+        thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
         let metadata = try container.decode([MessageMetadata].self, forKey: .messages)
         screenshots = Dictionary(metadata.compactMap { message in
             message.images.flatMap { $0 > 0 ? (message.id, $0) : nil }

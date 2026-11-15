@@ -33,6 +33,22 @@ struct FeedbackRequestsModelTests {
         ))
     }
 
+    @Test func nativeSelectionEchoKeepsAStartedConversationsRouteAndDraft() async throws {
+        let model = FeedbackRequestsModel(client: client(Worker()))
+        let route = model.compose(reusing: nil)
+        model.binding(for: route.box).wrappedValue = "Start this feedback"
+        await model.sendFirstMessage(route)
+        let id = try #require(model.thread(for: route))
+        model.binding(for: route.box).wrappedValue = "Keep these follow-up words"
+        let selected = try #require(model.route(for: id, keeping: route))
+        #expect(selected == route)
+        #expect(model.binding(for: selected.box).wrappedValue == "Keep these follow-up words")
+        #expect(model.route(for: "different", keeping: route) == .thread("different"))
+        #expect(model.route(for: nil, keeping: route) == nil)
+        let unsent = FeedbackRoute.new(UUID())
+        #expect(model.route(for: nil, keeping: unsent) == unsent)
+    }
+
     /// Each message's screenshot count; a Worker from before them sends none.
     @Test func aChatCountsScreenshots() throws {
         let json = #"{"id": "sesn_1", "isWorking": false, "builderOnline": true, "costCents": 3, "messages": ["#

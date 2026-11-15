@@ -31,6 +31,14 @@ struct FeedbackConversationTests {
         #expect(try JSONDecoder().decode(FeedbackThread.self, from: current).thread == thread)
     }
 
+    @Test func unnamedListThreadMetadataKeepsTheSharedDefaultRow() throws {
+        for reference in [#"{"host":" ","id":"session"}"#, #"{"host":"builder","id":""}"#] {
+            let data = Data((#"{"id":"fb_1","title":"Feedback","createdAt":"2026-11-15","thread":"#
+                + reference + "}").utf8)
+            #expect(try JSONDecoder().decode(FeedbackThread.self, from: data).thread == nil)
+        }
+    }
+
     @Test func feedbackUsesSharedDeliveryTicksWithoutClaimingUnknownOrFailedDelivery() {
         #expect(FeedbackMessageDelivery.pending.replyState.ticks == .sent)
         #expect(FeedbackMessageDelivery.delivering.replyState.ticks == .sent)
