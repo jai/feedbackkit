@@ -589,45 +589,58 @@ class Runner:
     def save(self) -> None:
         write_private_json(self.state_path, self.state)
 
-    def tick(self, fast: bool = False) -> list[str]:
+    def tick(self, fast: bool = False, between: Callable[[], None] | None = None) -> list[str]:
         """One poll: report what is owed, take what is pending, look at each chat's agent, tidy what is done. The
         builder is online while any builder's Orca answers; None in `agents` is a builder whose Orca did not.
 
         A fast tick, run as the Worker wakes the runner for a new message, only polls and takes, with the builders'
         agents from the last full tick: the message reaches its thread in about a second. The full tick still runs
-        every 15 s (service.py)."""
+        every 15 s (service.py). Reading every chat's agent can take half a minute, so a full tick calls `between`
+        after each chat: there the service runs a fast tick if a message woke it meanwhile."""
         lines: list[str] = []
         if fast and self.last_agents is not None:
-            agents, down = self.last_agents, self.last_down
-        else:
-            fast = False
-            agents, down = {}, []
-            for builder in self.builders.values():
-                found = _agents_or_failure(builder.orca)
-                if isinstance(found, RuntimeError):
-                    agents[builder.host] = None
-                    down.append(f"{builder.name}: {found}")
-                    lines.append(f"FEEDBACK_ORCA_DOWN host={builder.host} {found}")
-                else:
-                    agents[builder.host] = found
-            self.last_agents, self.last_down = agents, down
-            self.post_owed()
+            return self.take_pending(self.last_agents, self.last_down, lines)
+        agents: dict[str, dict[str, JsonObject] | None] = {}
+        down: list[str] = []
+        for builder in self.builders.values():
+            found = _agents_or_failure(builder.orca)
+            if isinstance(found, RuntimeError):
+                agents[builder.host] = None
+                down.append(f"{builder.name}: {found}")
+                lines.append(f"FEEDBACK_ORCA_DOWN host={builder.host} {found}")
+            else:
+                agents[builder.host] = found
+        self.last_agents, self.last_down = agents, down
+        self.post_owed()
+        self.waiting, self.owed = set(), set()
+        self.take_pending(agents, down, lines)
+        if any(found is not None for found in agents.values()):
+            for chat in list(self.state["chats"]):
+                if chat not in self.state["chats"]:
+                    continue
+                line = self.look(chat, agents)
+                if line:
+                    lines.append(line)
+                if between:
+                    between()
+        self.prune()
+        self.save()
+        return lines
+
+    def take_pending(
+        self, agents: dict[str, dict[str, JsonObject] | None], down: list[str], lines: list[str]
+    ) -> list[str]:
+        """Poll and take: a full tick's first half, and all of a fast one. It adds to what is waiting and owed, so a fast
+        tick in the middle of a full one leaves the full one's view whole."""
         online = any(found is not None for found in agents.values())
         work = self.api.poll(online, None if online else "; ".join(down))
-        self.waiting = set()
-        self.owed = {str(item.get("chat")) for item in work}
+        self.owed |= {str(item.get("chat")) for item in work}
         if online:
             for item in sorted(work, key=_arrival):
                 line = self.take(item, agents)
                 if line:
                     lines.append(line)
             self.owed |= {key.split("/", 1)[0] for key, entry in self.state["journal"].items() if not entry["posted"]}
-        if online and not fast:
-            for chat in list(self.state["chats"]):
-                line = self.look(chat, agents)
-                if line:
-                    lines.append(line)
-        self.prune()
         self.save()
         return lines
 

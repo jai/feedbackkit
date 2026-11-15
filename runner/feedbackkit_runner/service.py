@@ -1,7 +1,7 @@
 """The runner as one long-running process (`python3 -m feedbackkit_runner.service`), started and kept alive by launchd
-(install.py). A full tick every FULL_TICK_SECONDS, as the old 15 s LaunchAgent ran; between them it holds the Worker's
-long poll (`/runner/wait`), and a message sent wakes it for a fast tick at once. A Worker without the long poll gets a
-sleep instead.
+(install.py). A full tick every FULL_TICK_SECONDS, as the old 15 s LaunchAgent ran. A thread holds the Worker's long
+poll (`/runner/wait`); a message sent wakes the runner for a fast tick at once, even between two chats of a full tick.
+A Worker without the long poll gets the full ticks only.
 
 Never two runners: it waits while Agent Pager's old LaunchAgent is loaded or its process runs, and holds a lock in its
 state folder against a second copy of itself. Only then does it move the old runner's state over (runner.migrate).
@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import IO, Callable
@@ -38,6 +39,8 @@ from .util import credential_record
 
 CREDENTIALS = Path.home() / ".credentials" / "feedbackkit"
 FULL_TICK_SECONDS = 15
+# A full tick slower than this is logged: wakes inside it wait for the chat being read.
+SLOW_TICK_SECONDS = 20
 OLD_LABEL = "com.jai.agent-pager-feedback-runner"
 OLD_MODULE = "hub.feedback_runner"
 LOG = logging.getLogger("feedbackkit-runner")
@@ -71,29 +74,27 @@ def hold_lock(state_dir: Path) -> IO[str] | None:
 
 
 class Service:
-    """The loop: full ticks on time, fast ticks on a wake, the long poll in between."""
+    """The loop: a full tick every FULL_TICK_SECONDS, a fast tick whenever the Worker wakes the runner. The long poll
+    runs on its own thread (Waiter), so a wake is seen even in the middle of a full tick, between two chats."""
 
     def __init__(
         self,
         runner: Runner,
         api: FeedbackApi,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
         old_runner: Callable[[], str | None] = lambda: None,
     ) -> None:
         self.runner = runner
-        self.old_runner = old_runner
         self.api = api
         self.clock = clock
-        self.sleep = sleep
-        self.seq: int | None = None
-        self.long_poll = True
-        self.next_full = 0.0
+        self.old_runner = old_runner
+        self.woke = threading.Event()
+        self.waiter = Waiter(api, self.woke)
 
     def tick(self, fast: bool) -> None:
         started = self.clock()
         try:
-            lines = self.runner.tick(fast=fast)
+            lines = self.runner.tick(fast=fast, between=None if fast else self.between)
         except FeedbackApiError as failure:
             self.runner.save()
             log("FEEDBACK_POLL_FAILED", logging.WARNING, reason=str(failure), fast=fast)
@@ -102,50 +103,66 @@ class Service:
             LOG.info(line)
         if fast and lines:
             log("FEEDBACK_FAST_TICK", seconds=round(self.clock() - started, 2))
+        elif not fast and self.clock() - started > SLOW_TICK_SECONDS:
+            log("FEEDBACK_SLOW_TICK", seconds=round(self.clock() - started, 2))
 
-    def wait(self) -> bool:
-        """Until the next full tick is due or a message wakes the runner; True on a wake."""
-        remaining = self.next_full - self.clock()
-        if remaining <= 0:
-            return False
-        if not self.long_poll:
-            self.sleep(remaining)
-            return False
-        try:
-            seq = self.api.wait(self.seq, remaining)
-        except FeedbackApiError as failure:
-            log("FEEDBACK_WAIT_FAILED", logging.WARNING, reason=str(failure))
-            self.sleep(max(0.0, self.next_full - self.clock()))
-            return False
-        if seq is None:
-            log("FEEDBACK_NO_LONG_POLL", reason="the Worker has no /runner/wait; full ticks only")
-            self.long_poll = False
-            self.sleep(max(0.0, self.next_full - self.clock()))
-            return False
-        woke = self.seq is not None and seq != self.seq
-        self.seq = seq
-        return woke
-
-    def step(self) -> None:
-        """Exits when Agent Pager's old runner is back (a `make threads-install` from before it was removed): launchd
-        starts this one again, and it waits until the old one is gone."""
-        if self.clock() >= self.next_full:
-            old = self.old_runner()
-            if old is not None:
-                log("FEEDBACK_OLD_RUNNER", logging.WARNING, reason=f"{old}; stopping so two runners never run at once")
-                raise SystemExit(0)
-            self.next_full = self.clock() + FULL_TICK_SECONDS
-            self.tick(fast=False)
-        if self.wait():
+    def between(self) -> None:
+        """Within a full tick: a fast tick now if a message woke the runner."""
+        if self.woke.is_set():
+            self.woke.clear()
             self.tick(fast=True)
 
+    def step(self) -> None:
+        """One full tick, then fast ticks on each wake until the next is due. Exits when Agent Pager's old runner is
+        back (a `make threads-install` from before it was removed): launchd starts this one again, and it waits until
+        the old one is gone."""
+        old = self.old_runner()
+        if old is not None:
+            log("FEEDBACK_OLD_RUNNER", logging.WARNING, reason=f"{old}; stopping so two runners never run at once")
+            raise SystemExit(0)
+        next_full = self.clock() + FULL_TICK_SECONDS
+        self.tick(fast=False)
+        while (remaining := next_full - self.clock()) > 0:
+            if self.woke.wait(remaining):
+                self.woke.clear()
+                self.tick(fast=True)
+
     def run(self) -> None:
-        try:
-            self.seq = self.api.wait(None, 0)  # the wake count now, so a message sent during the first tick wakes it
-        except FeedbackApiError as failure:
-            log("FEEDBACK_WAIT_FAILED", logging.WARNING, reason=str(failure))
+        self.waiter.start()
         while True:
             self.step()
+
+
+class Waiter(threading.Thread):
+    """Holds the Worker's long poll and sets `woke` each time the count moves. It only waits and signals: the runner's
+    state is the main thread's alone. A Worker without `/runner/wait` ends it; the full ticks go on."""
+
+    def __init__(self, api: FeedbackApi, woke: threading.Event, sleep: Callable[[float], None] = time.sleep) -> None:
+        super().__init__(name="runner-wait", daemon=True)
+        self.api = api
+        self.woke = woke
+        self.sleep = sleep
+        self.seq: int | None = None
+
+    def once(self) -> bool:
+        """One wait; False when the Worker has no long poll."""
+        try:
+            seq = self.api.wait(self.seq)
+        except FeedbackApiError as failure:
+            log("FEEDBACK_WAIT_FAILED", logging.WARNING, reason=str(failure))
+            self.sleep(5)
+            return True
+        if seq is None:
+            log("FEEDBACK_NO_LONG_POLL", reason="the Worker has no /runner/wait; full ticks only")
+            return False
+        if self.seq is not None and seq != self.seq:
+            self.woke.set()
+        self.seq = seq
+        return True
+
+    def run(self) -> None:
+        while self.once():
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:

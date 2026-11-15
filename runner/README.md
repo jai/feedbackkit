@@ -4,10 +4,11 @@ The runner moves owners' and builders' messages from the FeedbackKit Worker to a
 thread's words back. It runs on Jais-Mac-mini as jai: `python3 -m feedbackkit_runner.service`, LaunchAgent
 `com.jai.feedbackkit-runner`. Its routes are in [docs/worker.md](../docs/worker.md#the-runners-messages).
 
-- **Long-running.** A full tick every 15 s (poll, take, read each chat's agent, tidy). Between ticks it holds the
-  Worker's long poll (`/runner/wait`); a message sent answers it, and a fast tick (poll and take, with the builders'
-  agents from the last full tick) claims the message in about a second. A Worker without `/runner/wait` gets the 15 s
-  ticks only. launchd starts it again if it exits.
+- **Long-running.** A full tick every 15 s (poll, take, read each chat's agent, tidy); with many chats one can take
+  half a minute. A thread holds the Worker's long poll (`/runner/wait`). A message sent answers it, and a fast tick
+  (poll and take, with the builders' agents from the last full tick) claims the message in about a second: at once
+  between ticks, or after the chat being read within one. A Worker without `/runner/wait` gets the full ticks only.
+  launchd starts it again if it exits.
 - **One runner.** It waits while Agent Pager's old runner (`com.jai.agent-pager-feedback-runner`, `hub.feedback_runner`)
   is loaded or running, and holds `runner.lock` in its state folder against a second copy of itself.
 - **State.** `~/Library/Application Support/feedbackkit-runner/state.json`. On its first start, the old runner's
@@ -101,5 +102,5 @@ fail when the two differ.
 
 `~/Library/Logs/feedbackkit-runner.log`: `FEEDBACK chat=… message=… outcome=…` per message, `FEEDBACK_ORCA_DOWN
 host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
-JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`,
+JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
 `FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`.

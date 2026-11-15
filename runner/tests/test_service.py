@@ -5,23 +5,45 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from typing import Callable
 
 from feedbackkit_runner.runner import FeedbackApiError
-from feedbackkit_runner.service import FULL_TICK_SECONDS, Service, hold_lock, old_runner_running
+from feedbackkit_runner.service import Service, Waiter, hold_lock, old_runner_running
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 class FakeRunner:
-    def __init__(self) -> None:
-        self.ticks: list[bool] = []
+    """Each full tick takes `full_seconds` and, halfway, may see a message wake the runner (`wake_during`)."""
+
+    def __init__(self, clock: Clock, woke: threading.Event | None = None) -> None:
+        self.clock = clock
+        self.woke = woke
+        self.ticks: list[str] = []
         self.saved = 0
         self.fail = False
+        self.full_seconds = 30.0
+        self.wake_during = False
 
-    def tick(self, fast: bool = False) -> list[str]:
-        self.ticks.append(fast)
+    def tick(self, fast: bool = False, between: Callable[[], None] | None = None) -> list[str]:
+        self.ticks.append("fast" if fast else "full")
         if self.fail:
             raise FeedbackApiError("down")
+        if not fast:
+            if self.wake_during and self.woke is not None:
+                self.woke.set()
+            if between:
+                between()
+            self.clock.now += self.full_seconds
         return []
 
     def save(self) -> None:
@@ -33,87 +55,90 @@ class FakeApi:
 
     def __init__(self, answers: list[int | None | Exception]) -> None:
         self.answers = answers
-        self.calls: list[tuple[int | None, float]] = []
+        self.calls: list[int | None] = []
 
     def wait(self, since: int | None, seconds: float = 25) -> int | None:
-        self.calls.append((since, seconds))
+        self.calls.append(since)
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
         return answer
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 100.0
-        self.slept: list[float] = []
-
-    def __call__(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.now += seconds
-
-
-def service(answers: list[int | None | Exception]) -> tuple[Service, FakeRunner, FakeApi, Clock]:
-    runner, api, clock = FakeRunner(), FakeApi(answers), Clock()
-    loop = Service(runner, api, clock=clock, sleep=clock.sleep)  # type: ignore[arg-type]
-    loop.seq = 3
-    return loop, runner, api, clock
+def service() -> tuple[Service, FakeRunner, Clock]:
+    clock = Clock()
+    loop = Service(None, FakeApi([]), clock=clock)  # type: ignore[arg-type]
+    runner = FakeRunner(clock, loop.woke)
+    loop.runner = runner  # type: ignore[assignment]
+    return loop, runner, clock
 
 
 class ServiceTests(unittest.TestCase):
-    def test_a_wake_runs_a_fast_tick_at_once(self) -> None:
-        loop, runner, api, _ = service([4])
+    def test_a_wake_during_a_full_tick_takes_the_message_between_two_chats(self) -> None:
+        loop, runner, _ = service()
+        runner.wake_during = True
         loop.step()
-        self.assertEqual(runner.ticks, [False, True])
-        self.assertEqual(api.calls, [(3, FULL_TICK_SECONDS)])
-        self.assertEqual(loop.seq, 4)
+        self.assertEqual(runner.ticks, ["full", "fast"])
+        self.assertFalse(loop.woke.is_set())
 
-    def test_a_quiet_wait_runs_the_next_full_tick_on_time(self) -> None:
-        loop, runner, api, clock = service([3, 3])
-        loop.step()
-        clock.now = loop.next_full
-        loop.step()
-        self.assertEqual(runner.ticks, [False, False])
-        self.assertEqual(len(api.calls), 2)
+    def test_a_wake_after_a_full_tick_runs_a_fast_tick_before_the_next_full_one(self) -> None:
+        loop, runner, clock = service()
+        runner.full_seconds = 1.0
+        loop.woke.set()
 
-    def test_a_worker_without_the_long_poll_gets_sleeps(self) -> None:
-        loop, runner, api, clock = service([None])
-        loop.step()
-        loop.step()
-        self.assertFalse(loop.long_poll)
-        self.assertEqual(len(api.calls), 1)
-        self.assertEqual(runner.ticks, [False, False])
-        self.assertEqual(clock.slept, [FULL_TICK_SECONDS, FULL_TICK_SECONDS])
+        def tick(fast: bool = False, between: object = None) -> list[str]:
+            runner.ticks.append("fast" if fast else "full")
+            clock.now += 1.0 if not fast else 14.0
+            return []
 
-    def test_a_failed_wait_sleeps_to_the_next_full_tick(self) -> None:
-        loop, runner, _, clock = service([FeedbackApiError("down")])
+        runner.tick = tick  # type: ignore[method-assign]
         loop.step()
-        self.assertEqual(runner.ticks, [False])
-        self.assertEqual(clock.slept, [FULL_TICK_SECONDS])
-        self.assertTrue(loop.long_poll)
+        self.assertEqual(runner.ticks, ["full", "fast"])
+
+    def test_a_slow_full_tick_is_followed_by_the_next_at_once(self) -> None:
+        loop, runner, _ = service()
+        loop.step()
+        loop.step()
+        self.assertEqual(runner.ticks, ["full", "full"])
 
     def test_a_failed_poll_saves_and_goes_on(self) -> None:
-        loop, runner, _, _ = service([3])
+        loop, runner, _ = service()
         runner.fail = True
+        runner.full_seconds = 0
+        loop.clock = lambda: 1e9 if runner.ticks else 0.0  # the next full tick is due once this one has run
         loop.step()
         self.assertEqual(runner.saved, 1)
 
     def test_the_old_runner_back_stops_this_one_before_a_tick(self) -> None:
-        loop, runner, _, _ = service([])
+        loop, runner, _ = service()
         loop.old_runner = lambda: "com.jai.agent-pager-feedback-runner is loaded"
         with self.assertRaises(SystemExit):
             loop.step()
         self.assertEqual(runner.ticks, [])
 
-    def test_the_first_wait_learns_the_count_without_a_tick(self) -> None:
-        loop, runner, api, _ = service([9, 9])
-        loop.seq = None
-        loop.step()
-        self.assertEqual(runner.ticks, [False])
-        self.assertEqual(loop.seq, 9)
+
+class WaiterTests(unittest.TestCase):
+    def waiter(self, answers: list[int | None | Exception]) -> tuple[Waiter, FakeApi, list[float]]:
+        api, slept = FakeApi(answers), []
+        return Waiter(api, threading.Event(), slept.append), api, slept  # type: ignore[arg-type]
+
+    def test_the_first_answer_learns_the_count_and_a_new_count_wakes(self) -> None:
+        waiter, api, _ = self.waiter([5, 5, 6])
+        self.assertTrue(waiter.once())
+        self.assertTrue(waiter.once())
+        self.assertFalse(waiter.woke.is_set())
+        self.assertTrue(waiter.once())
+        self.assertTrue(waiter.woke.is_set())
+        self.assertEqual(api.calls, [None, 5, 5])
+
+    def test_a_worker_without_the_long_poll_ends_the_waiter(self) -> None:
+        waiter, _, _ = self.waiter([None])
+        self.assertFalse(waiter.once())
+
+    def test_a_failed_wait_pauses_and_tries_again(self) -> None:
+        waiter, _, slept = self.waiter([FeedbackApiError("down")])
+        self.assertTrue(waiter.once())
+        self.assertEqual(slept, [5])
 
 
 class TwoRunnerTests(unittest.TestCase):
