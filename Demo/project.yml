@@ -18,6 +18,12 @@ settings:
 packages:
   FeedbackKit:
     path: ..
+  AgentChatKit:
+    url: https://github.com/jai/agentchatkit
+    from: 0.1.0
+  DurableNetworking:
+    url: https://github.com/jai/durable-networking
+    from: 0.1.0
 targets:
   FeedbackDemo:
     type: application
@@ -25,6 +31,10 @@ targets:
     sources: [FeedbackDemo]
     dependencies:
       - package: FeedbackKit
+      - package: AgentChatKit
+        product: AgentChatLiveTesting
+      - package: DurableNetworking
+        product: DurableNetworking
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jaigovindani.feedbackkit.demo
@@ -38,7 +48,7 @@ targets:
   FeedbackDemoUITests:
     type: bundle.ui-testing
     supportedDestinations: [iOS]
-    sources: [FeedbackDemoUITests]
+    sources: [FeedbackDemoUITests, SharedUITests]
     dependencies:
       - target: FeedbackDemo
     settings:
@@ -47,7 +57,26 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: FeedbackDemo
+  FeedbackDemoMacUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [macOS]
+    sources: [FeedbackDemoMacUITests, SharedUITests]
+    dependencies:
+      - target: FeedbackDemo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jaigovindani.feedbackkit.demo.macuitests
+        CODE_SIGN_IDENTITY: "-"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FeedbackDemo
 schemes:
+  FeedbackDemoMac:
+    build:
+      targets:
+        FeedbackDemo: all
+    test:
+      targets:
+        - FeedbackDemoMacUITests
   FeedbackDemo:
     build:
       targets:
