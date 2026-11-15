@@ -5,7 +5,7 @@ import UIKit
 #endif
 
 extension View {
-    /// The list's column beside a conversation: the page's ground, lifted by a soft shadow, a hairline at its edge.
+    /// The list's column beside a conversation: the page's ground, and the system's divider at its edge.
     func sidebarSurface() -> some View {
         modifier(SidebarSurface())
     }
@@ -33,14 +33,16 @@ private struct SidebarSurface: ViewModifier {
             .background {
                 theme.groundPage
                     .ignoresSafeArea()
-                    .shadow(color: .black.opacity(0.3), radius: ChatSpace.sm, x: 2)
             }
+            // The system owns the divider's thickness and contrast.
             .overlay(alignment: .trailing) {
-                theme.line
-                    .frame(width: MarkdownStyle.hairline)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Divider()
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
     }
 }
