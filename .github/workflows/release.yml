@@ -23,6 +23,13 @@ jobs:
       contents: write
       actions: read
     steps:
+      # The jai-agents GitHub App token can create a tag over commits that change
+      # .github/workflows; github.token cannot (no workflows permission).
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: 5757830
+          private-key: ${{ secrets.JAI_AGENTS_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -32,4 +39,4 @@ jobs:
       - run: node --test 'release/*.test.mjs'
       - run: node release/release.mjs
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
