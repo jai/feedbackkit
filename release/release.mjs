@@ -9,7 +9,8 @@ import { nextVersion, PACKAGE_PATHS, releaseNotes } from './version.mjs';
 const repo = process.env.GITHUB_REPOSITORY ?? 'jai/feedbackkit';
 const token = process.env.GITHUB_TOKEN;
 const dryRun = process.argv.includes('--dry-run');
-const HOUR = 3600;
+// 50 minutes, not 60: the clock starts this on the hour, and the last release went out a little after the last start.
+const HOUR = 3000;
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
