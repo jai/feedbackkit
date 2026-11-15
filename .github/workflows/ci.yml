@@ -6,6 +6,12 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A newer push to main replaces the run before it: the hourly release takes the newest green commit,
+# so an older commit's run only holds a GitHub macOS runner others are waiting for.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     # GitHub's own Mac runner: free for a public repo.
