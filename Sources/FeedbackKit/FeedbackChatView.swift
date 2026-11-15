@@ -79,7 +79,8 @@ struct FeedbackChatView: View {
             messages: messages.map {
                 ChatMessage(
                     id: $0.id, role: $0.isJai ? .mine : .theirs,
-                    text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0))
+                    text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0)),
+                    hasExtras: $0.isJai && delivery(for: $0.id) != nil
                 )
             },
             sent: messages.count(where: \.isJai), readsEnd: $readsEnd, focus: $isWriting,
