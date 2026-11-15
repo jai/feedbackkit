@@ -114,7 +114,7 @@ public struct FeedbackRequestsView: View {
 
     private var split: some View {
         NavigationSplitView {
-            FeedbackListView(model: model, selected: selection, isStacked: false, customLabel: rowLabel, actions: rowActions) { route in
+            FeedbackListView(model: model, selected: selection, routeSelection: $selection, isStacked: false, customLabel: rowLabel, actions: rowActions) { route in
                 withAnimation(ChatMotion.swap) { selection = route }
             }
             // The app's readable width is the window's; this column is narrower than it.
@@ -186,6 +186,7 @@ private struct FeedbackListView: View {
     @Environment(\.chatTheme) private var theme
     let model: FeedbackRequestsModel
     let selected: FeedbackRoute?
+    var routeSelection: Binding<FeedbackRoute?>? = nil
     /// Pushed rows carry a chevron; rows beside their conversation are marked instead.
     let isStacked: Bool
     let customLabel: ((FeedbackThread) -> AnyView?)?
@@ -201,8 +202,17 @@ private struct FeedbackListView: View {
 
     private var selectedThread: String? { selected.flatMap(model.thread(for:)) }
 
+    private var threadSelection: Binding<String?>? {
+        guard let routeSelection else { return nil }
+        return Binding(
+            get: { routeSelection.wrappedValue.flatMap(model.thread(for:)) },
+            set: { routeSelection.wrappedValue = model.route(for: $0, keeping: routeSelection.wrappedValue) }
+        )
+    }
+
     var body: some View {
-        ChatThreadList(items: model.list.threads, title: \.title, actions: actions) { thread in
+        ChatThreadList(items: model.list.threads, title: \.title, actions: actions,
+                       selection: threadSelection, open: { open(.thread($0.id)) }) { thread in
             row(
                 route: .thread(thread.id), title: thread.title,
                 date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
@@ -262,13 +272,9 @@ private struct FeedbackListView: View {
                     HStack(spacing: ChatSpace.sm) {
                         if let date {
                             Text(ThreadTimeFormat().age(date, now: .now))
-                                .font(theme.font(.caption).monospacedDigit())
+                                .chatTextStyle(.meta)
+                                .monospacedDigit()
                                 .foregroundStyle(theme.inkQuiet)
-                        }
-                        if isStacked {
-                            Image(systemName: theme.symbols.drillIn)
-                                .font(theme.font(.caption).weight(.semibold))
-                                .foregroundStyle(.tertiary)
                         }
                     }
                 } chips: {
@@ -276,8 +282,6 @@ private struct FeedbackListView: View {
                 }
             }
         }
-        .padding(.horizontal, ChatSpace.lg)
-        .padding(.vertical, ChatSpace.md)
         .background(theme.groundCard)
         .selected(isSelected && !isStacked)
         .contentShape(.rect)

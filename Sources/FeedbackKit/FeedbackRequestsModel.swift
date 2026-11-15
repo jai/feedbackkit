@@ -77,6 +77,12 @@ public final class FeedbackRequestsModel {
         }
     }
 
+    /// Native selection may echo the same thread after a refresh. Keep its starting route and draft box then.
+    func route(for selection: String?, keeping current: FeedbackRoute?) -> FeedbackRoute? {
+        if current.flatMap(thread(for:)) == selection { return current }
+        return selection.map(FeedbackRoute.thread)
+    }
+
     /// A new conversation to write in: the one already started and still empty, else a fresh one.
     func compose(reusing route: FeedbackRoute?) -> FeedbackRoute {
         if case .new(let id) = route, started[id] == nil {
