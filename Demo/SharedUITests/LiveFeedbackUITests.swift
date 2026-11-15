@@ -27,11 +27,14 @@ final class LiveFeedbackUITests: XCTestCase {
 
     func testQueuedWordsAppearOnceAndSharedActionsReachACP() {
         launch("queue")
+        // The conversation loads after the row opens it; count once it shows.
+        XCTAssertTrue(element("feedback-edit-edit").waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(
             format: "label == %@ OR value == %@", "Edit these queued words", "Edit these queued words"
         )).count, 1)
         activate(element("feedback-edit-edit"))
-        let field = app.textViews["sessionReplyField"]
+        // A text view on iPhone, a text field on the Mac.
+        let field = element("sessionReplyField")
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let draft = NSPredicate(format: "value CONTAINS %@", "Edit these queued words")
         let filled = XCTNSPredicateExpectation(predicate: draft, object: field)
@@ -104,10 +107,14 @@ final class LiveFeedbackUITests: XCTestCase {
 
     private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
     private func text(_ value: String) -> XCUIElement {
-        // A Mac StaticText holds its words in value, not label.
-        app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value)
-        ).firstMatch
+        // A Mac StaticText holds its words in value, not label. On the Mac, reading every element's value timed out
+        // ("Timed out while evaluating UI query"), so only static texts are read there.
+        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value)
+        #if os(macOS)
+        return app.staticTexts.matching(predicate).firstMatch
+        #else
+        return app.descendants(matching: .any).matching(predicate).firstMatch
+        #endif
     }
 
     private func capture(_ name: String) {

@@ -127,6 +127,9 @@ public struct FeedbackRequestsView: View {
             }
             // The app's readable width is the window's; this column is narrower than it.
             .contentMargins(.horizontal, 0, for: .scrollContent)
+            // Without a width of its own the Mac lays the list out at 140 points: rows wrap word by word and New
+            // feedback, the column's toolbar item, falls into the toolbar's overflow menu.
+            .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
             .navigationTitle("Feedback")
             .sidebarSurface()
             .toolbar {
