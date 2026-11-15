@@ -1,27 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { FeedbackStore } from "../src/feedback.ts";
-import { addIssueFeedback, chatOfRef, type IssueFeedback, issueChat, issueThreads, isImageName } from "../src/feedback-issues.ts";
-
-function memoryStore(): FeedbackStore {
-  const objects = new Map<string, string>();
-  return {
-    async get<T>(key: string) {
-      const body = objects.get(key);
-      return body ? { value: JSON.parse(body) as T, etag: "v" } : null;
-    },
-    async put(key, value) {
-      objects.set(key, JSON.stringify(value));
-      return true;
-    },
-    async list(prefix) {
-      return [...objects.keys()].filter((key) => key.startsWith(prefix));
-    },
-    async delete(key) {
-      objects.delete(key);
-    },
-  };
-}
+import { senderStore } from "../src/feedback.ts";
+import { memoryBucket, memoryD1 } from "./d1.ts";
+import { addIssueFeedback, type IssueFeedback, issueChat, issueThreads, isImageName } from "../src/feedback-issues.ts";
 
 function world() {
   const opened: Array<{ title: string; body: string }> = [];
@@ -29,7 +10,7 @@ function world() {
   const images: string[] = [];
   let clock = Date.parse("2026-11-12T10:00:00Z");
   const context: IssueFeedback = {
-    store: memoryStore(),
+    store: senderStore(memoryD1(), memoryBucket(), "prhub", "octocat"),
     images: { async put(name) { images.push(name); } },
     issues: {
       async open(title, body) {
@@ -91,14 +72,12 @@ test("a reply to a chat that does not exist is refused, and only random image na
   assert.equal(isImageName(`${"a".repeat(32)}.png`), true);
 });
 
-test("sends at once all keep, and a retried new chat finds the chat it made", async () => {
+test("sends at once all keep", async () => {
   const { context } = world();
   const [a, b] = await Promise.all(["first", "second"].map((text) =>
-    addIssueFeedback(context, null, { text, build: null, images: [] }, text)));
+    addIssueFeedback(context, null, { text, build: null, images: [] })));
   assert.deepEqual(new Set((await issueThreads(context.store)).map((thread) => thread.id)), new Set([a, b]));
   await Promise.all(["one", "two"].map((text) => addIssueFeedback(context, a, { text, build: null, images: [] })));
   const mine = (await issueChat(context, a!))!.messages.filter((message) => message.role === "you").map((m) => m.text);
   assert.deepEqual(mine.sort(), ["first", "one", "two"]);
-  assert.equal(await chatOfRef(context.store, "second"), b);
-  assert.equal(await chatOfRef(context.store, "third"), null);
 });

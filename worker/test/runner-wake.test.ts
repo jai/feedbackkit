@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type FeatureKitEnv, serveFeatureKit } from "../src/featurekit.ts";
 import { RunnerWake, WAIT_MS } from "../src/runner-wake.ts";
+import { memoryBucket, memoryD1 } from "./d1.ts";
 
 /** The binding as the Worker sees it, over one RunnerWake. */
 function namespace(wake: RunnerWake): DurableObjectNamespace {
@@ -11,40 +12,11 @@ function namespace(wake: RunnerWake): DurableObjectNamespace {
   } as unknown as DurableObjectNamespace;
 }
 
-function memoryBucket(): R2Bucket {
-  const objects = new Map<string, { body: string; etag: string }>();
-  let version = 0;
-  const object = (key: string) => {
-    const found = objects.get(key)!;
-    return { key, etag: found.etag, json: async () => JSON.parse(found.body), body: found.body, httpMetadata: {} };
-  };
-  return {
-    async get(key: string) {
-      return objects.has(key) ? object(key) : null;
-    },
-    async put(key: string, value: unknown, options?: { onlyIf?: { etagMatches?: string } | Headers }) {
-      const onlyIf = options?.onlyIf;
-      if (onlyIf instanceof Headers ? onlyIf.get("If-None-Match") === "*" && objects.has(key)
-        : onlyIf?.etagMatches && objects.get(key)?.etag !== onlyIf.etagMatches) {
-        return null;
-      }
-      objects.set(key, { body: typeof value === "string" ? value : "bytes", etag: `v${++version}` });
-      return object(key);
-    },
-    async list({ prefix }: { prefix: string }) {
-      return { objects: [...objects.keys()].filter((key) => key.startsWith(prefix)).map((key) => ({ key })), truncated: false };
-    },
-    async delete(key: string) {
-      objects.delete(key);
-    },
-  } as unknown as R2Bucket;
-}
-
 const APPS = JSON.stringify({ prhub: { repo: "acme/app", owners: ["octocat"], builders: [], issues: false } });
 
 function env(wake?: RunnerWake): FeatureKitEnv {
   return {
-    FEEDBACK: memoryBucket(), APPS, CALLER_TOKEN: "caller", RUNNER_TOKEN: "runner",
+    FEEDBACK: memoryBucket(), DB: memoryD1(), APPS, CALLER_TOKEN: "caller", RUNNER_TOKEN: "runner",
     RUNNER_WAKE: wake ? namespace(wake) : undefined,
   };
 }

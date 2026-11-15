@@ -514,6 +514,14 @@ def sender_of(item: JsonObject) -> Sender | None:
     return {"app": app, "login": login, "repo": repo, "role": str(role)}
 
 
+def name_of(item: JsonObject) -> str | None:
+    """How the sender's app names them ("Jai"), when the work item says: at most 60 characters on one line."""
+    name = item.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 60 or "\n" in name or "\r" in name:
+        return None
+    return name.strip()
+
+
 def clone_path(repo: str, chat: str) -> str:
     """A chat's own full clone, as chats started before 2026-11-14 have: ~/Developer/<repo name>_fb-<8 hex of its id>."""
     return f"{CLONES}/{repo.split('/')[-1]}_fb-{chat[3:11]}"
@@ -749,10 +757,11 @@ class Runner:
         self.save()
         outcome: Outcome
         try:
+            who = name_of(item) or sender["login"]
             if claimed.get("first"):
-                outcome = self.start(builder, chat, message, claimed, sender)
+                outcome = self.start(builder, chat, message, claimed, sender, who)
             else:
-                outcome = self.tell(builder, chat, message, clone, claimed, sender)
+                outcome = self.tell(builder, chat, message, clone, claimed, sender, who)
         except (RuntimeError, ValueError) as failure:
             outcome = {"status": "failed", "how": None, "detail": str(failure)[:300]}
         entry = self.state["journal"][key]
@@ -767,9 +776,12 @@ class Runner:
             outcome.get("detail") or "-",
         )
 
-    def start(self, builder: Builder, chat: str, message: str, claimed: JsonObject, sender: Sender) -> Outcome:
+    def start(
+        self, builder: Builder, chat: str, message: str, claimed: JsonObject, sender: Sender, who: str = ""
+    ) -> Outcome:
         """The app's feedback project on the builder (cloned, fetched and added to Orca the first time), the
-        screenshots under its tmp/, and one `orca worktree create` that makes the chat's worktree and launches Codex."""
+        screenshots under its tmp/, and one `orca worktree create` that makes the chat's worktree and launches Codex.
+        `who` is how the sender's app names them, else their login."""
         base, name = project_path(sender["app"]), worktree_name(chat)
         builder.cube.clone(base, sender["repo"])
         project = builder.orca.project(base, project_name(sender["app"]))
@@ -777,7 +789,7 @@ class Runner:
         prompt = first_prompt(
             fields(
                 sender["app"],
-                sender["login"],
+                who or sender["login"],
                 sender["role"],
                 sender["repo"],
                 str(claimed.get("build") or ""),
@@ -805,7 +817,14 @@ class Runner:
         return {"status": "delivered", "how": "orca_launch", "detail": None}
 
     def tell(
-        self, builder: Builder, chat: str, message: str, clone: str, claimed: JsonObject, sender: Sender
+        self,
+        builder: Builder,
+        chat: str,
+        message: str,
+        clone: str,
+        claimed: JsonObject,
+        sender: Sender,
+        who: str = "",
     ) -> Outcome:
         """Into the chat's Orca chat, as a thread reply goes. A full clone tidied away before worktrees is made again;
         a worktree tidied away is not, as Orca stopped its chat with it."""
@@ -839,9 +858,9 @@ class Runner:
             known["removed"] = False
         paths = builder.cube.save_images(f"{clone}/tmp/feedback", message, claimed.get("images") or [])
         text = (
-            later_prefix(sender["app"], sender["login"])
+            later_prefix(sender["app"], who or sender["login"])
             + str(claimed.get("text") or "")
-            + (image_note(paths, sender["login"]) if paths else "")
+            + (image_note(paths, who or sender["login"]) if paths else "")
         )
         job: DeliveryJob = {"app": thread["app"], "session_id": thread["session_id"], "cwd": clone, "text": text}
         outcome = self.deliver(builder.cube.machine, job)

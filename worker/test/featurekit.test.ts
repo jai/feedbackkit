@@ -1,37 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type FeatureKitEnv, parseApps, roleOf, serveFeatureKit, takeIssue } from "../src/featurekit.ts";
-import { r2Store } from "../src/feedback.ts";
-
-/** R2 as the FeedbackKit Worker uses it: versions, a put over a moved version refused, prefix listing. */
-function memoryBucket(): R2Bucket {
-  const objects = new Map<string, { body: string; etag: string }>();
-  let version = 0;
-  const object = (key: string) => {
-    const found = objects.get(key)!;
-    return { key, etag: found.etag, json: async () => JSON.parse(found.body), body: found.body, httpMetadata: {} };
-  };
-  return {
-    async get(key: string) {
-      return objects.has(key) ? object(key) : null;
-    },
-    async put(key: string, value: unknown, options?: { onlyIf?: { etagMatches?: string } | Headers }) {
-      const onlyIf = options?.onlyIf;
-      if (onlyIf instanceof Headers ? onlyIf.get("If-None-Match") === "*" && objects.has(key)
-        : onlyIf?.etagMatches && objects.get(key)?.etag !== onlyIf.etagMatches) {
-        return null;
-      }
-      objects.set(key, { body: typeof value === "string" ? value : "bytes", etag: `v${++version}` });
-      return object(key);
-    },
-    async list({ prefix }: { prefix: string }) {
-      return { objects: [...objects.keys()].filter((key) => key.startsWith(prefix)).map((key) => ({ key })), truncated: false };
-    },
-    async delete(key: string) {
-      objects.delete(key);
-    },
-  } as unknown as R2Bucket;
-}
+import { senderStore } from "../src/feedback.ts";
+import { memoryBucket, memoryD1 } from "./d1.ts";
 
 const APPS = JSON.stringify({
   prhub: { repo: "acme/app", owners: ["Octocat"], builders: ["hubot"], issues: true },
@@ -39,7 +10,7 @@ const APPS = JSON.stringify({
 });
 
 function env(): FeatureKitEnv {
-  return { FEEDBACK: memoryBucket(), APPS, CALLER_TOKEN: "caller", RUNNER_TOKEN: "runner" };
+  return { FEEDBACK: memoryBucket(), DB: memoryD1(), APPS, CALLER_TOKEN: "caller", RUNNER_TOKEN: "runner" };
 }
 
 function fromApp(e: FeatureKitEnv, path: string, login: string, body?: unknown, app = "prhub") {
@@ -94,9 +65,31 @@ test("nobody reaches feedback without the app Worker's or the runner's token, an
 });
 
 test("sends at once each take their own place under the daily issue cap", async () => {
-  const store = r2Store(memoryBucket());
+  const store = senderStore(memoryD1(), memoryBucket(), "prhub", "octocat");
   const now = Date.parse("2026-11-12T10:00:00Z");
   const taken = await Promise.all(Array.from({ length: 14 }, () => takeIssue(store, now)));
   assert.equal(taken.filter(Boolean).length, 10);
   assert.equal(await takeIssue(store, now + 86_400_001), true, "a day later there is room again");
+});
+
+test("the app may name its sender; the runner's work carries the name, and the list each chat's thread", async () => {
+  const e = env();
+  const named = await serveFeatureKit(new Request("https://kit.example/feedback", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer caller", "X-FeedbackKit-App": "pager", "X-FeedbackKit-Login": "Octocat",
+      "X-FeedbackKit-Name": "Octo Cat",
+    },
+    body: JSON.stringify({ text: "Bigger clock" }),
+  }), e);
+  const chat = await named.json();
+  const { work } = await (await fromRunner(e, "poll", { orca: true })).json();
+  assert.deepEqual(work.map((item: Record<string, unknown>) => [item.chat, item.login, item.name]), [[chat.id, "octocat", "Octo Cat"]]);
+  await fromRunner(e, "agent", {
+    app: "pager", login: "octocat", chat: chat.id, messages: [], isWorking: true, activity: null,
+    thread: { host: "borg-cube-03", id: "orca-codex:1" },
+  });
+  const list = await (await fromApp(e, "/feedback", "octocat", undefined, "pager")).json();
+  assert.deepEqual(list.threads.map((row: { id: string; thread: unknown }) => [row.id, row.thread]),
+    [[chat.id, { host: "borg-cube-03", id: "orca-codex:1" }]]);
 });

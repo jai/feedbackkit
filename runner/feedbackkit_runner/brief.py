@@ -41,12 +41,13 @@ def app_name(app: str) -> str:
     return APP_NAMES.get(app, app.replace("-", " ").title())
 
 
-def fields(app: str, login: str, role: str, repo: str, build: str, screenshot_paths: list[str], text: str) -> dict[str, str]:
-    """The template's fields from the work item: its app, sender (their GitHub login), role, repo, build, the paths the
-    runner saved its screenshots to, and its words. KeyError for a role with no coding thread."""
+def fields(app: str, sender: str, role: str, repo: str, build: str, screenshot_paths: list[str], text: str) -> dict[str, str]:
+    """The template's fields from the work item: its app, its sender (the name their app gives them, else their GitHub
+    login), role, repo, build, the paths the runner saved its screenshots to, and its words. KeyError for a role with
+    no coding thread."""
     return {
         "app_name": app_name(app),
-        "sender": login,
+        "sender": sender,
         "role": role,
         "repo": repo,
         "role_action": ROLE_ACTIONS[role],
@@ -61,6 +62,6 @@ def first_prompt(filled: dict[str, str]) -> str:
     return TEMPLATE.format(**filled)
 
 
-def later_prefix(app: str, login: str) -> str:
+def later_prefix(app: str, sender: str) -> str:
     """What goes before a later message's words: "{sender} via {app_name}: "."""
-    return LATER_PREFIX.format(sender=login, app_name=app_name(app))
+    return LATER_PREFIX.format(sender=sender, app_name=app_name(app))

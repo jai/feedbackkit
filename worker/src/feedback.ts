@@ -23,19 +23,16 @@ const DELIVERY_STUCK_MS = 15 * 60_000;
 const MAX_AGENT_MESSAGES = 500;
 const MAX_AGENT_TEXT = 20_000;
 
-const LIST_KEY = "feedback/chats.json";
-const RUNNER_KEY = "feedback/runner.json";
-const PENDING_PREFIX = "feedback/pending/";
-const chatPrefix = (chat: string) => `feedback/chats/${chat}/`;
-const messageKey = (chat: string, message: StoredMessage) => `${chatPrefix(chat)}m/${message.at}-${message.id}.json`;
-const imageKey = (chat: string, message: string, index: number) => `${chatPrefix(chat)}img/${message}/${index}.json`;
-const agentKey = (chat: string) => `${chatPrefix(chat)}agent.json`;
-const pendingKey = (chat: string, message: StoredMessage) => `${PENDING_PREFIX}${message.at}-${chat}-${message.id}`;
+/** Under each sender's R2 prefix: a message's screenshots, as `{media_type, data}` JSON. */
+export const imageKey = (prefix: string, chat: string, message: string, index: number) =>
+  `${prefix}feedback/chats/${chat}/img/${message}/${index}.json`;
 
 export interface FeedbackThread {
   id: string;
   title: string;
   createdAt: string;
+  /** The chat's coding thread, once the runner has found it; issue chats have none. */
+  thread?: AgentSide["thread"];
 }
 
 export interface FeedbackImage {
@@ -51,10 +48,10 @@ export interface FeedbackInput {
   images: FeedbackImage[];
 }
 
-type MessageStatus = "pending" | "delivering" | "delivered" | "failed";
+export type MessageStatus = "pending" | "delivering" | "delivered" | "failed";
 
 /** One of Jai's messages, as kept. Only the app's POST writes a new one; only the runner's claim and result change it. */
-interface StoredMessage {
+export interface StoredMessage {
   id: string;
   /** Epoch ms when the Worker took it: orders the chat and the queue. */
   at: number;
@@ -101,46 +98,86 @@ export interface RunnerWork {
   message: string;
   first: boolean;
   at: number;
+  /** How the sender's app names them ("Jai"); null: by their login. */
+  name: string | null;
+}
+
+/** R2, as this needs it for screenshots. */
+export interface ImageBucket {
+  put(key: string, value: string): Promise<unknown>;
+  get(key: string): Promise<{ json<T>(): Promise<T> } | null>;
 }
 
 /**
- * The little of R2 this needs, so a test can stand in for it. `put` with an etag writes only over that version, and
- * with an empty one only where nothing is yet.
+ * One sender's corner of FeedbackKit's store (docs/worker.md#storage): their chats in D1, their screenshots in R2
+ * under `prefix`. `name` is how their app names them, when it does.
  */
 export interface FeedbackStore {
-  get<T>(key: string): Promise<{ value: T; etag: string } | null>;
-  put(key: string, value: unknown, ifEtag?: string): Promise<boolean>;
-  list(prefix: string): Promise<string[]>;
-  delete(key: string): Promise<void>;
+  db: D1Database;
+  bucket: ImageBucket;
+  app: string;
+  /** Lower-case. */
+  login: string;
+  prefix: string;
+  name?: string | null;
 }
 
-export function r2Store(bucket: R2Bucket): FeedbackStore {
+export function senderStore(
+  db: D1Database, bucket: ImageBucket, app: string, login: string, name: string | null = null,
+): FeedbackStore {
+  const lower = login.toLowerCase();
+  return { db, bucket, app, login: lower, prefix: `apps/${app}/users/${lower}/`, name };
+}
+
+interface ChatRow {
+  id: string;
+  title: string;
+  created_at: number;
+  agent: string | null;
+  thread_host: string | null;
+  thread_id: string | null;
+  sender_name: string | null;
+}
+
+interface MessageRow {
+  id: string;
+  at: number;
+  text: string;
+  build: string | null;
+  images: number;
+  first: number;
+  status: MessageStatus | null;
+  claimed_at: number | null;
+  detail: string | null;
+}
+
+function stored(row: MessageRow): StoredMessage {
   return {
-    async get<T>(key: string) {
-      const object = await bucket.get(key);
-      return object ? { value: await object.json<T>(), etag: object.etag } : null;
-    },
-    async put(key, value, ifEtag) {
-      const body = JSON.stringify(value);
-      // An empty etag writes only where nothing is yet.
-      const onlyIf = ifEtag === "" ? new Headers({ "If-None-Match": "*" }) : ifEtag ? { etagMatches: ifEtag } : undefined;
-      const written = await bucket.put(key, body, onlyIf ? { onlyIf } : undefined);
-      return written !== null;
-    },
-    async list(prefix) {
-      const keys: string[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await bucket.list({ prefix, cursor });
-        keys.push(...page.objects.map((object) => object.key));
-        cursor = page.truncated ? page.cursor : undefined;
-      } while (cursor);
-      return keys;
-    },
-    async delete(key) {
-      await bucket.delete(key);
-    },
+    id: row.id, at: row.at, text: row.text, build: row.build, images: row.images, first: row.first === 1,
+    status: row.status ?? "delivered", claimedAt: row.claimed_at, detail: row.detail,
   };
+}
+
+/** The sender's chat of this kind; null when it is not theirs or not there. */
+async function chatRow(store: FeedbackStore, chat: string, kind: "agent" | "issue" = "agent"): Promise<ChatRow | null> {
+  if (!CHAT_ID.test(chat)) {
+    return null;
+  }
+  return store.db.prepare(
+    "SELECT id, title, created_at, agent, thread_host, thread_id, sender_name FROM chats"
+      + " WHERE id = ? AND app = ? AND login = ? AND kind = ?",
+  ).bind(chat, store.app, store.login, kind).first<ChatRow>();
+}
+
+/** The chat a send with this `client_ref` key made, if one did. */
+export async function chatOfRef(store: FeedbackStore, key: string): Promise<string | null> {
+  return store.db.prepare("SELECT chat FROM refs WHERE app = ? AND login = ? AND key = ?")
+    .bind(store.app, store.login, key).first<string>("chat");
+}
+
+export async function keepRef(store: FeedbackStore, key: string, chat: string): Promise<void> {
+  await store.db.prepare("INSERT OR IGNORE INTO refs (app, login, key, chat) VALUES (?, ?, ?, ?)")
+    .bind(store.app, store.login, key, chat).run();
 }
 
 export function isFeedbackId(id: string): boolean {
@@ -194,8 +231,20 @@ export function titleOf(text: string): string {
   return line.length > 60 ? `${line.slice(0, 59)}…` : line;
 }
 
-async function threads(store: FeedbackStore): Promise<FeedbackThread[]> {
-  return (await store.get<FeedbackThread[]>(LIST_KEY))?.value ?? [];
+async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"): Promise<FeedbackThread[]> {
+  const { results } = await store.db.prepare(
+    "SELECT id, title, created_at, thread_host, thread_id FROM chats WHERE app = ? AND login = ? AND kind = ?"
+      + " ORDER BY created_at DESC",
+  ).bind(store.app, store.login, kind).all<ChatRow>();
+  return results.map((row) => ({
+    id: row.id, title: row.title, createdAt: new Date(row.created_at).toISOString(),
+    ...(kind === "agent" ? { thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null } : {}),
+  }));
+}
+
+/** An issue sender's chats, newest first. */
+export async function issueThreadList(store: FeedbackStore): Promise<FeedbackThread[]> {
+  return threads(store, "issue");
 }
 
 /** The runner's last poll, as it left it: when, whether its Mac's Orca answered, and why not. */
@@ -227,7 +276,9 @@ export function builderStatusOf(beat: RunnerBeat | null, now: number): BuilderSt
 }
 
 async function builderStatus(store: FeedbackStore, now: number): Promise<BuilderStatus> {
-  return builderStatusOf((await store.get<RunnerBeat>(RUNNER_KEY))?.value ?? null, now);
+  const beat = await store.db.prepare("SELECT at, orca, detail FROM runner_beat WHERE id = 1")
+    .first<{ at: number; orca: number; detail: string | null }>();
+  return builderStatusOf(beat ? { at: beat.at, orca: beat.orca === 1, detail: beat.detail } : null, now);
 }
 
 async function builderOnline(store: FeedbackStore, now: number): Promise<boolean> {
@@ -248,13 +299,11 @@ export function listServedLog(status: BuilderStatus, threadCount: number, now: n
   });
 }
 
-async function messagesOf(store: FeedbackStore, chat: string): Promise<Array<{ key: string; message: StoredMessage; etag: string }>> {
-  const keys = (await store.list(`${chatPrefix(chat)}m/`)).sort();
-  const found = await Promise.all(keys.map(async (key) => {
-    const got = await store.get<StoredMessage>(key);
-    return got ? { key, message: got.value, etag: got.etag } : null;
-  }));
-  return found.filter((one) => one !== null);
+async function messagesOf(store: FeedbackStore, chat: string): Promise<StoredMessage[]> {
+  const { results } = await store.db.prepare(
+    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages WHERE chat = ? ORDER BY at, id",
+  ).bind(chat).all<MessageRow>();
+  return results.map(stored);
 }
 
 /** What the chat says of a message the runner took and never reported on. */
@@ -267,13 +316,12 @@ function effectiveStatus(message: StoredMessage, now: number): { status: Message
 
 /** Null for a chat that does not exist. */
 export async function feedbackChat(store: FeedbackStore, chat: string, now: number): Promise<FeedbackChat | null> {
-  const [mine, agent, online] = await Promise.all([
-    messagesOf(store, chat), store.get<AgentSide>(agentKey(chat)), builderOnline(store, now),
-  ]);
-  if (mine.length === 0) {
+  const row = await chatRow(store, chat);
+  if (!row) {
     return null;
   }
-  return chatView(chat, mine.map(({ message }) => message), agent?.value ?? null, online, now);
+  const [mine, online] = await Promise.all([messagesOf(store, chat), builderOnline(store, now)]);
+  return chatView(chat, mine, row.agent ? JSON.parse(row.agent) as AgentSide : null, online, now);
 }
 
 /** Jai's messages and the agent's, in time order; working from a send until the agent's turn is over. */
@@ -311,53 +359,76 @@ export function chatView(
   };
 }
 
-/** A message from Jai: a new chat when `chat` is null, else the next in that chat. Null: no such chat. */
+/**
+ * A message from the sender: a new chat when `chat` is null, else the next in that chat. Null: no such chat. The
+ * screenshots go to R2 first, then the chat and the message to D1 in one transaction: once this answers, the message
+ * is kept (one checkmark).
+ */
 export async function addFeedback(
   store: FeedbackStore, chat: string | null, input: FeedbackInput, now: number,
 ): Promise<string | null> {
-  const id = chat ?? newId("fb");
-  if (chat && (await store.list(`${chatPrefix(chat)}m/`)).length === 0) {
+  if (chat && !(await chatRow(store, chat))) {
     return null;
   }
-  const message: StoredMessage = {
-    id: newId("m"), at: now, text: input.text, build: input.build, images: input.images.length, first: chat === null,
-    status: "pending", claimedAt: null, detail: null,
-  };
-  await Promise.all(input.images.map((image, index) => store.put(imageKey(id, message.id, index), image)));
-  await store.put(messageKey(id, message), message);
-  await store.put(pendingKey(id, message), { chat: id, message: message.id });
+  const id = chat ?? newId("fb");
+  const message = newId("m");
+  const keys = input.images.map((_, index) => imageKey(store.prefix, id, message, index));
+  await Promise.all(input.images.map((image, index) => store.bucket.put(keys[index], JSON.stringify(image))));
+  const writes: D1PreparedStatement[] = [];
   if (chat === null) {
-    const list = await threads(store);
-    await store.put(LIST_KEY, [{ id, title: titleOf(input.text), createdAt: new Date(now).toISOString() }, ...list]);
+    writes.push(store.db.prepare(
+      "INSERT INTO chats (id, app, login, kind, title, created_at, sender_name) VALUES (?, ?, ?, 'agent', ?, ?, ?)",
+    ).bind(id, store.app, store.login, titleOf(input.text), now, store.name ?? null));
+  } else if (store.name) {
+    writes.push(store.db.prepare("UPDATE chats SET sender_name = ? WHERE id = ?").bind(store.name, id));
   }
+  writes.push(store.db.prepare(
+    "INSERT INTO messages (id, chat, at, text, build, images, first, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0));
+  input.images.forEach((image, index) => writes.push(store.db.prepare(
+    "INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)",
+  ).bind(message, index, keys[index], image.media_type)));
+  await store.db.batch(writes);
   return id;
 }
 
 // --- The runner ------------------------------------------------------------------------------------------------------
 
-/** A poll: the runner is alive (and whether its Mac answers), and the messages it has not taken. */
+/** The runner's beat: it is alive, and whether its Mac's Orca answers. */
+export async function runnerBeat(db: D1Database, orca: boolean, now: number, detail: string | null = null): Promise<void> {
+  await db.prepare(
+    "INSERT INTO runner_beat (id, at, orca, detail) VALUES (1, ?, ?, ?)"
+      + " ON CONFLICT (id) DO UPDATE SET at = excluded.at, orca = excluded.orca, detail = excluded.detail",
+  ).bind(now, orca ? 1 : 0, orca ? null : detail?.slice(0, 200) ?? null).run();
+}
+
+/** A poll for one sender: the runner is alive (and whether its Mac answers), and the messages it has not taken. */
 export async function runnerPoll(
   store: FeedbackStore, orca: boolean, now: number, detail: string | null = null,
 ): Promise<RunnerWork[]> {
-  await store.put(RUNNER_KEY, { at: now, orca, detail: orca ? null : detail?.slice(0, 200) ?? null });
-  const keys = (await store.list(PENDING_PREFIX)).sort();
-  const work = await Promise.all(keys.map(async (key) => {
-    const marker = (await store.get<{ chat: string; message: string }>(key))?.value;
-    const found = marker ? await findMessage(store, marker.chat, marker.message) : null;
-    if (!found || found.message.status !== "pending") {
-      await store.delete(key);
-      return null;
-    }
-    return { chat: marker!.chat, message: found.message.id, first: found.message.first, at: found.message.at };
-  }));
-  return work.filter((one) => one !== null);
+  await runnerBeat(store.db, orca, now, detail);
+  return pendingWork(store);
 }
 
-async function findMessage(store: FeedbackStore, chat: string, id: string) {
-  if (!CHAT_ID.test(chat) || !MESSAGE_ID.test(id)) {
+export async function pendingWork(store: FeedbackStore): Promise<RunnerWork[]> {
+  const { results } = await store.db.prepare(
+    "SELECT m.chat AS chat, m.id AS message, m.first AS first, m.at AS at, c.sender_name AS name"
+      + " FROM messages m JOIN chats c ON c.id = m.chat"
+      + " WHERE m.status = 'pending' AND c.app = ? AND c.login = ? AND c.kind = 'agent' ORDER BY m.at, m.id",
+  ).bind(store.app, store.login).all<{ chat: string; message: string; first: number; at: number; name: string | null }>();
+  return results.map((row) => ({
+    chat: row.chat, message: row.message, first: row.first === 1, at: row.at, name: row.name,
+  }));
+}
+
+async function findMessage(store: FeedbackStore, chat: string, id: string): Promise<StoredMessage | null> {
+  if (!MESSAGE_ID.test(id) || !(await chatRow(store, chat))) {
     return null;
   }
-  return (await messagesOf(store, chat)).find(({ message }) => message.id === id) ?? null;
+  const row = await store.db.prepare(
+    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages WHERE id = ? AND chat = ?",
+  ).bind(id, chat).first<MessageRow>();
+  return row ? stored(row) : null;
 }
 
 export type ClaimAnswer =
@@ -370,19 +441,19 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
   if (!found) {
     return { ok: false, status: 404 };
   }
-  if (found.message.status !== "pending") {
+  const claimed = await store.db.prepare(
+    "UPDATE messages SET status = 'delivering', claimed_at = ? WHERE id = ? AND chat = ? AND status = 'pending'",
+  ).bind(now, id, chat).run();
+  if (!claimed.meta.changes) {
     return { ok: false, status: 409 };
   }
-  const claimed: StoredMessage = { ...found.message, status: "delivering", claimedAt: now };
-  if (!(await store.put(found.key, claimed, found.etag))) {
-    return { ok: false, status: 409 };
-  }
-  await store.delete(pendingKey(chat, found.message));
-  const images = await Promise.all(Array.from({ length: found.message.images }, async (_, index) =>
-    (await store.get<FeedbackImage>(imageKey(chat, id, index)))?.value));
-  const title = (await threads(store)).find((thread) => thread.id === chat)?.title ?? titleOf(found.message.text);
+  const { results } = await store.db.prepare("SELECT r2_key FROM images WHERE message = ? ORDER BY idx")
+    .bind(id).all<{ r2_key: string }>();
+  const images = await Promise.all(results.map(async ({ r2_key }) =>
+    (await (await store.bucket.get(r2_key))?.json<FeedbackImage>()) ?? undefined));
+  const title = (await chatRow(store, chat))?.title ?? titleOf(found.text);
   return {
-    ok: true, text: found.message.text, build: found.message.build, first: found.message.first,
+    ok: true, text: found.text, build: found.build, first: found.first,
     images: images.filter((image) => image !== undefined), title,
   };
 }
@@ -391,15 +462,13 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
 export async function runnerResult(
   store: FeedbackStore, chat: string, id: string, delivered: boolean, detail: string | null,
 ): Promise<404 | 409 | 200> {
-  const found = await findMessage(store, chat, id);
-  if (!found) {
+  if (!(await findMessage(store, chat, id))) {
     return 404;
   }
-  if (found.message.status !== "delivering") {
-    return 409;
-  }
-  const done: StoredMessage = { ...found.message, status: delivered ? "delivered" : "failed", detail: delivered ? null : detail };
-  return (await store.put(found.key, done, found.etag)) ? 200 : 409;
+  const done = await store.db.prepare(
+    "UPDATE messages SET status = ?, detail = ? WHERE id = ? AND chat = ? AND status = 'delivering'",
+  ).bind(delivered ? "delivered" : "failed", delivered ? null : detail, id, chat).run();
+  return done.meta.changes ? 200 : 409;
 }
 
 /** The runner's look at the agent: its messages so far, whether it is working, and where it runs. */
@@ -425,9 +494,8 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
 }
 
 export async function runnerAgent(store: FeedbackStore, chat: string, agent: AgentSide): Promise<404 | 200> {
-  if (!CHAT_ID.test(chat) || (await store.list(`${chatPrefix(chat)}m/`)).length === 0) {
-    return 404;
-  }
-  await store.put(agentKey(chat), agent);
-  return 200;
+  const written = await store.db.prepare(
+    "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
+  ).bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, chat, store.app, store.login).run();
+  return written.meta.changes ? 200 : 404;
 }

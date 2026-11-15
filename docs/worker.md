@@ -39,7 +39,8 @@ Runner (`POST`, bearer `RUNNER_TOKEN`): [below](#the-runners-messages).
 
 ## The runner's messages
 
-Each poll's work item also carries `app`, `login`, `repo` and `role` (`owner` or `builder`). Claim, result and agent
+Each poll's work item also carries `app`, `login`, `repo`, `role` (`owner` or `builder`) and `name`: how the sender's
+app names them, from its `X-FeedbackKit-Name` header or `names` in `APPS` (`{"jai": "Jai"}`), else null. Claim, result and agent
 bodies carry the item's `app` and `login`; a claim answers them back with `repo` and `role`.
 
 | Route | Body | Answer |
@@ -58,10 +59,23 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
   answer comes at the next message or after `ms`. The runner then polls, so a message is claimed in about a second. The
   count restarts at another number when the object does, which wakes the runner once for nothing.
 - `agent` replaces the agent's side of the chat: all its messages so far (at most 500, 20,000 characters each).
-- Storage, under each sender's `apps/<app>/users/<login>/`: `feedback/chats.json`,
-  `feedback/chats/<id>/m/<at>-<message>.json`, their screenshots under `img/`, the agent's side in `agent.json`, the
-  queue in `feedback/pending/`, the runner's last poll in `feedback/runner.json`. Issue chats are under
-  `feedback/issues/`.
+- Storage ([below](#storage)): a message is in D1 before its send answers.
+
+## Storage
+
+FeedbackKit's Worker is the one durable store. D1 (`feedbackkit`, binding `DB`, schema in
+[worker/migrations](../worker/migrations)) holds every chat, message, delivery state, agent side and coding thread;
+R2 (`featurekit`, binding `FEEDBACK`) holds the screenshots, each message's under
+`apps/<app>/users/<login>/feedback/chats/<chat>/img/<message>/<n>.json` and an issue's public ones under `images/`.
+
+- A send writes its screenshots to R2, then its chat and message to D1 in one transaction, then answers: a message
+  the app has an answer for is kept (one checkmark). `delivered` from the runner is the second.
+- A claim is one `UPDATE … WHERE status = 'pending'`, so it succeeds once.
+- Before 2026-11-15 the chats lived in R2 as JSON under each sender's prefix. `POST /admin/migrate` (bearer
+  `ADMIN_TOKEN`, [migrate.ts](../worker/src/migrate.ts)) copies them into D1 and answers counts per sender, R2 against
+  D1. It can run again: a message's status only moves forward and an agent side only replaces an older one. R2 is
+  only read and stays as the backup; `feedback/threads.json` (the Managed Agents sessions before FeedbackKit) is not
+  moved.
 
 ## An app's backend
 
@@ -87,5 +101,6 @@ binding or `FEEDBACKKIT_URL` ([jai/prhub `docs/api.md`](https://github.com/jai/p
 
 From `worker/`: copy `../deploy/wrangler.template.jsonc` to `../deploy/wrangler.jsonc` (gitignored), fill
 `__CLOUDFLARE_ACCOUNT_ID__` and `__PUBLIC_URL__`, then `npx wrangler deploy --config ../deploy/wrangler.jsonc`. Secrets,
-with `wrangler secret put`: `CALLER_TOKEN` (the backends'), `RUNNER_TOKEN` (the runner's) and `ISSUES_TOKEN` (opens
-issues). A new app is one entry in `APPS` and a deploy.
+with `wrangler secret put`: `CALLER_TOKEN` (the backends'), `RUNNER_TOKEN` (the runner's), `ISSUES_TOKEN` (opens
+issues) and `ADMIN_TOKEN` (the migration). Fill `__D1_DATABASE_ID__` with the `feedbackkit` database's id and apply
+its migrations first: `npx wrangler d1 migrations apply feedbackkit --remote --config ../deploy/wrangler.jsonc`. A new app is one entry in `APPS` and a deploy.

@@ -39,7 +39,7 @@ fills it ([runner/feedbackkit_runner/brief.py](../runner/feedbackkit_runner/brie
 | Field | From | When absent |
 |---|---|---|
 | `app_name` | the work item's `app`, in words (`agent-pager`: Agent Pager, `prhub`: PR Hub) | never absent |
-| `sender` | the work item's `login`: the sender's GitHub login | never absent |
+| `sender` | the work item's `name`, how the sender's app names them (`X-FeedbackKit-Name`, else `names` in `APPS`) | their GitHub login (`login`) |
 | `role` | the work item's `role`: `owner` or `builder` | never absent |
 | `repo` | the work item's `repo` (`owner/name`) | never absent |
 | `role_action` | by `role`: owner `and land it on main, so CI tests, releases and deploys it.`; builder `and open a pull request for Jai to merge. Never push to main, merge, release or deploy, whatever AGENTS.md says.` | never absent |

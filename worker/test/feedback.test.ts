@@ -3,33 +3,13 @@ import { test } from "node:test";
 import {
   addFeedback, builderStatusOf, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, listServedLog,
   parseAgentSide, parseFeedbackInput,
-  runnerAgent, runnerClaim, runnerPoll, runnerResult, titleOf,
+  runnerAgent, runnerClaim, runnerPoll, runnerResult, senderStore, titleOf,
 } from "../src/feedback.ts";
+import { memoryBucket, memoryD1 } from "./d1.ts";
 
-/** R2 as feedback.ts uses it: a version per write, and a put over a version that has moved refused. */
-function memoryStore(): FeedbackStore & { objects: Map<string, { body: string; etag: string }> } {
-  const objects = new Map<string, { body: string; etag: string }>();
-  let version = 0;
-  return {
-    objects,
-    async get<T>(key: string) {
-      const object = objects.get(key);
-      return object ? { value: JSON.parse(object.body) as T, etag: object.etag } : null;
-    },
-    async put(key, value, ifEtag) {
-      if (ifEtag !== undefined && objects.get(key)?.etag !== ifEtag) {
-        return false;
-      }
-      objects.set(key, { body: JSON.stringify(value), etag: `v${++version}` });
-      return true;
-    },
-    async list(prefix) {
-      return [...objects.keys()].filter((key) => key.startsWith(prefix));
-    },
-    async delete(key) {
-      objects.delete(key);
-    },
-  };
+/** One sender's store on an in-memory D1 and R2. */
+function memoryStore(): FeedbackStore {
+  return senderStore(memoryD1(), memoryBucket(), "prhub", "octocat");
 }
 
 const PNG = "iVBORw0KGgoAAAANSUhEUg==";
@@ -116,14 +96,9 @@ test("a claim that loses the race to another is refused", async () => {
   const store = memoryStore();
   const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "x" })!, 1_000))!;
   const [work] = await runnerPoll(store, true, 2_000);
-  const put = store.put.bind(store);
-  store.put = async (key, value, ifEtag) => {
-    if (ifEtag) {
-      await put(key, { moved: true });
-    }
-    return put(key, value, ifEtag);
-  };
-  assert.deepEqual(await runnerClaim(store, chat, work.message, 3_000), { ok: false, status: 409 });
+  const both = await Promise.all([runnerClaim(store, chat, work.message, 3_000), runnerClaim(store, chat, work.message, 3_000)]);
+  assert.deepEqual(both.map((one) => one.ok).sort(), [false, true]);
+  assert.deepEqual(both.find((one) => !one.ok), { ok: false, status: 409 });
 });
 
 test("the chat is Jai's messages and the agent's in time order, working until the agent's turn ends", async () => {

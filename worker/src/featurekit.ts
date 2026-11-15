@@ -5,19 +5,23 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import {
-  addFeedback, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, listServedLog, parseAgentSide, parseFeedbackInput,
-  r2Store, runnerAgent, runnerClaim, runnerPoll, runnerResult,
+  addFeedback, chatOfRef, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
+  parseAgentSide, parseFeedbackInput, pendingWork, runnerAgent, runnerBeat, runnerClaim, runnerResult, senderStore,
 } from "./feedback.ts";
 import {
   addIssueFeedback, gitHubIssues, type IssueFeedback, issueChat, issuesNotice, issueThreads, isImageName,
 } from "./feedback-issues.ts";
+import { migrate } from "./migrate.ts";
 import { runnerWake, wakeRunner } from "./runner-wake.ts";
 import { clientRefOf, sha256Hex } from "./util.ts";
 
 export { RunnerWake } from "./runner-wake.ts";
 
 export interface FeatureKitEnv {
+  /** Screenshots: each message's, and the public ones issues link to. */
   FEEDBACK: R2Bucket;
+  /** Every chat, message, delivery state and coding thread (migrations/0001_feedback.sql). */
+  DB: D1Database;
   /** `{"<app>": {"repo": "owner/name", "owners": [logins], "builders": [logins], "issues": true}}`. */
   APPS: string;
   /** The app Workers' bearer: they have checked the sender, and say who it is. */
@@ -28,6 +32,8 @@ export interface FeatureKitEnv {
   PUBLIC_URL?: string;
   /** Opens the public issues: a token that can open issues on each app's repo. */
   ISSUES_TOKEN?: string;
+  /** Runs the move from R2 to D1 (`POST /admin/migrate`, migrate.ts); without it that route is `404`. */
+  ADMIN_TOKEN?: string;
   /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
   RUNNER_WAKE?: DurableObjectNamespace;
 }
@@ -39,6 +45,8 @@ export interface AppConfig {
   owners: string[];
   builders: string[];
   issues: boolean;
+  /** How the app names a sender ("jai": "Jai") when its Worker sends no `X-FeedbackKit-Name`. */
+  names: Record<string, string>;
 }
 
 const APP_NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -51,6 +59,9 @@ export function parseApps(raw: string): Record<string, AppConfig> {
   return Object.fromEntries(Object.entries(parsed).filter(([name, app]) => APP_NAME.test(name)
     && typeof app?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(app.repo)).map(([name, app]) => [name, {
     repo: app.repo!, owners: lower(app.owners), builders: lower(app.builders), issues: app.issues === true,
+    names: Object.fromEntries(Object.entries(app.names ?? {})
+      .filter(([, name]) => typeof name === "string" && senderName(name) !== null)
+      .map(([login, name]) => [login.toLowerCase(), name])),
   }]));
 }
 
@@ -59,41 +70,30 @@ export function roleOf(app: AppConfig, login: string): Role | null {
   return app.owners.includes(name) ? "owner" : app.builders.includes(name) ? "builder" : app.issues ? "issue" : null;
 }
 
-/** One sender's own corner of the bucket: their chats, whichever kind. */
+/** One sender's own corner of R2, where their screenshots are. */
 export function senderPrefix(app: string, login: string): string {
   return `apps/${app}/users/${login.toLowerCase()}/`;
 }
 
-export function prefixed(store: FeedbackStore, prefix: string): FeedbackStore {
-  return {
-    get: (key) => store.get(`${prefix}${key}`),
-    put: (key, value, ifEtag) => store.put(`${prefix}${key}`, value, ifEtag),
-    list: async (key) => (await store.list(`${prefix}${key}`)).map((one) => one.slice(prefix.length)),
-    delete: (key) => store.delete(`${prefix}${key}`),
-  };
+/** How the app names the sender ("Jai"), from `X-FeedbackKit-Name`: at most 60 characters, no line breaks. */
+export function senderName(value: string | null): string | null {
+  const name = value?.trim() ?? "";
+  return name && name.length <= 60 && !/[\r\n]/.test(name) ? name : null;
 }
 
 /** New issues one sender may open in 24 hours; replies on them do not count. */
 const ISSUES_PER_DAY = 10;
 
-const QUOTA_KEY = "feedback/issue-quota.json";
-
 /**
- * Takes one of the sender's new issues for today, or answers false when they have none left. The count is one object
- * written over its own version, so sends at once each take their own place.
+ * Takes one of the sender's new issues for today, or answers false when they have none left. One statement counts
+ * and takes, so sends at once each take their own place.
  */
 export async function takeIssue(store: FeedbackStore, now: number): Promise<boolean> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const got = await store.get<number[]>(QUOTA_KEY);
-    const recent = (got?.value ?? []).filter((at) => now - at < 86_400_000);
-    if (recent.length >= ISSUES_PER_DAY) {
-      return false;
-    }
-    if (await store.put(QUOTA_KEY, [...recent, now], got?.etag ?? "")) {
-      return true;
-    }
-  }
-  return false;
+  const taken = await store.db.prepare(
+    "INSERT INTO issue_opens (app, login, at) SELECT ?1, ?2, ?3 WHERE"
+      + " (SELECT count(*) FROM issue_opens WHERE app = ?1 AND login = ?2 AND at > ?4) < ?5",
+  ).bind(store.app, store.login, now, now - 86_400_000, ISSUES_PER_DAY).run();
+  return taken.meta.changes === 1;
 }
 
 const IMAGES = "images/";
@@ -126,8 +126,7 @@ async function feedbackRoute(
   if (!role) {
     return Response.json({ error: "Feedback is not open to you in this app." }, { status: 403 });
   }
-  const bucket = r2Store(env.FEEDBACK);
-  const store = prefixed(bucket, senderPrefix(app, login));
+  const store = senderStore(env.DB, env.FEEDBACK, app, login, senderName(request.headers.get("X-FeedbackKit-Name")));
   const now = Date.now();
   if (role !== "issue") {
     if (request.method !== "POST") {
@@ -212,41 +211,34 @@ async function once(
   store: FeedbackStore, id: string | undefined, body: unknown, send: () => Promise<string | null>,
 ): Promise<string | null> {
   const ref = clientRefOf(body);
-  const key = ref ? `refs/${await sha256Hex(`${id ?? "new"}:${ref}`)}.json` : null;
-  const seen = key ? (await store.get<{ chat: string }>(key))?.value.chat : undefined;
+  const key = ref ? await sha256Hex(`${id ?? "new"}:${ref}`) : null;
+  const seen = key ? await chatOfRef(store, key) : null;
   if (seen) {
     return seen;
   }
   const chat = await send();
   if (key && chat) {
     // Sent already: a receipt that can't be kept must not answer an error, or the app sends it again.
-    await store.put(key, { chat }).catch((error) => console.error("feedback receipt not kept", error));
+    await keepRef(store, key, chat).catch((error) => console.error("feedback receipt not kept", error));
   }
   return chat;
 }
 
 /** An issue that was not opened: its place under the cap goes back. */
 async function giveBackIssue(store: FeedbackStore, at: number): Promise<void> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const got = await store.get<number[]>(QUOTA_KEY);
-    const index = got?.value.indexOf(at) ?? -1;
-    if (!got || index < 0) {
-      return;
-    }
-    if (await store.put(QUOTA_KEY, got.value.filter((_, i) => i !== index), got.etag)) {
-      return;
-    }
-  }
+  await store.db.prepare("DELETE FROM issue_opens WHERE rowid IN"
+    + " (SELECT rowid FROM issue_opens WHERE app = ? AND login = ? AND at = ? LIMIT 1)")
+    .bind(store.app, store.login, at).run();
 }
 
 /** Which chats a runner message is about: the app, the sender and their store, from the body. */
-function senderOf(body: Record<string, unknown> | null, apps: Record<string, AppConfig>, bucket: FeedbackStore) {
+function senderOf(body: Record<string, unknown> | null, apps: Record<string, AppConfig>, env: FeatureKitEnv) {
   const app = typeof body?.app === "string" ? body.app : "";
   const login = typeof body?.login === "string" ? body.login : "";
   const config = apps[app];
   const role = config && LOGIN.test(login) ? roleOf(config, login) : null;
   return config && role && role !== "issue"
-    ? { app, login: login.toLowerCase(), config, role, store: prefixed(bucket, senderPrefix(app, login)) } : null;
+    ? { app, login: login.toLowerCase(), config, role, store: senderStore(env.DB, env.FEEDBACK, app, login) } : null;
 }
 
 async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>) {
@@ -255,19 +247,22 @@ async function runnerRoute(kind: string, request: Request, env: FeatureKitEnv, a
       method: "POST", headers: { "Content-Type": "application/json" }, body: await request.text(),
     }) : Response.json({ error: "no long poll here" }, { status: 404 });
   }
-  const bucket = r2Store(env.FEEDBACK);
   const body = (await bodyOf(request)) as Record<string, unknown> | null;
   const now = Date.now();
   if (kind === "poll") {
     const detail = typeof body?.detail === "string" ? body.detail : null;
     const senders = Object.entries(apps).flatMap(([app, config]) => [...config.owners, ...config.builders]
       .map((login) => ({ app, login, config, role: roleOf(config, login)! })));
+    await runnerBeat(env.DB, body?.orca === true, now, detail);
     const work = await Promise.all(senders.map(async ({ app, login, config, role }) =>
-      (await runnerPoll(prefixed(bucket, senderPrefix(app, login)), body?.orca === true, now, detail))
-        .map((item) => ({ ...item, app, login, repo: config.repo, role }))));
+      (await pendingWork(senderStore(env.DB, env.FEEDBACK, app, login)))
+        .map((item) => ({
+          ...item, app, login: login.toLowerCase(), repo: config.repo, role,
+          name: item.name ?? config.names[login.toLowerCase()] ?? null,
+        }))));
     return Response.json({ work: work.flat().sort((a, b) => a.at - b.at) });
   }
-  const sender = senderOf(body, apps, bucket);
+  const sender = senderOf(body, apps, env);
   if (!sender) {
     return Response.json({ error: "no such app or sender" }, { status: 404 });
   }
@@ -313,6 +308,10 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv): Pro
   const image = IMAGE_PATH.exec(pathname);
   if (image && request.method === "GET") {
     return imageRoute(image[1], env);
+  }
+  if (pathname === "/admin/migrate" && request.method === "POST" && env.ADMIN_TOKEN) {
+    return hasBearer(request, env.ADMIN_TOKEN) ? Response.json(await migrate(env.FEEDBACK, env.DB))
+      : new Response("unauthorized\n", { status: 401 });
   }
   const apps = parseApps(env.APPS);
   const runner = RUNNER_PATH.exec(pathname);
