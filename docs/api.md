@@ -14,6 +14,7 @@ App routes, on the app's backend with the app's own auth:
 | `POST /feedback` | `{text, build?, images?, client_ref?}` | the new chat |
 | `GET /feedback/{id}` | | the chat; `404` none |
 | `POST /feedback/{id}` | as above | the chat, with the message added |
+| `DELETE /feedback/{id}` | | `{ok}`: the chat is gone; only a [test app](#the-test-app)'s chats, `403` for any other app |
 
 - A chat: `{id, messages: [{id, role: "you" \| "agent", text, anchor: null, images, status?}], isWorking, activity, problem,
   costCents: null, model: null, effort: null, builderOnline, thread}`. `thread` is `{host, id}`, the agent's Agents
@@ -64,6 +65,7 @@ and bodies are the ones above, under `/v2`:
 | `POST /v2/feedback` | `{text, build?, images?, client_ref?}` | as `POST /feedback` |
 | `GET /v2/feedback/{id}` | | as `GET /feedback/{id}` |
 | `POST /v2/feedback/{id}` | as above | as `POST /feedback/{id}` |
+| `DELETE /v2/feedback/{id}` | | as `DELETE /feedback/{id}` |
 | `POST /v2/devices` | `{token, environment: "production" \| "sandbox"}`: the device's APNs token, in hex | `{ok}`; `400` |
 | `DELETE /v2/devices/{token}` | | `{ok}` |
 | `GET /v2/feedback/{id}/images/{message}/{n}` | | the message's `n`th screenshot (from 0), its bytes with their `Content-Type`; `404` |
@@ -110,6 +112,21 @@ the same token. FeedbackKit's side is [worker/src/live.ts](../worker/src/live.ts
 - Issue chats (everyone else's, a public GitHub issue) are not served live: `404`.
 - The room reads again every 15 s while a chat is followed, so a delivery stuck for 15 minutes and the builder going
   offline reach the app with no write.
+
+## The test app
+
+For end-to-end tests against the live Worker: the app `e2e`, with the owner `feedbackkit-e2e` and its own key in
+`APP_KEYS`. A test signs its own tokens with that key (`iss` `e2e`, `sub` `feedbackkit-e2e`), or goes through an app
+backend that names that app and login.
+
+- **An echo, not an agent.** The runner answers each message itself: it marks it `delivered` and adds one agent message,
+  `echo: <the message's text>`. No coding agent starts, no worktree is made, no brief or issue is sent. The runner does
+  this while every builder is down too.
+- **Delete.** `DELETE /feedback/{id}` (or `/v2/feedback/{id}`) removes the chat, its messages, the agent's words and its
+  screenshots: `{ok}`, or `404` when the sender has no such chat. For any other app it is `403` and changes nothing.
+- A test sends a message, waits for `delivered` and for the agent message `echo: <its text>`, then deletes its chat.
+- The key is a secret of the repos whose tests use it (GitHub Actions secret `FEEDBACKKIT_E2E_APP_KEY`), never in a
+  repo. In `APPS` the test app is `"echo": true` ([worker.md](worker.md#who-gets-what)).
 
 ## Pushes
 

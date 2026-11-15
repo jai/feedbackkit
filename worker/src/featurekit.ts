@@ -5,7 +5,7 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import {
-  addFeedback, chatOfRef, chatSide, messageImage, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
+  addFeedback, chatOfRef, chatSide, deleteChat, messageImage, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
   parseAgentSide, parseFeedbackInput, pendingWork, runnerAgent, runnerBeat, runnerClaim, runnerResult, senderStore,
 } from "./feedback.ts";
 import {
@@ -65,6 +65,11 @@ export interface AppConfig {
   names: Record<string, string>;
   /** The app's bundle id: where its pushes go. None: no pushes. */
   topic: string | null;
+  /**
+   * A test app (docs/api.md#the-test-app): the runner answers each message itself with an echo, never a coding agent,
+   * an issue or a brief, and its chats may be deleted. Never true for an app people use.
+   */
+  echo: boolean;
 }
 
 const APP_NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -76,11 +81,12 @@ export function parseApps(raw: string): Record<string, AppConfig> {
     ? logins.filter((login): login is string => typeof login === "string").map((login) => login.toLowerCase()) : [];
   return Object.fromEntries(Object.entries(parsed).filter(([name, app]) => APP_NAME.test(name)
     && typeof app?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(app.repo)).map(([name, app]) => [name, {
-    repo: app.repo!, owners: lower(app.owners), builders: lower(app.builders), issues: app.issues === true,
+    repo: app.repo!, owners: lower(app.owners), builders: lower(app.builders), issues: app.issues === true && app.echo !== true,
     names: Object.fromEntries(Object.entries(app.names ?? {})
       .filter(([, name]) => typeof name === "string" && senderName(name) !== null)
       .map(([login, name]) => [login.toLowerCase(), name])),
     topic: typeof app.topic === "string" && /^[\w.-]{1,155}$/.test(app.topic) ? app.topic : null,
+    echo: app.echo === true,
   }]));
 }
 
@@ -153,6 +159,11 @@ async function feedbackRoute(
     return Response.json({ error: "Feedback is not open to you in this app." }, { status: 403 });
   }
   const store = senderStore(env.DB, env.FEEDBACK, app, login, name);
+  if (request.method === "DELETE") {
+    return config.echo
+      ? deleteRoute(id, store, env)
+      : Response.json({ error: "Only the test app's chats can be deleted." }, { status: 403 });
+  }
   const now = Date.now();
   if (role !== "issue") {
     if (request.method !== "POST") {
@@ -229,6 +240,19 @@ async function feedbackRoute(
   return chat ? Response.json(chat) : notFound();
 }
 
+/** A test app's chat, gone with its messages and screenshots (`DELETE /feedback/{id}`, docs/api.md#the-test-app). */
+async function deleteRoute(id: string | undefined, store: FeedbackStore, env: FeatureKitEnv): Promise<Response> {
+  const screenshots = id ? await deleteChat(store, id) : null;
+  if (!id || !screenshots) {
+    return notFound();
+  }
+  if (screenshots.length) {
+    await env.FEEDBACK.delete(screenshots);
+  }
+  await chatChanged(env, id);
+  return Response.json({ ok: true });
+}
+
 /**
  * A send with a `client_ref` is kept once: a retry answers the chat its first try made, and sends nothing again.
  * Two tries at the same moment can both go; the app's outbox sends one at a time.
@@ -286,7 +310,7 @@ async function runnerRoute(
       (await pendingWork(senderStore(env.DB, env.FEEDBACK, app, login)))
         .map((item) => ({
           ...item, app, login: login.toLowerCase(), repo: config.repo, role,
-          name: item.name ?? config.names[login.toLowerCase()] ?? null,
+          name: item.name ?? config.names[login.toLowerCase()] ?? null, ...(config.echo ? { echo: true } : {}),
         }))));
     return Response.json({ work: work.flat().sort((a, b) => a.at - b.at) });
   }

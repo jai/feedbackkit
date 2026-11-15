@@ -191,11 +191,15 @@ class ChatState(_ChatFields, total=False):
     activity: str | None
 
 
-class RunnerState(TypedDict):
-    """The runner's own state file."""
-
+class _RunnerFields(TypedDict):
     chats: dict[str, ChatState]
     journal: dict[str, JournalEntry]
+
+
+class RunnerState(_RunnerFields, total=False):
+    """The runner's own state file. `echoes`: a test app's chats' replies so far, each chat's whole agent side."""
+
+    echoes: dict[str, list[JsonObject]]
 
 
 class Completed(Protocol):
@@ -658,11 +662,12 @@ class Runner:
         self.last_poll = {"at": self.clock(), "ok": True, "error": None}
         self.last_work = work
         self.owed |= {str(item.get("chat")) for item in work}
+        # A test app's messages need no builder: they are answered while every builder is down too.
+        for item in sorted(work, key=_arrival):
+            line = self.echo(item) if item.get("echo") else self.take(item, agents) if online else None
+            if line:
+                lines.append(line)
         if online:
-            for item in sorted(work, key=_arrival):
-                line = self.take(item, agents)
-                if line:
-                    lines.append(line)
             self.owed |= {key.split("/", 1)[0] for key, entry in self.state["journal"].items() if not entry["posted"]}
         self.save()
         return lines
@@ -778,6 +783,45 @@ class Runner:
             outcome["status"],
             outcome.get("detail") or "-",
         )
+
+    def echo(self, item: JsonObject) -> str | None:
+        """A test app's message (docs/api.md#the-test-app), answered here: the reply `echo: <text>`, then delivered.
+        No coding agent, worktree, issue or brief. Claimed and journalled as any message is, so it is answered once."""
+        chat, message = str(item.get("chat")), str(item.get("message"))
+        key = f"{chat}/{message}"
+        if key in self.state["journal"]:
+            return None
+        sender = sender_of(item)
+        if sender is None:
+            return f"FEEDBACK chat={chat} message={message} outcome=skipped reason=no-sender"
+        claimed = self.api.claim(chat, message, sender)
+        if claimed is None:
+            return f"FEEDBACK chat={chat} message={message} outcome=skipped reason=not-pending"
+        entry: JournalEntry = {"claimed_at": self.clock(), "outcome": None, "posted": False, "sender": sender}
+        self.state["journal"][key] = entry
+        self.save()
+        replies = self.state.setdefault("echoes", {}).setdefault(chat, [])
+        replies.append({
+            "id": f"echo-{message}",
+            "text": f"echo: {claimed.get('text') or ''}",
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.clock())),
+        })
+        del replies[:-MAX_AGENT_MESSAGES]
+        side: JsonObject = {"messages": replies, "isWorking": False, "activity": None, "thread": None}
+        outcome: Outcome
+        try:
+            answered = self.api.agent(chat, side, sender)
+            outcome = (
+                {"status": "delivered", "how": "echo", "detail": None}
+                if answered
+                else {"status": "failed", "how": "echo", "detail": "The chat is gone."}
+            )
+        except FeedbackApiError as failure:
+            outcome = {"status": "failed", "how": "echo", "detail": str(failure)[:300]}
+        entry["outcome"] = outcome
+        self.save()
+        self.post_result(chat, message, entry, outcome)
+        return f"FEEDBACK chat={chat} message={message} echo=true outcome={outcome['status']}"
 
     def start(
         self, builder: Builder, chat: str, message: str, claimed: JsonObject, sender: Sender, who: str = ""
@@ -987,6 +1031,9 @@ class Runner:
             for key, entry in self.state["journal"].items()
             if not entry.get("posted") or now - entry["claimed_at"] < JOURNAL_KEPT_SECONDS
         }
+        journalled = {key.split("/", 1)[0] for key in self.state["journal"]}
+        if "echoes" in self.state:
+            self.state["echoes"] = {chat: replies for chat, replies in self.state["echoes"].items() if chat in journalled}
 
     def status(self) -> JsonObject:
         """What the runner knows, for status.json (docs: runner/README.md#statusjson): the last poll, each builder, and

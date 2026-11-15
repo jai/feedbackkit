@@ -63,6 +63,10 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   runner sends the agent's side as working with the activity `Waiting for Borg Cube 0N to come back`, and nothing is
   read from that builder; the replies go in when it answers again. The Worker (`worker/src/feedback.ts`) shows
   `Starting` in place of that activity while a message is pending.
+- A test app's message (work item `echo: true`, [docs/api.md](../docs/api.md#the-test-app)) is answered by the runner
+  itself, with no builder: claim, the agent message `echo: <text>` (with the chat's earlier echoes, kept in the state's
+  `echoes` while their journal entries are), then `delivered`. It runs while every builder is down too. Logged
+  `FEEDBACK chat=… message=… echo=true outcome=…`.
 - Each app has one long-lived Orca project on each builder: a clone of its repo at `~/Developer/feedback-<app>`
   (`feedback-agent-pager`, `feedback-prhub`, `feedback-trips`), named in Orca "Feedback Agent Pager", "Feedback PR Hub",
   "Feedback Trips" (`PROJECT_NAMES`, else the app id in words). The runner makes it on the app's first chat on that

@@ -90,8 +90,10 @@ export function memoryBucket(): R2Bucket & { objects: Map<string, { body: string
       const truncated = start + 2 < keys.length;
       return { objects: page.map((key) => ({ key })), truncated, cursor: truncated ? String(start + 2) : undefined };
     },
-    async delete(key: string) {
-      objects.delete(key);
+    async delete(keys: string | string[]) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        objects.delete(key);
+      }
     },
   } as unknown as R2Bucket & { objects: Map<string, { body: string; etag: string }> };
 }

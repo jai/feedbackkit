@@ -41,6 +41,7 @@ from feedbackkit_runner.util import JsonObject, JsonResponse
 
 
 AGENT_PAGER_OWNER: Sender = {"app": "agent-pager", "login": "jai", "repo": "jai/agent-pager", "role": "owner"}
+E2E_OWNER: Sender = {"app": "e2e", "login": "feedbackkit-e2e", "repo": "jai/feedbackkit", "role": "owner"}
 REPLY_PREFIX = "jai via Agent Pager: "
 
 
@@ -609,6 +610,50 @@ class RunnerTests(RunnerCase):
         self.assertTrue(any(line.startswith("FEEDBACK_WORKTREE_GONE") for line in lines))
         self.now += TIDY_AFTER_SECONDS + 1
         self.assertFalse(any("FEEDBACK_WORKTREE" in line for line in self.runner().tick()), "not asked again")
+
+
+class EchoTests(RunnerCase):
+    """A test app's messages (docs/api.md#the-test-app): answered by the runner with an echo, no agent."""
+
+    def echo_message(self, message: str, text: str) -> None:
+        self.api.work = [
+            {"chat": CHAT, "message": message, "first": message == "m_1", "at": 1, "echo": True, **E2E_OWNER}
+        ]
+        self.api.claims[message] = {"ok": True, "text": text, "first": message == "m_1", "images": []}
+
+    def test_a_test_app_s_message_is_echoed_and_delivered_with_no_agent(self) -> None:
+        runner = self.runner()
+        self.echo_message("m_1", "ping 1")
+        lines = runner.tick()
+        self.echo_message("m_2", "ping 2")
+        runner.tick()
+        self.assertEqual(self.orca.launches + self.orca_04.launches, [], "no worktree, no agent")
+        self.assertEqual(self.delivered, [], "nothing sent to an Orca chat")
+        self.assertEqual(self.reader.afters, [], "no transcript read")
+        self.assertEqual([texts["text"] for texts in self.api.sides[-1]["messages"]], ["echo: ping 1", "echo: ping 2"])
+        self.assertIs(self.api.sides[-1]["isWorking"], False)
+        self.assertEqual(
+            [(chat, message, status) for chat, message, status, _ in self.api.results],
+            [(CHAT, "m_1", "delivered"), (CHAT, "m_2", "delivered")],
+        )
+        self.assertNotIn(CHAT, runner.state["chats"], "never watched or tidied")
+        self.assertIn("echo=true outcome=delivered", lines[0])
+
+    def test_a_test_app_is_answered_while_every_builder_is_down(self) -> None:
+        self.orca.down = self.orca_04.down = True
+        self.echo_message("m_1", "ping")
+        self.runner().tick()
+        self.assertEqual(self.api.results, [(CHAT, "m_1", "delivered", None)])
+
+    def test_an_echo_is_sent_once_and_fails_when_the_test_deleted_the_chat(self) -> None:
+        runner = self.runner()
+        self.echo_message("m_1", "ping")
+        self.api.gone.add(CHAT)
+        runner.tick()
+        self.api.claims["m_1"] = {"ok": True, "text": "ping", "first": True, "images": []}
+        runner.tick()
+        self.assertEqual(self.api.results, [(CHAT, "m_1", "failed", "The chat is gone.")])
+        self.assertEqual(len(self.api.sides), 1, "journalled: not answered again")
 
 
 class LegacyCloneTests(RunnerCase):

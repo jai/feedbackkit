@@ -16,13 +16,15 @@ for every route, and forwards the request here with the app's name and the sende
 - **Owners**: a chat with a coding agent on the owner's Mac. It makes the change, tests it and ships a build.
 - **Builders**: the same chat, but the agent opens a pull request for an owner to merge. It never pushes to main.
 - **Everyone else**: with `issues`, a public issue on the repo ([Issues](#issues)); without it, `403`.
+- **`"echo": true`**: a test app ([api.md](api.md#the-test-app)). The runner answers its owners' messages with an echo,
+  never an agent; it never opens issues, whatever `issues` says; and its chats may be deleted.
 
 Each sender's chats are their own (`apps/<app>/users/<login>/` in R2). Logins compare without case.
 
 ## Routes
 
 App Workers (bearer `CALLER_TOKEN`, headers `X-FeedbackKit-App` and `X-FeedbackKit-Login`): `GET/POST /feedback` and
-`GET/POST /feedback/{id}`, with the bodies and answers of [api.md](api.md). A repeat `client_ref`
+`GET/POST /feedback/{id}` (and `DELETE /feedback/{id}` for a test app), with the bodies and answers of [api.md](api.md). A repeat `client_ref`
 answers the chat its first send made.
 
 Runner (`POST`, bearer `RUNNER_TOKEN`): [below](#the-runners-messages).
@@ -41,7 +43,8 @@ Runner (`POST`, bearer `RUNNER_TOKEN`): [below](#the-runners-messages).
 
 Each poll's work item also carries `app`, `login`, `repo`, `role` (`owner` or `builder`) and `name`: how the sender's
 app names them, from its `X-FeedbackKit-Name` header or `names` in `APPS` (`{"jai": "Jai"}`), else null. Claim, result and agent
-bodies carry the item's `app` and `login`; a claim answers them back with `repo` and `role`.
+bodies carry the item's `app` and `login`; a claim answers them back with `repo` and `role`. A test app's items carry
+`echo: true`: the runner answers them itself ([api.md](api.md#the-test-app)).
 
 | Route | Body | Answer |
 |---|---|---|

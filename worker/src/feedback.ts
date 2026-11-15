@@ -554,6 +554,28 @@ export async function chatSide(store: FeedbackStore, chat: string): Promise<{ ti
   return row ? { title: row.title, agent: row.agent ? JSON.parse(row.agent) as AgentSide : null } : null;
 }
 
+/**
+ * One of the sender's chats removed with all it keeps: its messages and their screenshots' rows, the agent's words,
+ * and the send receipts that name it. Answers the screenshots' R2 keys, for the caller to remove; null when the chat
+ * is not the sender's.
+ */
+export async function deleteChat(store: FeedbackStore, chat: string): Promise<string[] | null> {
+  if (!(await chatRow(store, chat))) {
+    return null;
+  }
+  const { results } = await store.db.prepare(
+    "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE m.chat = ?",
+  ).bind(chat).all<{ r2_key: string }>();
+  await store.db.batch([
+    store.db.prepare("DELETE FROM images WHERE message IN (SELECT id FROM messages WHERE chat = ?)").bind(chat),
+    store.db.prepare("DELETE FROM messages WHERE chat = ?").bind(chat),
+    store.db.prepare("DELETE FROM agent_messages WHERE chat = ?").bind(chat),
+    store.db.prepare("DELETE FROM refs WHERE app = ? AND login = ? AND chat = ?").bind(store.app, store.login, chat),
+    store.db.prepare("DELETE FROM chats WHERE id = ? AND app = ? AND login = ?").bind(chat, store.app, store.login),
+  ]);
+  return results.map((row) => row.r2_key);
+}
+
 export async function runnerAgent(store: FeedbackStore, chat: string, agent: AgentSide): Promise<404 | 200> {
   const before = await chatSide(store, chat);
   if (!before) {
