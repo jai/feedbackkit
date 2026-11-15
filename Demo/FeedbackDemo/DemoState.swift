@@ -41,6 +41,10 @@ final class DemoState {
             return nil
         }
         let token = live.token
+        if live.isDirect {
+            let source = TokenSource(backend: url, signIn: token)
+            return FeedbackRequestsModel(client: FeedbackClient(connection: DirectConnection(source: source)))
+        }
         return FeedbackRequestsModel(client: FeedbackClient(baseURL: { url }, bearer: { token }))
     }
 }

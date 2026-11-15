@@ -14,7 +14,7 @@
     "PUBLIC_URL": "__PUBLIC_URL__",
     // Per app: its repo, who ships (owners), who opens PRs (builders), whether everyone else files an issue, and how it
     // names a sender when its Worker does not say (names), and its bundle id for pushes (topic).
-    "APPS": "{\"prhub\":{\"repo\":\"jai/prhub\",\"owners\":[\"jai\"],\"builders\":[\"poom\"],\"issues\":true,\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.prreview\"},\"agent-pager\":{\"repo\":\"jai/agent-pager\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.agentpager\"},\"trips\":{\"repo\":\"jai/trips\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"}}}"
+    "APPS": "{\"prhub\":{\"repo\":\"jai/prhub\",\"owners\":[\"jai\"],\"builders\":[\"poom\"],\"issues\":true,\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.prreview\"},\"agent-pager\":{\"repo\":\"jai/agent-pager\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.agentpager\"},\"trips\":{\"repo\":\"jai/trips\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"}},\"feedbackkit-demo\":{\"repo\":\"jai/feedbackkit\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"}}}"
   },
   "r2_buckets": [{ "binding": "FEEDBACK", "bucket_name": "featurekit" }],
   // The one durable store: chats, messages, delivery states, coding threads (worker/migrations, applied with

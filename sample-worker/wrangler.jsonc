@@ -1,0 +1,14 @@
+// FeedbackKit's sample app backend (README.md). The workflow sample-worker.yml deploys it with
+// `--name feedbackkit-sample` and sets its secrets APP_KEY and USER_TOKEN; teardown deletes it.
+{
+  "name": "feedbackkit-sample",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "vars": {
+    "APP": "feedbackkit-demo",
+    "FEEDBACKKIT_URL": "https://featurekit.jai-f89.workers.dev",
+    "USER_LOGIN": "jai",
+    "USER_NAME": "Jai"
+  }
+}

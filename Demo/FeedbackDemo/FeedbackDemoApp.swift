@@ -70,7 +70,8 @@ private struct DemoBar: View {
 
     private var caption: String {
         if let url = demo.liveURL {
-            return "Live: \(url.host() ?? url.absoluteString). The Worker decides what your login gets."
+            let how = demo.live.isDirect ? "Direct to FeedbackKit, token from" : "Live:"
+            return "\(how) \(url.host() ?? url.absoluteString). The Worker decides what your login gets."
         }
         return demo.role.summary
     }
@@ -111,11 +112,16 @@ private struct LiveWorkerSheet: View {
                         .textInputAutocapitalization(.never)
                         #endif
                     SecureField("Bearer token", text: $settings.token)
+                    Toggle("Direct to FeedbackKit", isOn: $settings.isDirect)
+                        .accessibilityIdentifier("live-worker-direct")
                 } header: {
                     Text("Worker")
                 } footer: {
-                    Text("The app backend that serves /feedback (docs/api.md). The token stays in this device's "
-                        + "Keychain.")
+                    Text(settings.isDirect
+                        ? "The app backend issues FeedbackKit tokens (POST /feedback/token, sample-worker/); the demo "
+                            + "then talks to FeedbackKit itself. The token stays in this device's Keychain."
+                        : "The app backend that serves /feedback (docs/api.md). The token stays in this device's "
+                            + "Keychain.")
                 }
                 .disabled(!settings.isEnabled)
             }

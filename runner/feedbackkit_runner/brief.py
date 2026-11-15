@@ -31,7 +31,7 @@ LATER_PREFIX = "{sender} via {app_name}: "
 FIELDS = ("app_name", "sender", "role", "repo", "role_action", "build", "screenshot_paths", "message")
 
 # An app's name in words: its id title-cased ("agent-pager": Agent Pager) unless listed.
-APP_NAMES = {"prhub": "PR Hub"}
+APP_NAMES = {"prhub": "PR Hub", "feedbackkit-demo": "FeedbackKit Demo"}
 NO_BUILD = "not given"
 NO_SCREENSHOTS = "none"
 NO_WORDS = "(no words: see the screenshots)"

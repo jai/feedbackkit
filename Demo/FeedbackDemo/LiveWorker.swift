@@ -6,10 +6,14 @@ import Security
 struct LiveWorker: Equatable {
     static let enabledKey = "liveWorkerEnabled"
     static let urlKey = "liveWorkerURL"
+    static let directKey = "liveWorkerDirect"
 
     var isEnabled: Bool
     var url: String
     var token: String
+    /// The direct path: `url` is the app's backend, which issues FeedbackKit tokens (sample-worker/), and the demo
+    /// talks to FeedbackKit's Worker itself. Off: `url` serves `/feedback` itself.
+    var isDirect = false
 
     /// The root that serves `GET/POST /feedback`, when the setting is on and complete.
     var baseURL: URL? {
@@ -21,17 +25,28 @@ struct LiveWorker: Equatable {
         return url
     }
 
-    static func load(from defaults: UserDefaults = .standard) -> LiveWorker {
-        LiveWorker(
+    /// The saved setting; for a scripted run (docs/end-to-end-walkthrough.md), `FEEDBACKKIT_DEMO_WORKER_URL`,
+    /// `FEEDBACKKIT_DEMO_WORKER_TOKEN` and `FEEDBACKKIT_DEMO_DIRECT=1` in the launch environment instead.
+    static func load(
+        from defaults: UserDefaults = .standard, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> LiveWorker {
+        if let url = environment["FEEDBACKKIT_DEMO_WORKER_URL"], let token = environment["FEEDBACKKIT_DEMO_WORKER_TOKEN"] {
+            return LiveWorker(
+                isEnabled: true, url: url, token: token, isDirect: environment["FEEDBACKKIT_DEMO_DIRECT"] == "1"
+            )
+        }
+        return LiveWorker(
             isEnabled: defaults.bool(forKey: enabledKey),
             url: defaults.string(forKey: urlKey) ?? "",
-            token: TokenStore.read() ?? ""
+            token: TokenStore.read() ?? "",
+            isDirect: defaults.bool(forKey: directKey)
         )
     }
 
     func save(to defaults: UserDefaults = .standard) {
         defaults.set(isEnabled, forKey: Self.enabledKey)
         defaults.set(url, forKey: Self.urlKey)
+        defaults.set(isDirect, forKey: Self.directKey)
         TokenStore.write(token.isEmpty ? nil : token)
     }
 }

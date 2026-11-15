@@ -28,6 +28,21 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  sample-worker:
+    # The sample app backend (sample-worker/): its tests, on GitHub's own Linux runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sample-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
   runner:
     # The runner's tests, on the Python the Mac mini's LaunchAgent runs (3.9), standard library only.
     # ubuntu-latest is Ubuntu 26.04 now, which has no Python 3.9 build; 24.04 still has one.

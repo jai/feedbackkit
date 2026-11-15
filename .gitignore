@@ -6,3 +6,4 @@ DerivedData/
 deploy/wrangler.jsonc
 __pycache__/
 runner/MenuBar/FeedbackKitRunner.zip
+node_modules/
