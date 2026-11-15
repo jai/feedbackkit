@@ -96,6 +96,13 @@ LaunchAgent, and reloads or restarts the job when either changed. `make -C runne
   checks Orca's existing queue on later polls; only after Orca takes it does FeedbackKit receive `delivered`.
   A queued message, an unavailable queue check or a failed result post does not stop the runner polling for later
   feedback. Older queued journal entries recover their target from the chat's thread without resending the words.
+- What the chat shipped ([docs/api.md](../docs/api.md#shipped)): `feedbackkit_runner/shipped_probe.py`, sent over SSH
+  to the chat's builder and run there by its `python3`, with `gh` from `/opt/homebrew/bin`. The commits are those the
+  worktree's HEAD reflog made (commits, amends, a rebase's picks; never a rebase's start, which is others' work) that
+  are on origin/main; the runner keeps their SHAs (`shipped_shas`) and the branch, so after the worktree is tidied it
+  goes on asking about them in the app's project clone. Every 5 minutes while the worktree lives, then hourly until
+  settled (each commit released with its checks done, no pull request open). A failed look keeps the last answer and
+  logs `FEEDBACK_SHIPPED_FAILED`. Sent as the side's `shipped`.
 - Builder online: the runner polled in the last 90 s and `orca worktree ps` answered for at least one builder.
   When none did, the poll carries why (`detail`).
 - Clean-up, by the runner (the agent never removes its own worktree: the runner reads its transcript, and a later
@@ -119,7 +126,7 @@ two differ, when a field is left unfilled, or when anything but the fields is ad
 ## Logs
 
 `~/Library/Logs/feedbackkit-runner.log`: `FEEDBACK chat=… message=… outcome=…` per message, `FEEDBACK_ORCA_DOWN
-host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
+host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_SHIPPED_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
 JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
 `FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_STOPPED`,
 `FEEDBACK_STATUS_NOT_WRITTEN`.

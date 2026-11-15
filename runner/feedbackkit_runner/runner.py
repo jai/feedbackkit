@@ -72,6 +72,11 @@ TIDY_AFTER_SECONDS = 86400
 TIDIED = "This chat was tidied away after a day with nothing left to do. Start new feedback instead."
 JOURNAL_KEPT_SECONDS = 14 * 86400
 MAX_AGENT_MESSAGES = 500
+# What a chat shipped (shipped_probe.py): looked for every 5 minutes while its worktree lives, then hourly until each
+# commit is in a release, its checks have finished and no pull request is open.
+SHIPPED_EVERY_SECONDS = 300
+SHIPPED_TIDIED_EVERY_SECONDS = 3600
+PROBE = Path(__file__).with_name("shipped_probe.py")
 # Each chat's newest messages in status.json.
 STATUS_MESSAGES = 10
 READ_PAGES = 5
@@ -189,6 +194,12 @@ class ChatState(_ChatFields, total=False):
     thread: JsonObject
     working: bool
     activity: str | None
+    # What its feedback shipped, as last sent (`{commits, prs}`), when it was looked for, the commits found on main so
+    # far (kept after the worktree goes) and the worktree's branch.
+    shipped: JsonObject
+    shipped_at: float
+    shipped_shas: list[str]
+    branch: str
 
 
 class _RunnerFields(TypedDict):
@@ -488,6 +499,22 @@ class Cube:
             '[ -z "$unpushed" ] || { echo "unpushed commits" >&2; exit 1; }',
             folder,
         )
+
+    def shipped(self, worktree: str, project: str, repo: str, shas: list[str], branch: str | None) -> JsonObject:
+        """What the chat shipped, found on this builder by shipped_probe.py; RuntimeError when git or gh failed."""
+        answer = self.sh(
+            'PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; exec python3 - "$@"',
+            worktree,
+            project,
+            repo,
+            ",".join(shas),
+            branch or "",
+            stdin=PROBE.read_bytes(),
+        )
+        try:
+            return json_object(json.loads(answer))
+        except ValueError as failure:
+            raise RuntimeError(f"shipped answered no JSON: {failure}") from failure
 
     def remove_folder(self, folder: str) -> None:
         """A folder of the runner's own (a chat's first screenshots); gone already is fine."""
@@ -927,7 +954,7 @@ class Runner:
         the chat's builder is down, a reply to it waits and the side says so."""
         known = self.state["chats"][chat]
         if known.get("removed"):
-            return None
+            return self.look_tidied(chat, known, agents)
         builder = self.builders.get(known["host"])
         if builder is None:
             return None
@@ -943,7 +970,7 @@ class Runner:
                 "activity": f"Waiting for {builder.name} to come back" if waiting else None,
                 "thread": where,
             }
-            return self.post_side(chat, known, side, now)
+            return self.post_side(chat, known, with_shipped(side, known), now)
         agent = live.get(known["clone"]) or {}
         working = agent.get("state") == "working" or now - known.get("told_at", 0) < STARTING_SECONDS
         if thread is not None:
@@ -953,18 +980,60 @@ class Runner:
                 return f"FEEDBACK_READ_FAILED chat={chat} {failure}"
         if working:
             known["last_activity"] = self.clock()
+        shipped_line = self.refresh_shipped(builder, chat, known)
         side = {
             "messages": known["messages"],
             "isWorking": working,
             "activity": ACTIVITIES.get(str(agent.get("toolName")), "Working") if working else None,
             "thread": where,
         }
-        dropped = self.post_side(chat, known, side, now)
+        dropped = self.post_side(chat, known, with_shipped(side, known), now)
         if dropped:
             return dropped
         quiet = self.clock() - known.get("last_activity", known["launched_at"])
         if not working and chat not in self.owed and quiet > TIDY_AFTER_SECONDS:
             return self.tidy(builder, chat, known)
+        return shipped_line
+
+    def look_tidied(self, chat: str, known: ChatState, agents: dict[str, dict[str, JsonObject] | None]) -> str | None:
+        """A tidied chat: what it shipped, looked for hourly from its app's project clone while anything is still to
+        come (a release, a check, an open pull request), and sent with its last words."""
+        builder = self.builders.get(known["host"])
+        if builder is None or agents.get(builder.host) is None or not unsettled(known):
+            return None
+        line = self.refresh_shipped(builder, chat, known)
+        side: JsonObject = {
+            "messages": known["messages"],
+            "isWorking": False,
+            "activity": None,
+            "thread": known.get("thread"),
+        }
+        return self.post_side(chat, known, with_shipped(side, known), self.clock()) or line
+
+    def refresh_shipped(self, builder: Builder, chat: str, known: ChatState) -> str | None:
+        """What the chat shipped, when it is time to look again; a log line when the builder could not say, and the
+        last answer kept."""
+        every = SHIPPED_TIDIED_EVERY_SECONDS if known.get("removed") else SHIPPED_EVERY_SECONDS
+        sender = known.get("sender")
+        if sender is None or self.clock() - known.get("shipped_at", 0) < every:
+            return None
+        known["shipped_at"] = self.clock()
+        project = known["clone"] if known["layout"] == "clone" else project_path(sender["app"])
+        try:
+            found = builder.cube.shipped(
+                known["clone"], project, sender["repo"], known.get("shipped_shas", []), known.get("branch")
+            )
+        except RuntimeError as failure:
+            return f"FEEDBACK_SHIPPED_FAILED chat={chat} {str(failure)[:200]}"
+        commits, prs = found.get("commits"), found.get("prs")
+        known["shipped"] = {
+            "commits": commits if isinstance(commits, list) else [],
+            "prs": prs if isinstance(prs, list) else [],
+        }
+        shas = found.get("shas")
+        known["shipped_shas"] = [str(sha) for sha in shas] if isinstance(shas, list) else []
+        if isinstance(found.get("branch"), str) and found["branch"]:
+            known["branch"] = found["branch"]
         return None
 
     def tidy(self, builder: Builder, chat: str, known: ChatState) -> str:
@@ -1095,6 +1164,24 @@ class Runner:
             )
         chats.sort(key=lambda one: -max([float(str(one.get("last_activity") or 0))] + _ats(one)))
         return {"poll": self.last_poll, "builders": builders, "chats": chats}
+
+
+def with_shipped(side: JsonObject, known: ChatState) -> JsonObject:
+    """The side with what the chat shipped, once the runner has looked; without it the Worker keeps none."""
+    return {**side, "shipped": known["shipped"]} if "shipped" in known else side
+
+
+def unsettled(known: ChatState) -> bool:
+    """Whether what a tidied chat shipped can still change: a commit in no release or with checks running, or a pull
+    request open or with checks running. Never looked for: worth one look."""
+    shipped = known.get("shipped")
+    if shipped is None:
+        return True
+    commits = [one for one in shipped.get("commits") or [] if isinstance(one, dict)]
+    prs = [one for one in shipped.get("prs") or [] if isinstance(one, dict)]
+    return any(one.get("release") is None or one.get("ci") == "pending" for one in commits) or any(
+        one.get("state") == "open" or one.get("ci") == "pending" for one in prs
+    )
 
 
 def _ats(chat: JsonObject) -> list[float]:

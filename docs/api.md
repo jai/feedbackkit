@@ -17,7 +17,8 @@ App routes, on the app's backend with the app's own auth:
 | `DELETE /feedback/{id}` | | `{ok}`: the chat is gone; only a [test app](#the-test-app)'s chats, `403` for any other app |
 
 - A chat: `{id, messages: [{id, role: "you" \| "agent", text, anchor: null, images, status?}], isWorking, activity, problem,
-  costCents: null, model: null, effort: null, builderOnline, thread}`. `thread` is `{host, id}`, the agent's Agents
+  costCents: null, model: null, effort: null, builderOnline, thread, shipped}`. `shipped`, also on each list row, is
+  [what the chat's feedback shipped](#shipped), or `null` until the runner has looked. `thread` is `{host, id}`, the agent's Agents
   thread, once the runner has found it.
 - A sender's message carries its persisted `status`: `pending`, `delivering`, `delivered` or `failed`. An agent's
   message has none. A delivery stuck for 15 minutes can set the chat's `problem`, but its message remains
@@ -112,6 +113,25 @@ the same token. FeedbackKit's side is [worker/src/live.ts](../worker/src/live.ts
 - Issue chats (everyone else's, a public GitHub issue) are not served live: `404`.
 - The room reads again every 15 s while a chat is followed, so a delivery stuck for 15 minutes and the builder going
   offline reach the app with no write.
+
+## Shipped
+
+What a chat's feedback shipped, for the row's accessories and the chat's header: `{commits, prs}`, or `null`. The
+runner finds it on the chat's builder (no app sends anything), every 5 minutes while the chat's worktree lives, then
+hourly until each commit is in a release, its checks have finished and no pull request is open.
+
+| Field | Value |
+|---|---|
+| `commits` | `[{sha, title, at, url, ci, release}]`, newest first, at most 20: the commits the chat's worktree made that are on `main` |
+| `commits[].release` | `{tag, name, url, prerelease}`: the first published GitHub Release (by date) whose tag contains the commit; `null`: on `main`, in no release yet |
+| `prs` | `[{number, title, url, state: "open" \| "merged" \| "closed", ci}]`, at most 10: those whose head is the worktree's branch (a builder's chat) |
+| `ci` | `pending` while any check runs, `failure` when any failed, else `success`; `null`: no checks |
+
+- **Release status**, as an app shows it: no commit and no pull request, nothing yet; a pull request open, "PR open";
+  commits with no release, "on main"; else "in <release name>". An app releases a build by publishing a GitHub
+  Release whose tag is on the build's commit (`v0.24.1`, `mac-556`); nothing else is asked of it.
+- Every `url` is on `https://github.com/`.
+- Live mode carries it in the state's `extra.shipped`; a change moves the chat on, so a followed chat hears of it.
 
 ## The test app
 

@@ -1,4 +1,5 @@
 import type { Chat, ChatMessage } from "./chat.ts";
+import { parseShipped, type Shipped } from "./shipped.ts";
 
 /**
  * Feedback on the app, from the app (docs/api.md). The Worker only keeps it: each message waits here until
@@ -35,6 +36,8 @@ export interface FeedbackThread {
   thread?: AgentSide["thread"];
   /** Where an agent chat stands, for its row: issue chats have none. */
   agent?: ThreadAgentState;
+  /** What the chat's feedback shipped, for the row's accessories; null until the runner found any. */
+  shipped?: Shipped | null;
 }
 
 /** An agent chat's state on the list: working (with what at), waiting on the sender, or idle. */
@@ -100,6 +103,8 @@ export interface AgentSide {
   /** Where the agent runs, as the runner names it: its Agents thread, so the app can link the two. */
   thread: { host: string; id: string } | null;
   updatedAt: number;
+  /** What the chat's feedback shipped (shipped.ts); absent until the runner found any. */
+  shipped?: Shipped | null;
 }
 
 /** A message of the chat, with how many screenshots Jai sent on it. */
@@ -115,6 +120,8 @@ export interface FeedbackChat extends Chat {
   /** Whether the runner is taking work and the Mac it starts agents on answers. Without it a message waits here. */
   builderOnline: boolean;
   thread: AgentSide["thread"];
+  /** What the chat's feedback shipped (docs/api.md#shipped); null until the runner found any. */
+  shipped: Shipped | null;
 }
 
 /** What a runner poll answers: Jai's messages it has not taken, oldest first. */
@@ -269,6 +276,7 @@ async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"):
     ...(kind === "agent"
       ? {
         thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
+        shipped: row.agent ? (JSON.parse(row.agent) as AgentSide).shipped ?? null : null,
         agent: threadAgentState(
           row.agent ? JSON.parse(row.agent) as AgentSide : null,
           row.last_sent_at,
@@ -394,7 +402,7 @@ export function chatView(
     : agent?.activity ?? "Working";
   return {
     id, messages: entries.map(({ message }) => message), isWorking, activity, problem, costCents: null,
-    model: null, effort: null, builderOnline: online, thread: agent?.thread ?? null,
+    model: null, effort: null, builderOnline: online, thread: agent?.thread ?? null, shipped: agent?.shipped ?? null,
   };
 }
 
@@ -550,7 +558,11 @@ export async function runnerResult(
 
 /** The runner's look at the agent: its messages so far, whether it is working, and where it runs. */
 export function parseAgentSide(body: unknown, now: number): AgentSide | null {
-  const { messages, isWorking, activity, thread } = (body ?? {}) as Record<string, unknown>;
+  const { messages, isWorking, activity, thread, shipped } = (body ?? {}) as Record<string, unknown>;
+  const landed = shipped === undefined || shipped === null ? null : parseShipped(shipped);
+  if (landed === undefined) {
+    return null;
+  }
   if (!Array.isArray(messages) || messages.length > MAX_AGENT_MESSAGES || typeof isWorking !== "boolean"
     || (activity !== null && (typeof activity !== "string" || activity.length > 80))) {
     return null;
@@ -567,7 +579,7 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
   const place = thread as { host?: unknown; id?: unknown } | null | undefined;
   const where = place && typeof place.host === "string" && typeof place.id === "string"
     && place.host.length <= 100 && place.id.length <= 200 ? { host: place.host, id: place.id } : null;
-  return { messages: parsed, isWorking, activity: activity as string | null, thread: where, updatedAt: now };
+  return { messages: parsed, isWorking, activity: activity as string | null, thread: where, updatedAt: now, ...(landed ? { shipped: landed } : {}) };
 }
 
 /** One of the sender's screenshots: its bytes and type; null when the chat, message or image is not theirs. */
@@ -629,7 +641,8 @@ export async function runnerAgent(store: FeedbackStore, chat: string, agent: Age
   });
   const was = before.agent;
   const stateMoved = !was || was.isWorking !== agent.isWorking || was.activity !== agent.activity
-    || was.thread?.host !== agent.thread?.host || was.thread?.id !== agent.thread?.id;
+    || was.thread?.host !== agent.thread?.host || was.thread?.id !== agent.thread?.id
+    || JSON.stringify(was.shipped ?? null) !== JSON.stringify(agent.shipped ?? null);
   const steps = changed.length + (changed.length || stateMoved ? 1 : 0);
   const writes: D1PreparedStatement[] = [];
   if (steps) {

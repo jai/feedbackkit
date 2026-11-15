@@ -51,7 +51,7 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
 | `/runner/poll` | `{orca, detail?}`: whether the agents' Mac answers, and why not | `{work: [{chat, message, first, at}]}`, oldest first |
 | `/runner/claim` | `{chat, message}` | `{ok, text, build, first, title, images}`; `409` not pending; `404` |
 | `/runner/result` | `{chat, message, status: "delivered" \| "failed", detail?}` | `{ok}`; `409` not claimed |
-| `/runner/agent` | `{chat, messages: [{id, text, at}], isWorking, activity, thread}` | `{ok}`; `404` no chat |
+| `/runner/agent` | `{chat, messages: [{id, text, at}], isWorking, activity, thread, shipped?}` | `{ok}`; `404` no chat; `400` a bad side |
 | `/runner/wait` | `{since, ms}`: the wake count the runner last saw, and how long to hold (at most 25,000) | `{seq}`; `404` no long poll |
 
 - A message is `pending` → `delivering` (claim) → `delivered` or `failed` (result). A claim is a compare-and-swap on
@@ -61,7 +61,9 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
   Durable Object, `worker/src/runner-wake.ts`). A `since` that is not the count, or none, answers at once; otherwise the
   answer comes at the next message or after `ms`. The runner then polls, so a message is claimed in about a second. The
   count restarts at another number when the object does, which wakes the runner once for nothing.
-- `agent` replaces the agent's side of the chat: all its messages so far (at most 500, 20,000 characters each).
+- `agent` replaces the agent's side of the chat: all its messages so far (at most 500, 20,000 characters each), and
+  `shipped` ([api.md](api.md#shipped), `worker/src/shipped.ts`): kept with the side, `null` when absent. A `shipped` that
+  is not as described refuses the whole side.
 - Storage ([below](#storage)): a message is in D1 before its send answers.
 
 ## Storage

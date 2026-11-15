@@ -199,6 +199,6 @@ export async function issueChat(context: IssueFeedback, chat: string): Promise<F
   entries.sort((a, b) => a.at - b.at);
   return {
     id: stored.id, messages: entries.map(({ message }) => message), isWorking: false, activity: null, problem: null,
-    costCents: null, model: null, effort: null, builderOnline: true, thread: null,
+    costCents: null, model: null, effort: null, builderOnline: true, thread: null, shipped: null,
   };
 }

@@ -83,7 +83,7 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
       _meta: {
         agentchatkit: {
           activity: view.activity, problem: view.problem,
-          extra: { builderOnline: view.builderOnline, thread: view.thread },
+          extra: { builderOnline: view.builderOnline, thread: view.thread, shipped: view.shipped },
         },
       },
     };
