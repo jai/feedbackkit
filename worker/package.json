@@ -12,6 +12,6 @@
     "wrangler": "^4.156.0"
   },
   "dependencies": {
-    "@jai/agentchat-live": "file:vendor/jai-agentchat-live-bb26cdc.tgz"
+    "@jai/agentchat-live": "file:vendor/jai-agentchat-live-a42e23c.tgz"
   }
 }

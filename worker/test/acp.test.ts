@@ -71,6 +71,8 @@ const cases = conformanceCases<LiveWho>({
     }
     return new Request(url, { ...init, headers });
   },
+  // FeedbackKit's cursors never expire; one past the chat's seq is from another history, and must be refused.
+  staleCursor: async (_chat, current) => String(Number(current) + 1_000),
   strangerStatus: 404,
 });
 
@@ -78,7 +80,7 @@ for (const one of cases) {
   test(`conformance: ${one.name}`, { skip: one.skip }, () => one.run());
 }
 
-test("only what FeedbackKit does not do is skipped: cursor expiry in this harness, and questions", () => {
-  assert.deepEqual(cases.filter((one) => one.skip).map((one) => one.name.split(":")[0]), ["resume-expired.json", "question.json"]);
-  assert.equal(cases.filter((one) => !one.skip).length, 6);
+test("only questions are skipped: FeedbackKit asks none", () => {
+  assert.deepEqual(cases.filter((one) => one.skip).map((one) => one.name.split(":")[0]), ["question.json"]);
+  assert.equal(cases.filter((one) => !one.skip).length, 7);
 });

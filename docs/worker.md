@@ -99,17 +99,20 @@ binding or `FEEDBACKKIT_URL` ([jai/prhub `docs/api.md`](https://github.com/jai/p
 
 ## Deploy
 
-From `worker/`: copy `../deploy/wrangler.template.jsonc` to `../deploy/wrangler.jsonc` (gitignored), fill
-`__CLOUDFLARE_ACCOUNT_ID__` and `__PUBLIC_URL__`, then `npx wrangler deploy --config ../deploy/wrangler.jsonc`. Secrets,
-with `wrangler secret put`: `CALLER_TOKEN` (the backends'), `RUNNER_TOKEN` (the runner's), `ISSUES_TOKEN` (opens
-issues) and `ADMIN_TOKEN` (the migration). Fill `__D1_DATABASE_ID__` with the `feedbackkit` database's id and apply
-its migrations first: `npx wrangler d1 migrations apply feedbackkit --remote --config ../deploy/wrangler.jsonc`. Then
-check that `npx wrangler d1 migrations list feedbackkit --remote --config ../deploy/wrangler.jsonc` lists none still
-to apply, and only then deploy: code that needs a column the database lacks fails every request that touches it
-(2026-11-15: migration 0004 failed D1's foreign-key check, and the Worker went out before anyone saw). A new app is one entry in `APPS` and a deploy.
+`CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… deploy/deploy.sh` from the repo root, on a committed HEAD. It renders
+`deploy/wrangler.jsonc` (gitignored) from the template, with the `feedbackkit` D1 database's id; runs the Worker's
+tests; applies D1's migrations and **stops unless D1 then lists none still to apply**; and only then deploys, named for
+the commit. Code that needs a column the database lacks fails every request that touches it (2026-11-15: migration
+0004 failed D1's foreign-key check, and the Worker went out before anyone saw; the script exists so it cannot again).
 
-The live protocol's server is `@jai/agentchat-live`, vendored as `worker/vendor/jai-agentchat-live-bb26cdc.tgz`: built
-from [jai/agentchatkit](https://github.com/jai/agentchatkit) `server/` at bb26cdc (`npm ci && npm run build && npm
-pack`), because no release carries it yet. When one does, depend on its tarball URL instead and delete the vendored
-file. Its conformance suite runs in `worker/test/acp.test.ts`. Deploying it needs the secret `ACP_SECRET` (signs ACP
+Secrets are set once, with `wrangler secret put --config deploy/wrangler.jsonc` from `worker/`: `CALLER_TOKEN` (the
+backends'), `RUNNER_TOKEN` (the runner's), `ISSUES_TOKEN` (opens issues), `ADMIN_TOKEN` (the migration and the APNs
+check), `APP_KEYS` (FeedbackKit tokens), `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_P8` (pushes) and `ACP_SECRET` (live).
+A new app is one entry in `APPS` and a deploy.
+
+The live protocol's server is `@jai/agentchat-live`, vendored as `worker/vendor/jai-agentchat-live-a42e23c.tgz`: built
+from [jai/agentchatkit](https://github.com/jai/agentchatkit) `server/` at a42e23c (`npm ci && npm run build && npm
+pack`), because no release carries it yet. TODO: agentchatkit cannot tag a release until its release job may create
+tags over commits that change workflow files (a credential from Jai, with the github-infrastructure session). Once it
+tags, depend on the release's tarball URL in `worker/package.json` and delete `worker/vendor/`. Its conformance suite runs in `worker/test/acp.test.ts`. Deploying it needs the secret `ACP_SECRET` (signs ACP
 connection ids; any long random string) and D1 migration 0004.
