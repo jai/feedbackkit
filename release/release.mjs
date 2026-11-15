@@ -47,9 +47,11 @@ async function greenHead(tag) {
 
 const tag = git('tag', '--merged', 'HEAD', '--list', 'v*', '--sort=-v:refname').split('\n')[0];
 if (!tag) throw new Error('no v* tag on main');
-const age = Math.floor(Date.now() / 1000) - Number(git('for-each-ref', '--format=%(creatordate:unix)', `refs/tags/${tag}`));
+// Timed from the GitHub Release, not the tag: a tag the API makes is lightweight, and its date is its commit's.
+const latest = await github('/releases/latest').catch(() => null);
+const age = latest ? Math.floor((Date.now() - Date.parse(latest.published_at)) / 1000) : Infinity;
 if (age < HOUR) {
-  say(`${tag} went out ${Math.round(age / 60)} minutes ago; at most one release an hour. Nothing released.`);
+  say(`${latest.tag_name} went out ${Math.round(age / 60)} minutes ago; at most one release an hour. Nothing released.`);
   process.exit(0);
 }
 

@@ -1,9 +1,15 @@
-# The hourly release: once an hour (or by hand), the newest commit on main whose `ci` run passed (the package's tests,
+# The hourly release: when ci passes on main, on the hour's cron, or by hand, and at most once an hour, the newest commit on main whose `ci` run passed (the package's tests,
 # the Worker's and the demo's end-to-end UI test) becomes the next version's tag and GitHub Release, when the commits
 # since the last tag hold a feat, fix or breaking change (release/version.mjs). PRHub and Agent Pager pin these tags.
 name: release
 
 on:
+  # ci finished on main: release its commit now when it passed, instead of waiting for the cron. GitHub skips
+  # scheduled runs for hours at a time (the last one ran 2026-11-15 01:59 UTC), so the cron is the backup.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
@@ -17,6 +23,10 @@ concurrency:
 
 jobs:
   release:
+    # From ci, only a push to main that passed; release.mjs still picks main's newest green commit.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
