@@ -101,6 +101,12 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse((folder.parent / "README.md").exists())  # only runner/ is unpacked
         self.assertEqual(gh.calls[-1], ["python3.14", "-m", "unittest", "discover", "-s", "tests", "-t", "."])
 
+    def test_an_earlier_fetch_is_removed(self) -> None:
+        updater = self.updater(Gh())
+        (updater.work_dir / "v0.5.0").mkdir(parents=True)
+        updater.prepare()
+        self.assertEqual([path.name for path in updater.work_dir.iterdir()], ["v0.7.0"])
+
     def test_the_installed_release_is_one_call_an_hour(self) -> None:
         gh = Gh(latest="v0.6.0")
         updater = self.updater(gh)

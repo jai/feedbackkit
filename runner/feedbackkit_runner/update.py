@@ -156,10 +156,10 @@ class Updater:
         return Release(latest, commit, runner_tree)
 
     def fetch(self, release: Release) -> Path:
-        """The release's `runner/`, unpacked into the state folder; its folder."""
+        """The release's `runner/`, unpacked into the state folder; its folder. Earlier fetches go first."""
         archive = self.api(f"repos/{REPO}/tarball/{release.commit}")
+        shutil.rmtree(self.work_dir, ignore_errors=True)
         target = self.work_dir / release.tag
-        shutil.rmtree(target, ignore_errors=True)
         target.mkdir(parents=True, mode=0o700)
         try:
             with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
