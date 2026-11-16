@@ -1,5 +1,5 @@
-# Deploys FeedbackKit's Worker `featurekit` and its D1 `feedbackkit` migrations from each vX.Y.Z GitHub Release, and
-# by hand for a tag: deploy/deploy.sh renders the config, runs the Worker's tests, applies D1's migrations and
+# Deploys FeedbackKit's Worker `featurekit` and its D1 `feedbackkit` migrations, and publishes the Runner menu bar
+# app, from each vX.Y.Z GitHub Release, and by hand for a tag. The Worker: deploy/deploy.sh renders the config, runs the Worker's tests, applies D1's migrations and
 # deploys only when none is left (docs/worker.md#deploy). Its token (Workers Scripts and D1, edit, on Jai's account)
 # and account id are repository secrets; secrets never reach a fork.
 name: deploy
@@ -46,3 +46,35 @@ jobs:
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST https://featurekit.jai-f89.workers.dev/feedback/token)
           [ "$code" = 401 ] || { echo "POST /feedback/token answered $code, not 401"; exit 1; }
+
+  runner-menu:
+    # The FeedbackKit Runner menu bar app (runner/MenuBar), built from the tag and published as the GitHub prerelease
+    # `runner-menu` (FeedbackKitRunner.zip), which runner/MenuBar/install.sh downloads on Jai's Mac. Nothing builds on
+    # Jai's Macs (jai/ci RULES.md). The prerelease's tag stays where it was first made; the zip is replaced.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    defaults:
+      run:
+        working-directory: runner/MenuBar
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - run: ./bundle.sh FeedbackKitRunner.zip
+      - name: Publish the runner-menu prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="The FeedbackKit Runner menu bar app, built from $TAG. Install: runner/MenuBar/README.md."
+          if gh release view runner-menu >/dev/null 2>&1; then
+            gh release edit runner-menu --notes "$notes" --prerelease --latest=false
+          else
+            gh release create runner-menu --target "$(git rev-parse HEAD)" --title "FeedbackKit Runner (menu bar)" \
+              --notes "$notes" --prerelease --latest=false
+          fi
+          gh release upload runner-menu FeedbackKitRunner.zip --clobber

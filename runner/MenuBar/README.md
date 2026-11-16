@@ -24,7 +24,7 @@ On Jai's Mac:
 curl -fsSL https://raw.githubusercontent.com/jai/feedbackkit/main/runner/MenuBar/install.sh | sh
 ```
 
-It downloads the build CI publishes (the GitHub prerelease `runner-menu`), puts it in `~/Applications/FeedbackKit
+It downloads the build each release publishes (the GitHub prerelease `runner-menu`), puts it in `~/Applications/FeedbackKit
 Runner.app` and starts it at login (LaunchAgent `com.jai.feedbackkit-runner-menu`). Run it again to update. Nothing is
 built on Jai's Macs: [ci.yml](../../.github/workflows/ci.yml)'s `runner-menu` job tests and builds it on GitHub's Mac
 runner (`bundle.sh`, ad-hoc signed) for every change on main.
