@@ -9,7 +9,7 @@ let package = Package(
         .library(name: "FeedbackKit", targets: ["FeedbackKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/jai/agentchatkit", from: "0.4.0"),
+        .package(url: "https://github.com/jai/agentchatkit", from: "0.7.1"),
         .package(url: "https://github.com/jai/durable-networking", from: "0.1.0"),
     ],
     targets: [

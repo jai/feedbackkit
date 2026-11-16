@@ -1,13 +1,13 @@
 {
-  "originHash" : "e176e96ae6cedec9d67c54b8700d5b16d75f154926913abb672d34fe1ecd4129",
+  "originHash" : "aa8875968817af6a9402b9fba4aa9a5da0381e123071226eb4acaaf1bee32252",
   "pins" : [
     {
       "identity" : "agentchatkit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jai/agentchatkit",
       "state" : {
-        "revision" : "e754a4da0a61d1e0a6c360890f0b7ca47c76089b",
-        "version" : "0.4.1"
+        "revision" : "485ed9d86bf29417c4590ba1a596be0729a00a1f",
+        "version" : "0.7.1"
       }
     },
     {
