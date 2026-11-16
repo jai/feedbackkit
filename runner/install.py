@@ -74,8 +74,30 @@ def wanted(home: Path) -> dict[Path, bytes]:
     return files
 
 
+def same(path: Path, data: bytes) -> bool:
+    """Whether `path` holds `data`; a plist by its content, so a rewrite in another layout is no change."""
+    try:
+        held = path.read_bytes()
+        return held == data or (path.suffix == ".plist" and plistlib.loads(held) == plistlib.loads(data))
+    except OSError, plistlib.InvalidFileException, ValueError:
+        return False
+
+
 def differing(files: dict[Path, bytes]) -> list[Path]:
-    return [path for path, data in files.items() if not path.exists() or path.read_bytes() != data]
+    """The files to write: only those whose content is new. macOS posts an "App Background Activity" notice when a
+    job is registered again or the program behind it changes, so nothing unchanged is rewritten."""
+    return [path for path, data in files.items() if not same(path, data)]
+
+
+def plan(plist_changed: bool, files_changed: bool, is_loaded: bool) -> str:
+    """What launchd needs. Registering a job again (bootout and bootstrap) makes macOS post an "App Background
+    Activity" notice, which a Mac UI test on the mini can click into System Settings (jai/ci a8bd0fa). So only a new
+    or changed plist registers the job; changed sources restart the loaded job with `kickstart -k`."""
+    if not is_loaded:
+        return "bootstrap"
+    if plist_changed:
+        return "reload"
+    return "kickstart" if files_changed else "none"
 
 
 def stale(home: Path, files: dict[Path, bytes]) -> list[Path]:
@@ -149,8 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     write_record(home, record, time.time())
     plist = plist_path(home)
-    if plist in changed or not is_loaded:
-        if is_loaded:
+    action = plan(plist in changed, bool(changed or old), is_loaded)
+    if action in ("bootstrap", "reload"):
+        if action == "reload":
             subprocess.run(["/bin/launchctl", "bootout", f"{domain}/{LABEL}"], check=True, capture_output=True)
             for _ in range(50):
                 if not loaded(domain):
@@ -158,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(0.2)
         subprocess.run(["/bin/launchctl", "bootstrap", domain, str(plist)], check=True, capture_output=True)
         print(f"loaded {LABEL}")
-    elif changed or old:
+    elif action == "kickstart":
         subprocess.run(["/bin/launchctl", "kickstart", "-k", f"{domain}/{LABEL}"], check=True, capture_output=True)
         print(f"restarted {LABEL}")
     else:

@@ -63,7 +63,10 @@ git -C ~/Developer/feedbackkit pull --ff-only && make -C ~/Developer/feedbackkit
 ```
 
 After this first install the runner installs newer releases itself (above). `install.py` copies `feedbackkit_runner/` to `~/Library/Application Support/feedbackkit-runner/app/`, writes the
-LaunchAgent, and reloads or restarts the job when either changed. `make -C runner install-check` reports drift. It needs:
+LaunchAgent, and reloads or restarts the job when either changed. It writes only files whose content is new, and
+registers the job again (bootout and bootstrap) only for a new or changed plist; changed sources restart it with
+`kickstart -k`. macOS posts an "App Background Activity" notice each time a job is registered or its program changes,
+which a Mac UI test on the mini can click into System Settings. `make -C runner install-check` reports drift. It needs:
 
 - `~/.credentials/feedbackkit`: `FEEDBACKKIT_URL` and `FEEDBACKKIT_RUNNER_TOKEN`.
 - Each builder's Orca paired on the mini (`orca environment add`) and SSH to it (Agent Pager's fleet aliases).
