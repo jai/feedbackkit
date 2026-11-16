@@ -1,6 +1,6 @@
+@testable import FeedbackKit
 import Foundation
 import Testing
-@testable import FeedbackKit
 
 /// What a chat shipped, as the Worker serves it on list rows and chats (docs/api.md#shipped).
 struct FeedbackShippedTests {

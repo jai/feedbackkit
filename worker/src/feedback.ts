@@ -51,11 +51,14 @@ export interface ThreadAgentState {
  * agent spoke last and stopped; else idle.
  */
 export function threadAgentState(
-  agent: AgentSide | null, lastSentAt: number | null, lastAgentAt: number | null, waiting: boolean,
+  agent: AgentSide | null,
+  lastSentAt: number | null,
+  lastAgentAt: number | null,
+  waiting: boolean,
 ): ThreadAgentState {
   const unseen = lastSentAt !== null && (agent?.updatedAt ?? 0) < lastSentAt;
   if (waiting || agent?.isWorking || unseen) {
-    return { state: "working", activity: agent?.isWorking ? agent.activity ?? "Working" : "Starting" };
+    return { state: "working", activity: agent?.isWorking ? (agent.activity ?? "Working") : "Starting" };
   }
   if (lastAgentAt !== null && (lastSentAt === null || lastAgentAt >= lastSentAt)) {
     return { state: "needs_you", activity: null };
@@ -155,7 +158,11 @@ export interface FeedbackStore {
 }
 
 export function senderStore(
-  db: D1Database, bucket: ImageBucket, app: string, login: string, name: string | null = null,
+  db: D1Database,
+  bucket: ImageBucket,
+  app: string,
+  login: string,
+  name: string | null = null,
 ): FeedbackStore {
   const lower = login.toLowerCase();
   return { db, bucket, app, login: lower, prefix: `apps/${app}/users/${lower}/`, name };
@@ -185,8 +192,15 @@ interface MessageRow {
 
 function stored(row: MessageRow): StoredMessage {
   return {
-    id: row.id, at: row.at, text: row.text, build: row.build, images: row.images, first: row.first === 1,
-    status: row.status ?? "delivered", claimedAt: row.claimed_at, detail: row.detail,
+    id: row.id,
+    at: row.at,
+    text: row.text,
+    build: row.build,
+    images: row.images,
+    first: row.first === 1,
+    status: row.status ?? "delivered",
+    claimedAt: row.claimed_at,
+    detail: row.detail,
   };
 }
 
@@ -195,21 +209,28 @@ async function chatRow(store: FeedbackStore, chat: string, kind: "agent" | "issu
   if (!CHAT_ID.test(chat)) {
     return null;
   }
-  return store.db.prepare(
-    "SELECT id, title, created_at, agent, thread_host, thread_id, sender_name FROM chats"
-      + " WHERE id = ? AND app = ? AND login = ? AND kind = ?",
-  ).bind(chat, store.app, store.login, kind).first<ChatRow>();
+  return store.db
+    .prepare(
+      "SELECT id, title, created_at, agent, thread_host, thread_id, sender_name FROM chats" +
+        " WHERE id = ? AND app = ? AND login = ? AND kind = ?",
+    )
+    .bind(chat, store.app, store.login, kind)
+    .first<ChatRow>();
 }
 
 /** The chat a send with this `client_ref` key made, if one did. */
 export async function chatOfRef(store: FeedbackStore, key: string): Promise<string | null> {
-  return store.db.prepare("SELECT chat FROM refs WHERE app = ? AND login = ? AND key = ?")
-    .bind(store.app, store.login, key).first<string>("chat");
+  return store.db
+    .prepare("SELECT chat FROM refs WHERE app = ? AND login = ? AND key = ?")
+    .bind(store.app, store.login, key)
+    .first<string>("chat");
 }
 
 export async function keepRef(store: FeedbackStore, key: string, chat: string): Promise<void> {
-  await store.db.prepare("INSERT OR IGNORE INTO refs (app, login, key, chat) VALUES (?, ?, ?, ?)")
-    .bind(store.app, store.login, key, chat).run();
+  await store.db
+    .prepare("INSERT OR IGNORE INTO refs (app, login, key, chat) VALUES (?, ?, ?, ?)")
+    .bind(store.app, store.login, key, chat)
+    .run();
 }
 
 export function isFeedbackId(id: string): boolean {
@@ -245,9 +266,15 @@ function parseImages(value: unknown): FeedbackImage[] | null {
   const images: FeedbackImage[] = [];
   for (const item of value) {
     const { media_type: type, data } = (item ?? {}) as { media_type?: unknown; data?: unknown };
-    if (typeof type !== "string" || !(type in IMAGE_STARTS) || typeof data !== "string" || data.length % 4 !== 0
-      || data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 || !BASE64.test(data)
-      || !data.startsWith(IMAGE_STARTS[type as ImageType])) {
+    if (
+      typeof type !== "string" ||
+      !(type in IMAGE_STARTS) ||
+      typeof data !== "string" ||
+      data.length % 4 !== 0 ||
+      data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 ||
+      !BASE64.test(data) ||
+      !data.startsWith(IMAGE_STARTS[type as ImageType])
+    ) {
       return null;
     }
     images.push({ media_type: type as ImageType, data });
@@ -264,26 +291,31 @@ export function titleOf(text: string): string {
 }
 
 async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"): Promise<FeedbackThread[]> {
-  const { results } = await store.db.prepare(
-    "SELECT id, title, created_at, thread_host, thread_id, agent,"
-      + " (SELECT max(at) FROM messages WHERE chat = chats.id AND (status IS NULL OR status != 'removed')) AS last_sent_at,"
-      + " (SELECT count(*) FROM messages WHERE chat = chats.id AND status IN ('pending', 'delivering')) AS waiting,"
-      + " (SELECT max(at) FROM agent_messages WHERE chat = chats.id) AS last_agent_at"
-      + " FROM chats WHERE app = ? AND login = ? AND kind = ? ORDER BY created_at DESC",
-  ).bind(store.app, store.login, kind).all<ChatRow & { last_sent_at: number | null; waiting: number; last_agent_at: string | null }>();
+  const { results } = await store.db
+    .prepare(
+      "SELECT id, title, created_at, thread_host, thread_id, agent," +
+        " (SELECT max(at) FROM messages WHERE chat = chats.id AND (status IS NULL OR status != 'removed')) AS last_sent_at," +
+        " (SELECT count(*) FROM messages WHERE chat = chats.id AND status IN ('pending', 'delivering')) AS waiting," +
+        " (SELECT max(at) FROM agent_messages WHERE chat = chats.id) AS last_agent_at" +
+        " FROM chats WHERE app = ? AND login = ? AND kind = ? ORDER BY created_at DESC",
+    )
+    .bind(store.app, store.login, kind)
+    .all<ChatRow & { last_sent_at: number | null; waiting: number; last_agent_at: string | null }>();
   return results.map((row) => ({
-    id: row.id, title: row.title, createdAt: new Date(row.created_at).toISOString(),
+    id: row.id,
+    title: row.title,
+    createdAt: new Date(row.created_at).toISOString(),
     ...(kind === "agent"
       ? {
-        thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
-        shipped: row.agent ? (JSON.parse(row.agent) as AgentSide).shipped ?? null : null,
-        agent: threadAgentState(
-          row.agent ? JSON.parse(row.agent) as AgentSide : null,
-          row.last_sent_at,
-          row.last_agent_at ? Date.parse(row.last_agent_at) : null,
-          row.waiting > 0,
-        ),
-      }
+          thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
+          shipped: row.agent ? ((JSON.parse(row.agent) as AgentSide).shipped ?? null) : null,
+          agent: threadAgentState(
+            row.agent ? (JSON.parse(row.agent) as AgentSide) : null,
+            row.last_sent_at,
+            row.last_agent_at ? Date.parse(row.last_agent_at) : null,
+            row.waiting > 0,
+          ),
+        }
       : {}),
   }));
 }
@@ -315,14 +347,17 @@ export function builderStatusOf(beat: RunnerBeat | null, now: number): BuilderSt
   }
   const fresh = now - beat.at < RUNNER_FRESH_MS;
   const online = fresh && beat.orca;
-  const detail = online ? null
-    : !fresh ? `The runner has not polled for ${Math.round((now - beat.at) / 1000)} s.`
-    : beat.detail || "The runner's Mac did not answer.";
+  const detail = online
+    ? null
+    : !fresh
+      ? `The runner has not polled for ${Math.round((now - beat.at) / 1000)} s.`
+      : beat.detail || "The runner's Mac did not answer.";
   return { online, lastPollAt: new Date(beat.at).toISOString(), detail };
 }
 
 async function builderStatus(store: FeedbackStore, now: number): Promise<BuilderStatus> {
-  const beat = await store.db.prepare("SELECT at, orca, detail FROM runner_beat WHERE id = 1")
+  const beat = await store.db
+    .prepare("SELECT at, orca, detail FROM runner_beat WHERE id = 1")
     .first<{ at: number; orca: number; detail: string | null }>();
   return builderStatusOf(beat ? { at: beat.at, orca: beat.orca === 1, detail: beat.detail } : null, now);
 }
@@ -340,23 +375,32 @@ export async function feedbackList(store: FeedbackStore, now: number) {
 export function listServedLog(status: BuilderStatus, threadCount: number, now: number): string {
   const age = status.lastPollAt === null ? null : Math.round((now - Date.parse(status.lastPollAt)) / 1000);
   return JSON.stringify({
-    event: "feedback_list_served", builderOnline: status.online, runnerPollAgeSeconds: age, detail: status.detail,
+    event: "feedback_list_served",
+    builderOnline: status.online,
+    runnerPollAgeSeconds: age,
+    detail: status.detail,
     threads: threadCount,
   });
 }
 
 async function messagesOf(store: FeedbackStore, chat: string): Promise<StoredMessage[]> {
-  const { results } = await store.db.prepare(
-    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages"
-      + " WHERE chat = ? AND status IS NOT 'removed' ORDER BY at, id",
-  ).bind(chat).all<MessageRow>();
+  const { results } = await store.db
+    .prepare(
+      "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages" +
+        " WHERE chat = ? AND status IS NOT 'removed' ORDER BY at, id",
+    )
+    .bind(chat)
+    .all<MessageRow>();
   return results.map(stored);
 }
 
 /** What the chat says of a message the runner took and never reported on. */
 function effectiveStatus(message: StoredMessage, now: number): { status: MessageStatus; detail: string | null } {
   if (message.status === "delivering" && message.claimedAt !== null && now - message.claimedAt > DELIVERY_STUCK_MS) {
-    return { status: "failed", detail: "The builder stopped while passing this on. Check the chat before sending again." };
+    return {
+      status: "failed",
+      detail: "The builder stopped while passing this on. Check the chat before sending again.",
+    };
   }
   return { status: message.status, detail: message.detail };
 }
@@ -368,17 +412,26 @@ export async function feedbackChat(store: FeedbackStore, chat: string, now: numb
     return null;
   }
   const [mine, online] = await Promise.all([messagesOf(store, chat), builderOnline(store, now)]);
-  return chatView(chat, mine, row.agent ? JSON.parse(row.agent) as AgentSide : null, online, now);
+  return chatView(chat, mine, row.agent ? (JSON.parse(row.agent) as AgentSide) : null, online, now);
 }
 
 /** Jai's messages and the agent's, in time order; working from a send until the agent's turn is over. */
 export function chatView(
-  id: string, mine: StoredMessage[], agent: AgentSide | null, online: boolean, now: number,
+  id: string,
+  mine: StoredMessage[],
+  agent: AgentSide | null,
+  online: boolean,
+  now: number,
 ): FeedbackChat {
   const entries: Array<{ at: number; message: FeedbackMessage }> = mine.map((message) => ({
     at: message.at,
     message: {
-      id: message.id, role: "you", text: message.text, anchor: null, images: message.images, status: message.status,
+      id: message.id,
+      role: "you",
+      text: message.text,
+      anchor: null,
+      images: message.images,
+      status: message.status,
     },
   }));
   for (const message of agent?.messages ?? []) {
@@ -393,16 +446,33 @@ export function chatView(
   // Delivered after the runner last looked: the agent's turn has started, whatever the last look said.
   const unseen = statuses.some(({ message, status }) => status === "delivered" && (agent?.updatedAt ?? 0) < message.at);
   const last = statuses.at(-1);
-  const problem = last?.status === "failed" ? last.detail ?? "This message could not be passed on." : null;
+  const problem = last?.status === "failed" ? (last.detail ?? "This message could not be passed on.") : null;
   const isWorking = problem === null && (waiting || unseen || (agent?.isWorking ?? false));
   // Only a chat's first message starts its agent; a later one goes to the same agent, so it says so.
-  const startsAgent = statuses.some(({ message, status }) => message.first && (status === "pending" || status === "delivering"));
-  const activity = !isWorking ? null
-    : waiting ? (online ? (startsAgent ? "Starting" : "Passing your message to the agent") : null)
-    : agent?.activity ?? "Working";
+  const startsAgent = statuses.some(
+    ({ message, status }) => message.first && (status === "pending" || status === "delivering"),
+  );
+  const activity = !isWorking
+    ? null
+    : waiting
+      ? online
+        ? startsAgent
+          ? "Starting"
+          : "Passing your message to the agent"
+        : null
+      : (agent?.activity ?? "Working");
   return {
-    id, messages: entries.map(({ message }) => message), isWorking, activity, problem, costCents: null,
-    model: null, effort: null, builderOnline: online, thread: agent?.thread ?? null, shipped: agent?.shipped ?? null,
+    id,
+    messages: entries.map(({ message }) => message),
+    isWorking,
+    activity,
+    problem,
+    costCents: null,
+    model: null,
+    effort: null,
+    builderOnline: online,
+    thread: agent?.thread ?? null,
+    shipped: agent?.shipped ?? null,
   };
 }
 
@@ -412,14 +482,21 @@ export function chatView(
  * is kept (one checkmark).
  */
 export async function addFeedback(
-  store: FeedbackStore, chat: string | null, input: FeedbackInput, now: number,
+  store: FeedbackStore,
+  chat: string | null,
+  input: FeedbackInput,
+  now: number,
 ): Promise<string | null> {
   return (await addMessage(store, chat, input, now))?.chat ?? null;
 }
 
 /** As `addFeedback`, answering the message's id too; `clientRef` is the app's own id for it (the live protocol's). */
 export async function addMessage(
-  store: FeedbackStore, chat: string | null, input: FeedbackInput, now: number, clientRef: string | null = null,
+  store: FeedbackStore,
+  chat: string | null,
+  input: FeedbackInput,
+  now: number,
+  clientRef: string | null = null,
 ): Promise<{ chat: string; message: string } | null> {
   if (chat && !(await chatRow(store, chat))) {
     return null;
@@ -430,20 +507,32 @@ export async function addMessage(
   await Promise.all(input.images.map((image, index) => store.bucket.put(keys[index], JSON.stringify(image))));
   const writes: D1PreparedStatement[] = [];
   if (chat === null) {
-    writes.push(store.db.prepare(
-      "INSERT INTO chats (id, app, login, kind, title, created_at, sender_name) VALUES (?, ?, ?, 'agent', ?, ?, ?)",
-    ).bind(id, store.app, store.login, titleOf(input.text), now, store.name ?? null));
+    writes.push(
+      store.db
+        .prepare(
+          "INSERT INTO chats (id, app, login, kind, title, created_at, sender_name) VALUES (?, ?, ?, 'agent', ?, ?, ?)",
+        )
+        .bind(id, store.app, store.login, titleOf(input.text), now, store.name ?? null),
+    );
   } else if (store.name) {
     writes.push(store.db.prepare("UPDATE chats SET sender_name = ? WHERE id = ?").bind(store.name, id));
   }
   writes.push(bump(store.db, id));
-  writes.push(store.db.prepare(
-    "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq, client_ref)"
-      + " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?), ?)",
-  ).bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id, clientRef));
-  input.images.forEach((image, index) => writes.push(store.db.prepare(
-    "INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)",
-  ).bind(message, index, keys[index], image.media_type)));
+  writes.push(
+    store.db
+      .prepare(
+        "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq, client_ref)" +
+          " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?), ?)",
+      )
+      .bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id, clientRef),
+  );
+  input.images.forEach((image, index) =>
+    writes.push(
+      store.db
+        .prepare("INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)")
+        .bind(message, index, keys[index], image.media_type),
+    ),
+  );
   await store.db.batch(writes);
   return { chat: id, message };
 }
@@ -453,7 +542,10 @@ export async function addMessage(
  * is not theirs, not there, or no longer `pending`.
  */
 export async function changePending(
-  store: FeedbackStore, chat: string, message: string, change: { text: string } | "remove",
+  store: FeedbackStore,
+  chat: string,
+  message: string,
+  change: { text: string } | "remove",
 ): Promise<boolean> {
   if (!MESSAGE_ID.test(message) || !(await chatRow(store, chat))) {
     return false;
@@ -461,10 +553,18 @@ export async function changePending(
   const [, changed] = await store.db.batch([
     bump(store.db, chat, { message, status: "pending" }),
     change === "remove"
-      ? store.db.prepare("UPDATE messages SET status = 'removed', seq = (SELECT seq FROM chats WHERE id = ?)"
-        + " WHERE id = ? AND chat = ? AND status = 'pending'").bind(chat, message, chat)
-      : store.db.prepare("UPDATE messages SET text = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
-        + " WHERE id = ? AND chat = ? AND status = 'pending'").bind(change.text, chat, message, chat),
+      ? store.db
+          .prepare(
+            "UPDATE messages SET status = 'removed', seq = (SELECT seq FROM chats WHERE id = ?)" +
+              " WHERE id = ? AND chat = ? AND status = 'pending'",
+          )
+          .bind(chat, message, chat)
+      : store.db
+          .prepare(
+            "UPDATE messages SET text = ?, seq = (SELECT seq FROM chats WHERE id = ?)" +
+              " WHERE id = ? AND chat = ? AND status = 'pending'",
+          )
+          .bind(change.text, chat, message, chat),
   ]);
   return changed.meta.changes === 1;
 }
@@ -472,29 +572,47 @@ export async function changePending(
 // --- The runner ------------------------------------------------------------------------------------------------------
 
 /** The runner's beat: it is alive, and whether its Mac's Orca answers. */
-export async function runnerBeat(db: D1Database, orca: boolean, now: number, detail: string | null = null): Promise<void> {
-  await db.prepare(
-    "INSERT INTO runner_beat (id, at, orca, detail) VALUES (1, ?, ?, ?)"
-      + " ON CONFLICT (id) DO UPDATE SET at = excluded.at, orca = excluded.orca, detail = excluded.detail",
-  ).bind(now, orca ? 1 : 0, orca ? null : detail?.slice(0, 200) ?? null).run();
+export async function runnerBeat(
+  db: D1Database,
+  orca: boolean,
+  now: number,
+  detail: string | null = null,
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO runner_beat (id, at, orca, detail) VALUES (1, ?, ?, ?)" +
+        " ON CONFLICT (id) DO UPDATE SET at = excluded.at, orca = excluded.orca, detail = excluded.detail",
+    )
+    .bind(now, orca ? 1 : 0, orca ? null : (detail?.slice(0, 200) ?? null))
+    .run();
 }
 
 /** A poll for one sender: the runner is alive (and whether its Mac answers), and the messages it has not taken. */
 export async function runnerPoll(
-  store: FeedbackStore, orca: boolean, now: number, detail: string | null = null,
+  store: FeedbackStore,
+  orca: boolean,
+  now: number,
+  detail: string | null = null,
 ): Promise<RunnerWork[]> {
   await runnerBeat(store.db, orca, now, detail);
   return pendingWork(store);
 }
 
 export async function pendingWork(store: FeedbackStore): Promise<RunnerWork[]> {
-  const { results } = await store.db.prepare(
-    "SELECT m.chat AS chat, m.id AS message, m.first AS first, m.at AS at, c.sender_name AS name"
-      + " FROM messages m JOIN chats c ON c.id = m.chat"
-      + " WHERE m.status = 'pending' AND c.app = ? AND c.login = ? AND c.kind = 'agent' ORDER BY m.at, m.id",
-  ).bind(store.app, store.login).all<{ chat: string; message: string; first: number; at: number; name: string | null }>();
+  const { results } = await store.db
+    .prepare(
+      "SELECT m.chat AS chat, m.id AS message, m.first AS first, m.at AS at, c.sender_name AS name" +
+        " FROM messages m JOIN chats c ON c.id = m.chat" +
+        " WHERE m.status = 'pending' AND c.app = ? AND c.login = ? AND c.kind = 'agent' ORDER BY m.at, m.id",
+    )
+    .bind(store.app, store.login)
+    .all<{ chat: string; message: string; first: number; at: number; name: string | null }>();
   return results.map((row) => ({
-    chat: row.chat, message: row.message, first: row.first === 1, at: row.at, name: row.name,
+    chat: row.chat,
+    message: row.message,
+    first: row.first === 1,
+    at: row.at,
+    name: row.name,
   }));
 }
 
@@ -502,9 +620,12 @@ async function findMessage(store: FeedbackStore, chat: string, id: string): Prom
   if (!MESSAGE_ID.test(id) || !(await chatRow(store, chat))) {
     return null;
   }
-  const row = await store.db.prepare(
-    "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages WHERE id = ? AND chat = ?",
-  ).bind(id, chat).first<MessageRow>();
+  const row = await store.db
+    .prepare(
+      "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages WHERE id = ? AND chat = ?",
+    )
+    .bind(id, chat)
+    .first<MessageRow>();
   return row ? stored(row) : null;
 }
 
@@ -520,38 +641,53 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
   }
   const [, claimed] = await store.db.batch([
     bump(store.db, chat, { message: id, status: "pending" }),
-    store.db.prepare(
-      "UPDATE messages SET status = 'delivering', claimed_at = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
-        + " WHERE id = ? AND chat = ? AND status = 'pending'",
-    ).bind(now, chat, id, chat),
+    store.db
+      .prepare(
+        "UPDATE messages SET status = 'delivering', claimed_at = ?, seq = (SELECT seq FROM chats WHERE id = ?)" +
+          " WHERE id = ? AND chat = ? AND status = 'pending'",
+      )
+      .bind(now, chat, id, chat),
   ]);
   if (!claimed.meta.changes) {
     return { ok: false, status: 409 };
   }
-  const { results } = await store.db.prepare("SELECT r2_key FROM images WHERE message = ? ORDER BY idx")
-    .bind(id).all<{ r2_key: string }>();
-  const images = await Promise.all(results.map(async ({ r2_key }) =>
-    (await (await store.bucket.get(r2_key))?.json<FeedbackImage>()) ?? undefined));
+  const { results } = await store.db
+    .prepare("SELECT r2_key FROM images WHERE message = ? ORDER BY idx")
+    .bind(id)
+    .all<{ r2_key: string }>();
+  const images = await Promise.all(
+    results.map(async ({ r2_key }) => (await (await store.bucket.get(r2_key))?.json<FeedbackImage>()) ?? undefined),
+  );
   const title = (await chatRow(store, chat))?.title ?? titleOf(found.text);
   return {
-    ok: true, text: found.text, build: found.build, first: found.first,
-    images: images.filter((image) => image !== undefined), title,
+    ok: true,
+    text: found.text,
+    build: found.build,
+    first: found.first,
+    images: images.filter((image) => image !== undefined),
+    title,
   };
 }
 
 /** Delivering → delivered or failed. */
 export async function runnerResult(
-  store: FeedbackStore, chat: string, id: string, delivered: boolean, detail: string | null,
+  store: FeedbackStore,
+  chat: string,
+  id: string,
+  delivered: boolean,
+  detail: string | null,
 ): Promise<404 | 409 | 200> {
   if (!(await findMessage(store, chat, id))) {
     return 404;
   }
   const [, done] = await store.db.batch([
     bump(store.db, chat, { message: id, status: "delivering" }),
-    store.db.prepare(
-      "UPDATE messages SET status = ?, detail = ?, seq = (SELECT seq FROM chats WHERE id = ?)"
-        + " WHERE id = ? AND chat = ? AND status = 'delivering'",
-    ).bind(delivered ? "delivered" : "failed", delivered ? null : detail, chat, id, chat),
+    store.db
+      .prepare(
+        "UPDATE messages SET status = ?, detail = ?, seq = (SELECT seq FROM chats WHERE id = ?)" +
+          " WHERE id = ? AND chat = ? AND status = 'delivering'",
+      )
+      .bind(delivered ? "delivered" : "failed", delivered ? null : detail, chat, id, chat),
   ]);
   return done.meta.changes ? 200 : 409;
 }
@@ -563,35 +699,64 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
   if (landed === undefined) {
     return null;
   }
-  if (!Array.isArray(messages) || messages.length > MAX_AGENT_MESSAGES || typeof isWorking !== "boolean"
-    || (activity !== null && (typeof activity !== "string" || activity.length > 80))) {
+  if (
+    !Array.isArray(messages) ||
+    messages.length > MAX_AGENT_MESSAGES ||
+    typeof isWorking !== "boolean" ||
+    (activity !== null && (typeof activity !== "string" || activity.length > 80))
+  ) {
     return null;
   }
   const parsed: AgentSide["messages"] = [];
   for (const item of messages) {
     const { id, text, at } = (item ?? {}) as Record<string, unknown>;
-    if (typeof id !== "string" || id.length < 1 || id.length > 200 || typeof text !== "string"
-      || text.length > MAX_AGENT_TEXT || (at !== null && (typeof at !== "string" || Number.isNaN(Date.parse(at))))) {
+    if (
+      typeof id !== "string" ||
+      id.length < 1 ||
+      id.length > 200 ||
+      typeof text !== "string" ||
+      text.length > MAX_AGENT_TEXT ||
+      (at !== null && (typeof at !== "string" || Number.isNaN(Date.parse(at))))
+    ) {
       return null;
     }
     parsed.push({ id, text, at: at as string | null });
   }
   const place = thread as { host?: unknown; id?: unknown } | null | undefined;
-  const where = place && typeof place.host === "string" && typeof place.id === "string"
-    && place.host.length <= 100 && place.id.length <= 200 ? { host: place.host, id: place.id } : null;
-  return { messages: parsed, isWorking, activity: activity as string | null, thread: where, updatedAt: now, ...(landed ? { shipped: landed } : {}) };
+  const where =
+    place &&
+    typeof place.host === "string" &&
+    typeof place.id === "string" &&
+    place.host.length <= 100 &&
+    place.id.length <= 200
+      ? { host: place.host, id: place.id }
+      : null;
+  return {
+    messages: parsed,
+    isWorking,
+    activity: activity as string | null,
+    thread: where,
+    updatedAt: now,
+    ...(landed ? { shipped: landed } : {}),
+  };
 }
 
 /** One of the sender's screenshots: its bytes and type; null when the chat, message or image is not theirs. */
 export async function messageImage(
-  store: FeedbackStore, chat: string, message: string, index: number,
+  store: FeedbackStore,
+  chat: string,
+  message: string,
+  index: number,
 ): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
   if (!MESSAGE_ID.test(message) || !Number.isInteger(index) || index < 0 || !(await chatRow(store, chat))) {
     return null;
   }
-  const row = await store.db.prepare(
-    "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE i.message = ? AND m.chat = ? AND i.idx = ?",
-  ).bind(message, chat, index).first<{ r2_key: string }>();
+  const row = await store.db
+    .prepare(
+      "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE i.message = ? AND m.chat = ? AND i.idx = ?",
+    )
+    .bind(message, chat, index)
+    .first<{ r2_key: string }>();
   const image = row ? await (await store.bucket.get(row.r2_key))?.json<FeedbackImage>() : null;
   return image
     ? { bytes: Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0)), mediaType: image.media_type }
@@ -599,9 +764,12 @@ export async function messageImage(
 }
 
 /** A chat's title and its agent side as it stands, before the runner replaces the side. */
-export async function chatSide(store: FeedbackStore, chat: string): Promise<{ title: string; agent: AgentSide | null } | null> {
+export async function chatSide(
+  store: FeedbackStore,
+  chat: string,
+): Promise<{ title: string; agent: AgentSide | null } | null> {
   const row = await chatRow(store, chat);
-  return row ? { title: row.title, agent: row.agent ? JSON.parse(row.agent) as AgentSide : null } : null;
+  return row ? { title: row.title, agent: row.agent ? (JSON.parse(row.agent) as AgentSide) : null } : null;
 }
 
 /**
@@ -613,9 +781,10 @@ export async function deleteChat(store: FeedbackStore, chat: string): Promise<st
   if (!(await chatRow(store, chat))) {
     return null;
   }
-  const { results } = await store.db.prepare(
-    "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE m.chat = ?",
-  ).bind(chat).all<{ r2_key: string }>();
+  const { results } = await store.db
+    .prepare("SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE m.chat = ?")
+    .bind(chat)
+    .all<{ r2_key: string }>();
   await store.db.batch([
     store.db.prepare("DELETE FROM images WHERE message IN (SELECT id FROM messages WHERE chat = ?)").bind(chat),
     store.db.prepare("DELETE FROM messages WHERE chat = ?").bind(chat),
@@ -631,8 +800,10 @@ export async function runnerAgent(store: FeedbackStore, chat: string, agent: Age
   if (!before) {
     return 404;
   }
-  const { results } = await store.db.prepare("SELECT id, text, at FROM agent_messages WHERE chat = ?")
-    .bind(chat).all<{ id: string; text: string; at: string | null }>();
+  const { results } = await store.db
+    .prepare("SELECT id, text, at FROM agent_messages WHERE chat = ?")
+    .bind(chat)
+    .all<{ id: string; text: string; at: string | null }>();
   const held = new Map(results.map((row) => [row.id, row]));
   // Each new or changed message takes its own seq; the chat's state takes the last, when anything moved.
   const changed = agent.messages.filter((one) => {
@@ -640,21 +811,35 @@ export async function runnerAgent(store: FeedbackStore, chat: string, agent: Age
     return !known || known.text !== one.text || known.at !== one.at;
   });
   const was = before.agent;
-  const stateMoved = !was || was.isWorking !== agent.isWorking || was.activity !== agent.activity
-    || was.thread?.host !== agent.thread?.host || was.thread?.id !== agent.thread?.id
-    || JSON.stringify(was.shipped ?? null) !== JSON.stringify(agent.shipped ?? null);
+  const stateMoved =
+    !was ||
+    was.isWorking !== agent.isWorking ||
+    was.activity !== agent.activity ||
+    was.thread?.host !== agent.thread?.host ||
+    was.thread?.id !== agent.thread?.id ||
+    JSON.stringify(was.shipped ?? null) !== JSON.stringify(agent.shipped ?? null);
   const steps = changed.length + (changed.length || stateMoved ? 1 : 0);
   const writes: D1PreparedStatement[] = [];
   if (steps) {
     writes.push(store.db.prepare("UPDATE chats SET seq = seq + ? WHERE id = ?").bind(steps, chat));
-    changed.forEach((one, index) => writes.push(store.db.prepare(
-      "INSERT INTO agent_messages (chat, id, seq, text, at) VALUES (?, ?, (SELECT seq FROM chats WHERE id = ?) - ?, ?, ?)"
-        + " ON CONFLICT (chat, id) DO UPDATE SET seq = excluded.seq, text = excluded.text, at = excluded.at",
-    ).bind(chat, one.id, chat, steps - 1 - index, one.text, one.at)));
+    changed.forEach((one, index) =>
+      writes.push(
+        store.db
+          .prepare(
+            "INSERT INTO agent_messages (chat, id, seq, text, at) VALUES (?, ?, (SELECT seq FROM chats WHERE id = ?) - ?, ?, ?)" +
+              " ON CONFLICT (chat, id) DO UPDATE SET seq = excluded.seq, text = excluded.text, at = excluded.at",
+          )
+          .bind(chat, one.id, chat, steps - 1 - index, one.text, one.at),
+      ),
+    );
   }
-  writes.push(store.db.prepare(
-    "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
-  ).bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, chat, store.app, store.login));
+  writes.push(
+    store.db
+      .prepare(
+        "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
+      )
+      .bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, chat, store.app, store.login),
+  );
   await store.db.batch(writes);
   return 200;
 }
@@ -665,7 +850,10 @@ export async function runnerAgent(store: FeedbackStore, chat: string, agent: Age
  */
 function bump(db: D1Database, chat: string, only?: { message: string; status: MessageStatus }): D1PreparedStatement {
   return only
-    ? db.prepare("UPDATE chats SET seq = seq + 1 WHERE id = ? AND EXISTS (SELECT 1 FROM messages WHERE id = ? AND chat = ? AND status = ?)")
-      .bind(chat, only.message, chat, only.status)
+    ? db
+        .prepare(
+          "UPDATE chats SET seq = seq + 1 WHERE id = ? AND EXISTS (SELECT 1 FROM messages WHERE id = ? AND chat = ? AND status = ?)",
+        )
+        .bind(chat, only.message, chat, only.status)
     : db.prepare("UPDATE chats SET seq = seq + 1 WHERE id = ?").bind(chat);
 }

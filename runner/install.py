@@ -67,7 +67,9 @@ def job(home: Path) -> dict[str, object]:
 
 def wanted(home: Path) -> dict[Path, bytes]:
     """Each installed file and what it should hold."""
-    files = {app_dir(home) / "feedbackkit_runner" / path.name: path.read_bytes() for path in sorted(SOURCE.glob("*.py"))}
+    files = {
+        app_dir(home) / "feedbackkit_runner" / path.name: path.read_bytes() for path in sorted(SOURCE.glob("*.py"))
+    }
     files[plist_path(home)] = plistlib.dumps(job(home))
     return files
 
@@ -106,7 +108,10 @@ def write_record(home: Path, record: dict[str, str | None], now: float) -> None:
 
 
 def loaded(domain: str) -> bool:
-    return subprocess.run(["/bin/launchctl", "print", f"{domain}/{LABEL}"], capture_output=True, check=False).returncode == 0
+    return (
+        subprocess.run(["/bin/launchctl", "print", f"{domain}/{LABEL}"], capture_output=True, check=False).returncode
+        == 0
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

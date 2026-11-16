@@ -43,7 +43,10 @@ function fromBase64url(text: string): Uint8Array | null {
 }
 
 async function hmac(key: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", encoder.encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  return crypto.subtle.importKey("raw", encoder.encode(key), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+    "verify",
+  ]);
 }
 
 /**
@@ -51,19 +54,37 @@ async function hmac(key: string): Promise<CryptoKey> {
  * an app's Worker follows (and the tests' way to make one).
  */
 export async function issueToken(
-  key: string, app: string, login: string, name: string | null, now: number, lifetimeSeconds = MAX_LIFETIME_SECONDS,
+  key: string,
+  app: string,
+  login: string,
+  name: string | null,
+  now: number,
+  lifetimeSeconds = MAX_LIFETIME_SECONDS,
 ): Promise<string> {
   const iat = Math.floor(now / 1000);
   const header = base64url(encoder.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const payload = base64url(encoder.encode(JSON.stringify({
-    iss: app, sub: login, ...(name ? { name } : {}), aud: AUDIENCE, iat, exp: iat + lifetimeSeconds,
-  })));
+  const payload = base64url(
+    encoder.encode(
+      JSON.stringify({
+        iss: app,
+        sub: login,
+        ...(name ? { name } : {}),
+        aud: AUDIENCE,
+        iat,
+        exp: iat + lifetimeSeconds,
+      }),
+    ),
+  );
   const signature = await crypto.subtle.sign("HMAC", await hmac(key), encoder.encode(`${header}.${payload}`));
   return `${header}.${payload}.${base64url(new Uint8Array(signature))}`;
 }
 
 /** The token's sender when its app's key signed it and it is current; null otherwise. */
-export async function verifyToken(token: string, keys: Record<string, string>, now: number): Promise<TokenClaims | null> {
+export async function verifyToken(
+  token: string,
+  keys: Record<string, string>,
+  now: number,
+): Promise<TokenClaims | null> {
   const parts = token.split(".");
   if (parts.length !== 3) {
     return null;
@@ -77,8 +98,14 @@ export async function verifyToken(token: string, keys: Record<string, string>, n
   }
   const { iss, sub, name, aud, iat, exp } = claims;
   const key = typeof iss === "string" && Object.hasOwn(keys, iss) ? keys[iss] : undefined;
-  if (!key || typeof sub !== "string" || !LOGIN.test(sub) || aud !== AUDIENCE
-    || typeof iat !== "number" || typeof exp !== "number") {
+  if (
+    !key ||
+    typeof sub !== "string" ||
+    !LOGIN.test(sub) ||
+    aud !== AUDIENCE ||
+    typeof iat !== "number" ||
+    typeof exp !== "number"
+  ) {
     return null;
   }
   const seconds = Math.floor(now / 1000);
@@ -89,7 +116,8 @@ export async function verifyToken(token: string, keys: Record<string, string>, n
   if (!valid) {
     return null;
   }
-  const named = typeof name === "string" && name.trim() && name.length <= 60 && !/[\r\n]/.test(name) ? name.trim() : null;
+  const named =
+    typeof name === "string" && name.trim() && name.length <= 60 && !/[\r\n]/.test(name) ? name.trim() : null;
   return { app: iss as string, login: sub, name: named };
 }
 
@@ -100,7 +128,7 @@ function parse(part: string): Record<string, unknown> | null {
   }
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes));
-    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   } catch {
     return null;
   }

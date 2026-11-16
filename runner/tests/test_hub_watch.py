@@ -93,7 +93,9 @@ class ServiceReloadTests(unittest.TestCase):
         with self.assertLogs("feedbackkit-runner", logging.INFO) as logs, self.assertRaises(SystemExit) as stop:
             loop.maintain()
         events = [json.loads(line.split(":", 2)[2]) for line in logs.output]
-        self.assertEqual(events[0], {"event": "FEEDBACK_RUNNER_RELOADED", "reason": "hub", "changed": ["conversation_server.py"]})
+        self.assertEqual(
+            events[0], {"event": "FEEDBACK_RUNNER_RELOADED", "reason": "hub", "changed": ["conversation_server.py"]}
+        )
         self.assertEqual(events[1], {"event": "FEEDBACK_RUNNER_STOPPED", "reason": "hub changed"})
         self.assertEqual((stop.exception.code, saved), (0, [True]))
 

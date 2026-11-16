@@ -1,7 +1,7 @@
-import Foundation
-import Observation
 import AgentChatKit
 import AgentChatLive
+import Foundation
+import Observation
 import SwiftUI
 
 /// Words on their way, shown as sent until the chat has them, with their screenshots as thumbnails.

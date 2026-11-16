@@ -10,25 +10,40 @@ export function memoryD1(before?: string): D1Database & { sqlite: DatabaseSync }
   sqlite.exec("PRAGMA foreign_keys = ON");
   const folder = new URL("../migrations/", import.meta.url);
   // `before`: only the migrations named before it, to test the next one on a database as it was.
-  for (const file of readdirSync(folder).filter((name) => name.endsWith(".sql") && (!before || name < before)).sort()) {
+  for (const file of readdirSync(folder)
+    .filter((name) => name.endsWith(".sql") && (!before || name < before))
+    .sort()) {
     sqlite.exec(readFileSync(new URL(file, folder), "utf8"));
   }
   const values = (params: unknown[]): SQLInputValue[] =>
-    params.map((value) => (typeof value === "boolean" ? (value ? 1 : 0) : value === undefined ? null : value) as SQLInputValue);
+    params.map(
+      (value) => (typeof value === "boolean" ? (value ? 1 : 0) : value === undefined ? null : value) as SQLInputValue,
+    );
   const statement = (sql: string, params: unknown[] = []) => ({
     sql,
     params,
     bind: (...next: unknown[]) => statement(sql, next),
     async first<T>(column?: string): Promise<T | null> {
       const row = sqlite.prepare(sql).get(...values(params)) as Record<string, unknown> | undefined;
-      return row === undefined ? null : (column ? row[column] : { ...row }) as T;
+      return row === undefined ? null : ((column ? row[column] : { ...row }) as T);
     },
     async all<T>() {
-      return { results: sqlite.prepare(sql).all(...values(params)).map((row) => ({ ...row })) as T[], success: true, meta: {} };
+      return {
+        results: sqlite
+          .prepare(sql)
+          .all(...values(params))
+          .map((row) => ({ ...row })) as T[],
+        success: true,
+        meta: {},
+      };
     },
     async run() {
       const done = sqlite.prepare(sql).run(...values(params));
-      return { results: [], success: true, meta: { changes: Number(done.changes), last_row_id: Number(done.lastInsertRowid) } };
+      return {
+        results: [],
+        success: true,
+        meta: { changes: Number(done.changes), last_row_id: Number(done.lastInsertRowid) },
+      };
     },
   });
   type Statement = ReturnType<typeof statement>;
@@ -45,7 +60,11 @@ export function memoryD1(before?: string): D1Database & { sqlite: DatabaseSync }
             return { results: prepared.all(...values(one.params)).map((row) => ({ ...row })), success: true, meta: {} };
           }
           const done = prepared.run(...values(one.params));
-          return { results: [], success: true, meta: { changes: Number(done.changes), last_row_id: Number(done.lastInsertRowid) } };
+          return {
+            results: [],
+            success: true,
+            meta: { changes: Number(done.changes), last_row_id: Number(done.lastInsertRowid) },
+          };
         });
         sqlite.exec("COMMIT");
         return results;
@@ -76,8 +95,11 @@ export function memoryBucket(): R2Bucket & { objects: Map<string, { body: string
     },
     async put(key: string, value: unknown, options?: { onlyIf?: { etagMatches?: string } | Headers }) {
       const onlyIf = options?.onlyIf;
-      if (onlyIf instanceof Headers ? onlyIf.get("If-None-Match") === "*" && objects.has(key)
-        : onlyIf?.etagMatches && objects.get(key)?.etag !== onlyIf.etagMatches) {
+      if (
+        onlyIf instanceof Headers
+          ? onlyIf.get("If-None-Match") === "*" && objects.has(key)
+          : onlyIf?.etagMatches && objects.get(key)?.etag !== onlyIf.etagMatches
+      ) {
         return null;
       }
       objects.set(key, { body: typeof value === "string" ? value : "bytes", etag: `v${++version}` });

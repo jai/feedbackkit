@@ -14,11 +14,21 @@ from pathlib import Path
 from feedbackkit_runner import shipped_probe
 from feedbackkit_runner.github import GitHub, ci_of, rollup_ci
 
+
 def git(cwd: Path, *argv: str) -> str:
     return subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *argv], cwd=cwd, check=True, capture_output=True, text=True,
-        env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"},
+        ["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *argv],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.com",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+        },
     ).stdout.strip()
 
 
@@ -83,33 +93,74 @@ class GitHubTests(unittest.TestCase):
             if failing and key.startswith(failing):
                 return subprocess.CompletedProcess(argv, 1, "", "HTTP 502: Bad Gateway")
             return subprocess.CompletedProcess(argv, 0, json.dumps(answers.get(key, answers.get(argv[1]))), "")
+
         return GitHub(gh="gh", run=run)
 
     def test_the_first_release_with_the_commit_s_tag_and_its_checks(self) -> None:
         sha = "b" * 40
-        github = self.gh({
-            "release list": [
-                {"tagName": "v1.2.0", "name": "Build 12", "isPrerelease": False, "publishedAt": "2026-11-16T00:00:00Z"},
-                {"tagName": "v1.1.0", "name": "", "isPrerelease": True, "publishedAt": "2026-11-15T00:00:00Z"},
+        github = self.gh(
+            {
+                "release list": [
+                    {
+                        "tagName": "v1.2.0",
+                        "name": "Build 12",
+                        "isPrerelease": False,
+                        "publishedAt": "2026-11-16T00:00:00Z",
+                    },
+                    {"tagName": "v1.1.0", "name": "", "isPrerelease": True, "publishedAt": "2026-11-15T00:00:00Z"},
+                ],
+                "api": {"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued"}]},
+            }
+        )
+        shipped = github.shipped(
+            "jai/app", [{"sha": sha, "title": "fix", "at": None, "tags": ["v1.1.0", "v1.2.0"]}], "main"
+        )
+        self.assertEqual(
+            shipped["commits"],
+            [
+                {
+                    "sha": sha,
+                    "title": "fix",
+                    "at": None,
+                    "url": f"https://github.com/jai/app/commit/{sha}",
+                    "ci": "pending",
+                    "release": {
+                        "tag": "v1.1.0",
+                        "name": "v1.1.0",
+                        "url": "https://github.com/jai/app/releases/tag/v1.1.0",
+                        "prerelease": True,
+                    },
+                }
             ],
-            "api": {"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued"}]},
-        })
-        shipped = github.shipped("jai/app", [{"sha": sha, "title": "fix", "at": None, "tags": ["v1.1.0", "v1.2.0"]}], "main")
-        self.assertEqual(shipped["commits"], [{
-            "sha": sha, "title": "fix", "at": None, "url": f"https://github.com/jai/app/commit/{sha}", "ci": "pending",
-            "release": {"tag": "v1.1.0", "name": "v1.1.0", "url": "https://github.com/jai/app/releases/tag/v1.1.0",
-                        "prerelease": True},
-        }])
+        )
         self.assertEqual(shipped["prs"], [], "a chat on main has no pull request")
 
     def test_a_pull_request_from_the_branch(self) -> None:
-        github = self.gh({"pr list": [{
-            "number": 7, "title": "Bigger clock", "url": "https://github.com/jai/app/pull/7", "state": "OPEN",
-            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "FAILURE"}, {"state": "SUCCESS"}],
-        }]})
-        self.assertEqual(github.shipped("jai/app", [], "fb-01234567")["prs"], [
-            {"number": 7, "title": "Bigger clock", "url": "https://github.com/jai/app/pull/7", "state": "open", "ci": "failure"},
-        ])
+        github = self.gh(
+            {
+                "pr list": [
+                    {
+                        "number": 7,
+                        "title": "Bigger clock",
+                        "url": "https://github.com/jai/app/pull/7",
+                        "state": "OPEN",
+                        "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "FAILURE"}, {"state": "SUCCESS"}],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(
+            github.shipped("jai/app", [], "fb-01234567")["prs"],
+            [
+                {
+                    "number": 7,
+                    "title": "Bigger clock",
+                    "url": "https://github.com/jai/app/pull/7",
+                    "state": "open",
+                    "ci": "failure",
+                },
+            ],
+        )
 
     def test_gh_failing_is_a_failure_not_half_an_answer(self) -> None:
         github = self.gh({}, failing="release list")

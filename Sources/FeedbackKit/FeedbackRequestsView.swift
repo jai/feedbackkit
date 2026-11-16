@@ -272,8 +272,8 @@ private struct FeedbackListView: View {
             Button { open(route) } label: {
                 rowLabel(title: title, date: date, isSelected: isSelected, agent: agent, shipped: shipped, custom: custom)
             }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("feedback-thread")
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("feedback-thread")
         }
     }
 

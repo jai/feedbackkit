@@ -1,8 +1,8 @@
 #if os(macOS)
 import AppKit
+@testable import FeedbackKit
 import SwiftUI
 import Testing
-@testable import FeedbackKit
 
 @MainActor
 struct SidebarSurfaceTests {

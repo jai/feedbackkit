@@ -12,7 +12,7 @@ stage=$(mktemp -d)
 app="$stage/FeedbackKit Runner.app"
 mkdir -p "$app/Contents/MacOS"
 cp "$bin/FeedbackKitRunnerMenu" "$app/Contents/MacOS/"
-sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" Bundle/Info.plist > "$app/Contents/Info.plist"
+sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" Bundle/Info.plist >"$app/Contents/Info.plist"
 codesign --force --sign - --timestamp=none "$app"
 codesign --verify --strict "$app"
 rm -f "$out"

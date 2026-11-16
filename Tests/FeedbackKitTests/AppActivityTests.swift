@@ -1,5 +1,5 @@
-import Testing
 @testable import FeedbackKit
+import Testing
 
 /// The app's own foreground state, which keeps a hosted Feedback screen live when `scenePhase` never leaves
 /// `.background` (#9).

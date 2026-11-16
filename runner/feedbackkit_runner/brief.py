@@ -41,7 +41,9 @@ def app_name(app: str) -> str:
     return APP_NAMES.get(app, app.replace("-", " ").title())
 
 
-def fields(app: str, sender: str, role: str, repo: str, build: str, screenshot_paths: list[str], text: str) -> dict[str, str]:
+def fields(
+    app: str, sender: str, role: str, repo: str, build: str, screenshot_paths: list[str], text: str
+) -> dict[str, str]:
     """The template's fields from the work item: its app, its sender (the name their app gives them, else their GitHub
     login), role, repo, build, the paths the runner saved its screenshots to, and its words. KeyError for a role with
     no coding thread."""

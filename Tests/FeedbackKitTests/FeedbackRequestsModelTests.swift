@@ -1,6 +1,6 @@
+@testable import FeedbackKit
 import Foundation
 import Testing
-@testable import FeedbackKit
 
 /// The feature-request routes as the Worker answers them, and a conversation going from new to a thread.
 @MainActor

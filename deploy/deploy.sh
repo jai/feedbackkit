@@ -27,6 +27,7 @@ commit=$(git rev-parse --short HEAD)
 
 cd worker
 npm ci --silent
+# shellcheck disable=SC2016 # node -e takes JavaScript, not shell.
 database_id=$(npx wrangler d1 list --json | node -e '
   let text = ""; process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
     const found = JSON.parse(text).find((one) => one.name === process.argv[1]);
@@ -34,10 +35,13 @@ database_id=$(npx wrangler d1 list --json | node -e '
     console.log(found.uuid);
   });' "$DATABASE")
 sed -e "s/__CLOUDFLARE_ACCOUNT_ID__/$CLOUDFLARE_ACCOUNT_ID/" -e "s#__PUBLIC_URL__#$PUBLIC_URL#" \
-  -e "s/__D1_DATABASE_ID__/$database_id/" ../deploy/wrangler.template.jsonc > "../$config"
+  -e "s/__D1_DATABASE_ID__/$database_id/" ../deploy/wrangler.template.jsonc >"../$config"
 
 echo "deploy: tests"
-npm test >/dev/null 2>&1 || { echo "deploy: the Worker's tests fail; run npm test in worker/" >&2; exit 1; }
+npm test >/dev/null 2>&1 || {
+  echo "deploy: the Worker's tests fail; run npm test in worker/" >&2
+  exit 1
+}
 npm run typecheck >/dev/null
 
 echo "deploy: D1 migrations"
@@ -45,7 +49,11 @@ npx wrangler d1 migrations apply "$DATABASE" --remote --config "../$config"
 pending=$(npx wrangler d1 migrations list "$DATABASE" --remote --config "../$config" 2>&1)
 case "$pending" in
   *"No migrations to apply"*) ;;
-  *) printf '%s\n' "$pending" >&2; echo "deploy: D1 still has migrations to apply; the Worker is not deployed" >&2; exit 1 ;;
+  *)
+    printf '%s\n' "$pending" >&2
+    echo "deploy: D1 still has migrations to apply; the Worker is not deployed" >&2
+    exit 1
+    ;;
 esac
 
 echo "deploy: the Worker at $commit"

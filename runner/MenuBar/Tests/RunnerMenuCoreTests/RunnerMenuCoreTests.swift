@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import RunnerMenuCore
+import Testing
 
 /// A status.json as the runner writes it (runner/feedbackkit_runner/service.py, runner.py status()).
 func statusJSON(writtenAt: Double = 1_000, pollOK: Bool = true, builderUp: Bool = true, state: String = "delivered",

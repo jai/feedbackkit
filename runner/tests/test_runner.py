@@ -15,6 +15,7 @@ from unittest import mock
 
 from feedbackkit_runner import brief as feedback_brief
 from feedbackkit_runner.brief import ROLE_ACTIONS, TEMPLATE, fields, first_prompt, later_prefix
+from feedbackkit_runner.github import GitHub
 from feedbackkit_runner.runner import (
     OLD_STATE_FILE,
     STARTING_SECONDS,
@@ -37,9 +38,7 @@ from feedbackkit_runner.runner import (
     in_clone,
     migrate,
 )
-from feedbackkit_runner.github import GitHub
 from feedbackkit_runner.util import JsonObject, JsonResponse
-
 
 AGENT_PAGER_OWNER: Sender = {"app": "agent-pager", "login": "jai", "repo": "jai/agent-pager", "role": "owner"}
 E2E_OWNER: Sender = {"app": "e2e", "login": "feedbackkit-e2e", "repo": "jai/feedbackkit", "role": "owner"}
@@ -192,8 +191,14 @@ class FakeGitHub(GitHub):
         self.asked.append((repo, [str(one["sha"]) for one in commits], branch))
         return {
             "commits": [
-                {"sha": one["sha"], "title": one["title"], "at": one["at"], "url": f"https://github.com/{repo}/commit/{one['sha']}",
-                 "ci": "success", "release": self.released}
+                {
+                    "sha": one["sha"],
+                    "title": one["title"],
+                    "at": one["at"],
+                    "url": f"https://github.com/{repo}/commit/{one['sha']}",
+                    "ci": "success",
+                    "release": self.released,
+                }
                 for one in commits
             ],
             "prs": [],
@@ -212,7 +217,7 @@ class FakeReader:
         _path: str,
         _limit: int,
         after: str | None = None,
-        before: str | None = None,  # noqa: ARG002 MachineReader.read's keyword, kept so the fake takes what it takes
+        before: str | None = None,
     ) -> JsonObject:
         self.afters.append(after)
         return self.pages.pop(0) if self.pages else {"messages": [], "cursor": after, "more_before": False}
@@ -644,7 +649,9 @@ class RunnerTests(RunnerCase):
 
 LANDED: JsonObject = {"sha": "a" * 40, "title": "fix: bigger clock", "at": "2026-11-15T10:00:00+07:00", "tags": []}
 RELEASE: JsonObject = {
-    "tag": "mac-557", "name": "Build 557", "url": "https://github.com/jai/agent-pager/releases/tag/mac-557",
+    "tag": "mac-557",
+    "name": "Build 557",
+    "url": "https://github.com/jai/agent-pager/releases/tag/mac-557",
     "prerelease": False,
 }
 
@@ -671,8 +678,11 @@ class ShippedTests(RunnerCase):
         self.assertEqual(len(self.cube.probes), 1, "not again within 5 minutes")
         self.now += 301
         runner.tick()
-        self.assertEqual(self.cube.probes[-1], (WORKTREE, BASE, ["a" * 40], "fb-01234567"),
-                         "what was found before is asked about again, so it is not lost once the worktree goes")
+        self.assertEqual(
+            self.cube.probes[-1],
+            (WORKTREE, BASE, ["a" * 40], "fb-01234567"),
+            "what was found before is asked about again, so it is not lost once the worktree goes",
+        )
 
     def test_a_failed_look_keeps_what_was_found_and_says_why(self) -> None:
         self.cube.found = {"commits": [LANDED], "branch": None}
@@ -836,7 +846,7 @@ class BriefTests(unittest.TestCase):
             return "(.*?)"
 
         pattern = re.sub(r"\\\{(\w+)\\\}", capture, re.escape(TEMPLATE))
-        match = re.fullmatch(pattern, prompt, re.S)
+        match = re.fullmatch(pattern, prompt, re.DOTALL)
         self.assertIsNotNone(match, "the prompt is the template, with text only where its fields are")
         assert match is not None
         self.assertEqual(dict(zip(names, match.groups())), filled)
@@ -1010,7 +1020,9 @@ class MigrationTests(unittest.TestCase):
     def old_state(self, launched_at: float) -> JsonObject:
         chat = {"clone": CLONE_PATH, "launched_at": launched_at, "cursor": None, "messages": [], "posted": None}
         return {
-            "chats": {CHAT: {**chat, "host": CUBE_04, "layout": "worktree", "removed": False, "sender": AGENT_PAGER_OWNER}},
+            "chats": {
+                CHAT: {**chat, "host": CUBE_04, "layout": "worktree", "removed": False, "sender": AGENT_PAGER_OWNER}
+            },
             "journal": {
                 f"{CHAT}/m_1": {"claimed_at": 1.0, "outcome": None, "posted": False, "sender": AGENT_PAGER_OWNER}
             },
@@ -1244,7 +1256,7 @@ class BriefFileTests(unittest.TestCase):
 
     def section(self, heading: str) -> str:
         text = (Path(__file__).resolve().parents[1] / "prompts" / "feedback-brief.md").read_text(encoding="utf-8")
-        match = re.search(rf"^## {re.escape(heading)}\n.*?^```text\n(.*?)\n^```$", text, re.S | re.M)
+        match = re.search(rf"^## {re.escape(heading)}\n.*?^```text\n(.*?)\n^```$", text, re.DOTALL | re.MULTILINE)
         if match is None:
             raise AssertionError(f"feedback-brief.md has no text block under ## {heading}")
         return match.group(1)
@@ -1265,7 +1277,13 @@ class SenderNameTests(RunnerCase):
         runner = self.runner()
         runner.tick()
         self.assertIn("This is an instruction from Jai (owner)", self.orca.launches[0][1])
-        self.cube.row = {"id": "orca-codex:s1", "app": "orca-codex", "session_id": "s1", "cwd": WORKTREE, "_transcript": "/t"}
+        self.cube.row = {
+            "id": "orca-codex:s1",
+            "app": "orca-codex",
+            "session_id": "s1",
+            "cwd": WORKTREE,
+            "_transcript": "/t",
+        }
         self.reply()
         self.api.work = [{**self.api.work[0], "name": "Jai"}]
         runner.tick()

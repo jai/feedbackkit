@@ -56,8 +56,11 @@ export async function providerToken(key: ApnsKey, now: number): Promise<string> 
   }
   const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)));
   const unsigned = `${encode({ alg: "ES256", kid: key.keyId })}.${encode({ iss: key.teamId, iat: seconds })}`;
-  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, await signingKey(key.p8),
-    new TextEncoder().encode(unsigned));
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    await signingKey(key.p8),
+    new TextEncoder().encode(unsigned),
+  );
   const token = `${unsigned}.${base64url(new Uint8Array(signature))}`;
   cached = { key: id, token, at: seconds };
   return token;
@@ -81,7 +84,12 @@ export function clip(text: string): string {
  * a nudge, and the chat itself is in D1.
  */
 export async function sendPush(
-  key: ApnsKey, topic: string, devices: Device[], push: Push, now: number, fetcher: typeof fetch = fetch,
+  key: ApnsKey,
+  topic: string,
+  devices: Device[],
+  push: Push,
+  now: number,
+  fetcher: typeof fetch = fetch,
 ): Promise<string[]> {
   if (devices.length === 0) {
     return [];
@@ -95,36 +103,42 @@ export async function sendPush(
   }
   const body = JSON.stringify(payload(push));
   const gone: string[] = [];
-  await Promise.all(devices.map(async (device) => {
-    try {
-      const response = await fetcher(`${HOSTS[device.environment]}/3/device/${device.token}`, {
-        method: "POST",
-        headers: {
-          authorization: `bearer ${token}`,
-          "apns-topic": topic,
-          "apns-push-type": push.alert ? "alert" : "background",
-          "apns-priority": push.alert ? "10" : "5",
-          "apns-collapse-id": `${push.data.chat}-${push.data.kind}`.slice(0, 64),
-        },
-        body,
-      });
-      if (!response.ok) {
-        const reason = ((await response.json().catch(() => ({}))) as { reason?: string }).reason ?? "";
-        if (response.status === 410 || GONE.has(reason)) {
-          gone.push(device.token);
+  await Promise.all(
+    devices.map(async (device) => {
+      try {
+        const response = await fetcher(`${HOSTS[device.environment]}/3/device/${device.token}`, {
+          method: "POST",
+          headers: {
+            authorization: `bearer ${token}`,
+            "apns-topic": topic,
+            "apns-push-type": push.alert ? "alert" : "background",
+            "apns-priority": push.alert ? "10" : "5",
+            "apns-collapse-id": `${push.data.chat}-${push.data.kind}`.slice(0, 64),
+          },
+          body,
+        });
+        if (!response.ok) {
+          const reason = ((await response.json().catch(() => ({}))) as { reason?: string }).reason ?? "";
+          if (response.status === 410 || GONE.has(reason)) {
+            gone.push(device.token);
+          }
+          console.error(
+            JSON.stringify({ event: "apns_refused", status: response.status, reason, kind: push.data.kind }),
+          );
         }
-        console.error(JSON.stringify({ event: "apns_refused", status: response.status, reason, kind: push.data.kind }));
+      } catch (error) {
+        console.error("apns unreachable", error);
       }
-    } catch (error) {
-      console.error("apns unreachable", error);
-    }
-  }));
+    }),
+  );
   return gone;
 }
 
 /** What to tell the sender about a new agent side, against the one before: taken, a new reply, or nothing. */
 export function agentPush(
-  app: string, chat: string, title: string,
+  app: string,
+  chat: string,
+  title: string,
   before: { messages: Array<{ id: string }>; thread: unknown } | null,
   after: { messages: Array<{ id: string; text: string }>; thread: unknown },
 ): Push | null {
@@ -149,10 +163,18 @@ export async function checkKey(key: ApnsKey, topic: string, now: number, fetcher
   for (const [name, host] of Object.entries(HOSTS)) {
     const response = await fetcher(`${host}/3/device/${"0".repeat(64)}`, {
       method: "POST",
-      headers: { authorization: `bearer ${token}`, "apns-topic": topic, "apns-push-type": "background", "apns-priority": "5" },
+      headers: {
+        authorization: `bearer ${token}`,
+        "apns-topic": topic,
+        "apns-push-type": "background",
+        "apns-priority": "5",
+      },
       body: JSON.stringify({ aps: { "content-available": 1 } }),
     });
-    answers[name] = { status: response.status, reason: ((await response.json().catch(() => ({}))) as { reason?: string }).reason ?? null };
+    answers[name] = {
+      status: response.status,
+      reason: ((await response.json().catch(() => ({}))) as { reason?: string }).reason ?? null,
+    };
   }
   return answers;
 }

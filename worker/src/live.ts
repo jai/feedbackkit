@@ -10,11 +10,22 @@
  * room's 15 s refresh. FeedbackKit never queues and asks nothing: no `answer`, and `force` changes nothing.
  */
 import {
-  type ContentBlock, type LiveAdapter, type LiveRead, refuse, type SessionUpdate, type StateUpdate,
+  type ContentBlock,
+  type LiveAdapter,
+  type LiveRead,
+  refuse,
+  type SessionUpdate,
+  type StateUpdate,
 } from "@jai/agentchat-live";
 import {
-  addMessage, changePending, type FeedbackChat, feedbackChat, type FeedbackStore, type MessageStatus,
-  parseFeedbackInput, senderStore,
+  addMessage,
+  changePending,
+  type FeedbackChat,
+  feedbackChat,
+  type FeedbackStore,
+  type MessageStatus,
+  parseFeedbackInput,
+  senderStore,
 } from "./feedback.ts";
 
 /** Who follows a chat, from their FeedbackKit token. Travels to the room as JSON. */
@@ -71,18 +82,28 @@ interface AgentRow {
 export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
   const now = deps.now ?? Date.now;
   const store = (who: LiveWho): FeedbackStore => senderStore(deps.db, deps.bucket, who.app, who.login, who.name);
-  const chatOf = (who: LiveWho, chat: string) => deps.db.prepare(
-    "SELECT seq, state, state_seq, sender_name FROM chats WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
-  ).bind(chat, who.app, who.login.toLowerCase()).first<ChatRow>();
+  const chatOf = (who: LiveWho, chat: string) =>
+    deps.db
+      .prepare(
+        "SELECT seq, state, state_seq, sender_name FROM chats WHERE id = ? AND app = ? AND login = ? AND kind = 'agent'",
+      )
+      .bind(chat, who.app, who.login.toLowerCase())
+      .first<ChatRow>();
 
   /** The state as it stands, with the seq of its own latest change: a new one when it moved since the last sent. */
-  async function settle(who: LiveWho, chat: string, row: ChatRow, view: FeedbackChat): Promise<{ row: ChatRow; state: StateUpdate }> {
+  async function settle(
+    who: LiveWho,
+    chat: string,
+    row: ChatRow,
+    view: FeedbackChat,
+  ): Promise<{ row: ChatRow; state: StateUpdate }> {
     const state: StateUpdate = {
       sessionUpdate: "state_update",
       state: view.isWorking ? "running" : "idle",
       _meta: {
         agentchatkit: {
-          activity: view.activity, problem: view.problem,
+          activity: view.activity,
+          problem: view.problem,
           extra: { builderOnline: view.builderOnline, thread: view.thread, shipped: view.shipped },
         },
       },
@@ -90,19 +111,30 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
     const text = JSON.stringify(state);
     for (let attempt = 0; attempt < 3 && text !== row.state; attempt += 1) {
       // Only the read that sees the old state moves it: a read racing it finds the new one and moves nothing.
-      const moved = await deps.db.prepare(
-        "UPDATE chats SET seq = seq + 1, state = ?, state_seq = seq + 1 WHERE id = ? AND state IS ? RETURNING seq, state, state_seq, sender_name",
-      ).bind(text, chat, row.state).first<ChatRow>();
+      const moved = await deps.db
+        .prepare(
+          "UPDATE chats SET seq = seq + 1, state = ?, state_seq = seq + 1 WHERE id = ? AND state IS ? RETURNING seq, state, state_seq, sender_name",
+        )
+        .bind(text, chat, row.state)
+        .first<ChatRow>();
       row = moved ?? (await chatOf(who, chat)) ?? row;
     }
     return { row, state };
   }
 
-  function userMessage(chat: string, row: MessageRow, images: ImageRow[], who: LiveWho, name: string | null): SessionUpdate {
+  function userMessage(
+    chat: string,
+    row: MessageRow,
+    images: ImageRow[],
+    who: LiveWho,
+    name: string | null,
+  ): SessionUpdate {
     const content: ContentBlock[] = row.text ? [{ type: "text", text: row.text }] : [];
     for (const image of images) {
       content.push({
-        type: "resource_link", name: `Screenshot ${image.idx + 1}`, mimeType: image.media_type,
+        type: "resource_link",
+        name: `Screenshot ${image.idx + 1}`,
+        mimeType: image.media_type,
         uri: `/v2/feedback/${chat}/images/${row.id}/${image.idx}`,
       });
     }
@@ -124,7 +156,9 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
 
   function agentMessage(row: AgentRow): SessionUpdate {
     return {
-      sessionUpdate: "agent_message", messageId: row.id, content: [{ type: "text", text: row.text }],
+      sessionUpdate: "agent_message",
+      messageId: row.id,
+      content: [{ type: "text", text: row.text }],
       _meta: { agentchatkit: { at: row.at } },
     };
   }
@@ -153,20 +187,34 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
       row = settled.row;
       const since = after ?? -1;
       const [mine, theirs, images] = await Promise.all([
-        deps.db.prepare(
-          "SELECT id, at, text, images, status, detail, client_ref, seq FROM messages WHERE chat = ? AND seq > ? ORDER BY seq DESC LIMIT ?",
-        ).bind(chat, since, RETAINED).all<MessageRow>(),
-        deps.db.prepare("SELECT id, text, at, seq FROM agent_messages WHERE chat = ? AND seq > ? ORDER BY seq DESC LIMIT ?")
-          .bind(chat, since, RETAINED).all<AgentRow>(),
-        deps.db.prepare(
-          "SELECT i.message AS message, i.idx AS idx, i.media_type AS media_type FROM images i JOIN messages m ON m.id = i.message"
-            + " WHERE m.chat = ? AND m.seq > ? ORDER BY i.idx",
-        ).bind(chat, since).all<ImageRow>(),
+        deps.db
+          .prepare(
+            "SELECT id, at, text, images, status, detail, client_ref, seq FROM messages WHERE chat = ? AND seq > ? ORDER BY seq DESC LIMIT ?",
+          )
+          .bind(chat, since, RETAINED)
+          .all<MessageRow>(),
+        deps.db
+          .prepare("SELECT id, text, at, seq FROM agent_messages WHERE chat = ? AND seq > ? ORDER BY seq DESC LIMIT ?")
+          .bind(chat, since, RETAINED)
+          .all<AgentRow>(),
+        deps.db
+          .prepare(
+            "SELECT i.message AS message, i.idx AS idx, i.media_type AS media_type FROM images i JOIN messages m ON m.id = i.message" +
+              " WHERE m.chat = ? AND m.seq > ? ORDER BY i.idx",
+          )
+          .bind(chat, since)
+          .all<ImageRow>(),
       ]);
       const items = [
         ...mine.results.map((one) => ({
           seq: one.seq,
-          update: userMessage(chat, one, images.results.filter((image) => image.message === one.id), who, row!.sender_name),
+          update: userMessage(
+            chat,
+            one,
+            images.results.filter((image) => image.message === one.id),
+            who,
+            row!.sender_name,
+          ),
         })),
         ...theirs.results.map((one) => ({ seq: one.seq, update: agentMessage(one) })),
       ].sort((a, b) => a.seq - b.seq);
@@ -187,15 +235,21 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
     async prompt(who, chat, body) {
       const mine = store(who);
       if (body.clientRef) {
-        const known = await deps.db.prepare("SELECT id FROM messages WHERE chat = ? AND client_ref = ?")
-          .bind(chat, body.clientRef).first<string>("id");
+        const known = await deps.db
+          .prepare("SELECT id FROM messages WHERE chat = ? AND client_ref = ?")
+          .bind(chat, body.clientRef)
+          .first<string>("id");
         if (known) {
           return { messageId: known, repeat: true };
         }
       }
       const input = parseFeedbackInput({
-        text: body.prompt.filter((block) => block.type === "text").map((block) => block.text).join("\n\n"),
-        images: body.prompt.filter((block) => block.type === "image")
+        text: body.prompt
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n\n"),
+        images: body.prompt
+          .filter((block) => block.type === "image")
           .map((block) => ({ media_type: block.mimeType, data: block.data })),
       });
       if (!input) {
@@ -212,24 +266,31 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
     async edit(who, chat, messageId, body) {
       if (body.prompt === undefined) {
         // Only `force`: FeedbackKit never queues, so a message still pending goes as soon as the runner takes it.
-        const pending = await deps.db.prepare("SELECT 1 FROM messages WHERE id = ? AND chat = ? AND status = 'pending'")
-          .bind(messageId, chat).first();
+        const pending = await deps.db
+          .prepare("SELECT 1 FROM messages WHERE id = ? AND chat = ? AND status = 'pending'")
+          .bind(messageId, chat)
+          .first();
         return pending ? messageId : refuse(409, "That message has gone to the agent already.");
       }
       if (body.prompt.some((block) => block.type !== "text")) {
         return refuse(400, "Only a message's words can be changed.");
       }
-      const text = body.prompt.map((block) => (block.type === "text" ? block.text : "")).join("\n\n").trim();
+      const text = body.prompt
+        .map((block) => (block.type === "text" ? block.text : ""))
+        .join("\n\n")
+        .trim();
       if (!text || text.length > 8_000) {
         return refuse(400, "A message is 1 to 8,000 characters.");
       }
       return (await changePending(store(who), chat, messageId, { text }))
-        ? messageId : refuse(409, "That message has gone to the agent already.");
+        ? messageId
+        : refuse(409, "That message has gone to the agent already.");
     },
 
     async remove(who, chat, messageId) {
       return (await changePending(store(who), chat, messageId, "remove"))
-        ? messageId : refuse(409, "That message has gone to the agent already.");
+        ? messageId
+        : refuse(409, "That message has gone to the agent already.");
     },
   };
 }

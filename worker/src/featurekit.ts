@@ -5,11 +5,34 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import {
-  addFeedback, chatOfRef, chatSide, deleteChat, messageImage, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, keepRef, listServedLog,
-  parseAgentSide, parseFeedbackInput, pendingWork, runnerAgent, runnerBeat, runnerClaim, runnerResult, senderStore,
+  addFeedback,
+  chatOfRef,
+  chatSide,
+  deleteChat,
+  messageImage,
+  feedbackChat,
+  feedbackList,
+  type FeedbackStore,
+  isFeedbackId,
+  keepRef,
+  listServedLog,
+  parseAgentSide,
+  parseFeedbackInput,
+  pendingWork,
+  runnerAgent,
+  runnerBeat,
+  runnerClaim,
+  runnerResult,
+  senderStore,
 } from "./feedback.ts";
 import {
-  addIssueFeedback, gitHubIssues, type IssueFeedback, issueChat, issuesNotice, issueThreads, isImageName,
+  addIssueFeedback,
+  gitHubIssues,
+  type IssueFeedback,
+  issueChat,
+  issuesNotice,
+  issueThreads,
+  isImageName,
 } from "./feedback-issues.ts";
 import { createLiveRoom, handleAcp, type LiveRooms, notifyChat } from "@jai/agentchat-live";
 import { liveAdapter, type LiveWho } from "./live.ts";
@@ -21,7 +44,9 @@ import { clientRefOf, sha256Hex } from "./util.ts";
 
 /** Live mode: one room per followed chat (live.ts, the package `@jai/agentchat-live`). Read again every 15 s while
  * followed, for changes no write makes. */
-export const FeedbackLiveRoom = createLiveRoom((env: FeatureKitEnv) => liveAdapter(liveDeps(env)), { refreshEvery: 15_000 });
+export const FeedbackLiveRoom = createLiveRoom((env: FeatureKitEnv) => liveAdapter(liveDeps(env)), {
+  refreshEvery: 15_000,
+});
 export { RunnerWake } from "./runner-wake.ts";
 
 export interface FeatureKitEnv {
@@ -77,17 +102,32 @@ const LOGIN = /^[A-Za-z0-9-]{1,39}$/;
 
 export function parseApps(raw: string): Record<string, AppConfig> {
   const parsed = JSON.parse(raw) as Record<string, Partial<AppConfig>>;
-  const lower = (logins: unknown) => Array.isArray(logins)
-    ? logins.filter((login): login is string => typeof login === "string").map((login) => login.toLowerCase()) : [];
-  return Object.fromEntries(Object.entries(parsed).filter(([name, app]) => APP_NAME.test(name)
-    && typeof app?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(app.repo)).map(([name, app]) => [name, {
-    repo: app.repo!, owners: lower(app.owners), builders: lower(app.builders), issues: app.issues === true && app.echo !== true,
-    names: Object.fromEntries(Object.entries(app.names ?? {})
-      .filter(([, name]) => typeof name === "string" && senderName(name) !== null)
-      .map(([login, name]) => [login.toLowerCase(), name])),
-    topic: typeof app.topic === "string" && /^[\w.-]{1,155}$/.test(app.topic) ? app.topic : null,
-    echo: app.echo === true,
-  }]));
+  const lower = (logins: unknown) =>
+    Array.isArray(logins)
+      ? logins.filter((login): login is string => typeof login === "string").map((login) => login.toLowerCase())
+      : [];
+  return Object.fromEntries(
+    Object.entries(parsed)
+      .filter(
+        ([name, app]) => APP_NAME.test(name) && typeof app?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(app.repo),
+      )
+      .map(([name, app]) => [
+        name,
+        {
+          repo: app.repo!,
+          owners: lower(app.owners),
+          builders: lower(app.builders),
+          issues: app.issues === true && app.echo !== true,
+          names: Object.fromEntries(
+            Object.entries(app.names ?? {})
+              .filter(([, name]) => typeof name === "string" && senderName(name) !== null)
+              .map(([login, name]) => [login.toLowerCase(), name]),
+          ),
+          topic: typeof app.topic === "string" && /^[\w.-]{1,155}$/.test(app.topic) ? app.topic : null,
+          echo: app.echo === true,
+        },
+      ]),
+  );
 }
 
 export function roleOf(app: AppConfig, login: string): Role | null {
@@ -114,10 +154,13 @@ const ISSUES_PER_DAY = 10;
  * and takes, so sends at once each take their own place.
  */
 export async function takeIssue(store: FeedbackStore, now: number): Promise<boolean> {
-  const taken = await store.db.prepare(
-    "INSERT INTO issue_opens (app, login, at) SELECT ?1, ?2, ?3 WHERE"
-      + " (SELECT count(*) FROM issue_opens WHERE app = ?1 AND login = ?2 AND at > ?4) < ?5",
-  ).bind(store.app, store.login, now, now - 86_400_000, ISSUES_PER_DAY).run();
+  const taken = await store.db
+    .prepare(
+      "INSERT INTO issue_opens (app, login, at) SELECT ?1, ?2, ?3 WHERE" +
+        " (SELECT count(*) FROM issue_opens WHERE app = ?1 AND login = ?2 AND at > ?4) < ?5",
+    )
+    .bind(store.app, store.login, now, now - 86_400_000, ISSUES_PER_DAY)
+    .run();
   return taken.meta.changes === 1;
 }
 
@@ -148,7 +191,12 @@ const notFound = () => Response.json({ error: "Not found." }, { status: 404 });
 
 /** The sender's chats: an agent's (owner, builder) or issues, by their role in the app. */
 async function feedbackRoute(
-  id: string | undefined, request: Request, env: FeatureKitEnv, app: string, config: AppConfig, login: string,
+  id: string | undefined,
+  request: Request,
+  env: FeatureKitEnv,
+  app: string,
+  config: AppConfig,
+  login: string,
   name: string | null,
 ): Promise<Response> {
   if (id !== undefined && !isFeedbackId(id)) {
@@ -207,7 +255,11 @@ async function feedbackRoute(
   };
   if (request.method !== "POST") {
     if (!id) {
-      return Response.json({ threads: await issueThreads(store), builderOnline: true, notice: issuesNotice(config.repo) });
+      return Response.json({
+        threads: await issueThreads(store),
+        builderOnline: true,
+        notice: issuesNotice(config.repo),
+      });
     }
     const chat = await issueChat(context, id);
     return chat ? Response.json(chat) : notFound();
@@ -233,8 +285,10 @@ async function feedbackRoute(
     }
   });
   if (limited) {
-    return Response.json({ error: `You can open ${ISSUES_PER_DAY} feedback issues a day. Try again tomorrow.` },
-      { status: 429 });
+    return Response.json(
+      { error: `You can open ${ISSUES_PER_DAY} feedback issues a day. Try again tomorrow.` },
+      { status: 429 },
+    );
   }
   const chat = target ? await issueChat(context, target) : null;
   return chat ? Response.json(chat) : notFound();
@@ -258,7 +312,10 @@ async function deleteRoute(id: string | undefined, store: FeedbackStore, env: Fe
  * Two tries at the same moment can both go; the app's outbox sends one at a time.
  */
 async function once(
-  store: FeedbackStore, id: string | undefined, body: unknown, send: () => Promise<string | null>,
+  store: FeedbackStore,
+  id: string | undefined,
+  body: unknown,
+  send: () => Promise<string | null>,
 ): Promise<string | null> {
   const ref = clientRefOf(body);
   const key = ref ? await sha256Hex(`${id ?? "new"}:${ref}`) : null;
@@ -276,9 +333,13 @@ async function once(
 
 /** An issue that was not opened: its place under the cap goes back. */
 async function giveBackIssue(store: FeedbackStore, at: number): Promise<void> {
-  await store.db.prepare("DELETE FROM issue_opens WHERE rowid IN"
-    + " (SELECT rowid FROM issue_opens WHERE app = ? AND login = ? AND at = ? LIMIT 1)")
-    .bind(store.app, store.login, at).run();
+  await store.db
+    .prepare(
+      "DELETE FROM issue_opens WHERE rowid IN" +
+        " (SELECT rowid FROM issue_opens WHERE app = ? AND login = ? AND at = ? LIMIT 1)",
+    )
+    .bind(store.app, store.login, at)
+    .run();
 }
 
 /** Which chats a runner message is about: the app, the sender and their store, from the body. */
@@ -288,30 +349,47 @@ function senderOf(body: Record<string, unknown> | null, apps: Record<string, App
   const config = apps[app];
   const role = config && LOGIN.test(login) ? roleOf(config, login) : null;
   return config && role && role !== "issue"
-    ? { app, login: login.toLowerCase(), config, role, store: senderStore(env.DB, env.FEEDBACK, app, login) } : null;
+    ? { app, login: login.toLowerCase(), config, role, store: senderStore(env.DB, env.FEEDBACK, app, login) }
+    : null;
 }
 
 async function runnerRoute(
-  kind: string, request: Request, env: FeatureKitEnv, apps: Record<string, AppConfig>, later: Later,
+  kind: string,
+  request: Request,
+  env: FeatureKitEnv,
+  apps: Record<string, AppConfig>,
+  later: Later,
 ) {
   if (kind === "wait") {
-    return env.RUNNER_WAKE ? runnerWake(env.RUNNER_WAKE).fetch("https://runner-wake/wait", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: await request.text(),
-    }) : Response.json({ error: "no long poll here" }, { status: 404 });
+    return env.RUNNER_WAKE
+      ? runnerWake(env.RUNNER_WAKE).fetch("https://runner-wake/wait", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: await request.text(),
+        })
+      : Response.json({ error: "no long poll here" }, { status: 404 });
   }
   const body = (await bodyOf(request)) as Record<string, unknown> | null;
   const now = Date.now();
   if (kind === "poll") {
     const detail = typeof body?.detail === "string" ? body.detail : null;
-    const senders = Object.entries(apps).flatMap(([app, config]) => [...config.owners, ...config.builders]
-      .map((login) => ({ app, login, config, role: roleOf(config, login)! })));
+    const senders = Object.entries(apps).flatMap(([app, config]) =>
+      [...config.owners, ...config.builders].map((login) => ({ app, login, config, role: roleOf(config, login)! })),
+    );
     await runnerBeat(env.DB, body?.orca === true, now, detail);
-    const work = await Promise.all(senders.map(async ({ app, login, config, role }) =>
-      (await pendingWork(senderStore(env.DB, env.FEEDBACK, app, login)))
-        .map((item) => ({
-          ...item, app, login: login.toLowerCase(), repo: config.repo, role,
-          name: item.name ?? config.names[login.toLowerCase()] ?? null, ...(config.echo ? { echo: true } : {}),
-        }))));
+    const work = await Promise.all(
+      senders.map(async ({ app, login, config, role }) =>
+        (await pendingWork(senderStore(env.DB, env.FEEDBACK, app, login))).map((item) => ({
+          ...item,
+          app,
+          login: login.toLowerCase(),
+          repo: config.repo,
+          role,
+          name: item.name ?? config.names[login.toLowerCase()] ?? null,
+          ...(config.echo ? { echo: true } : {}),
+        })),
+      ),
+    );
     return Response.json({ work: work.flat().sort((a, b) => a.at - b.at) });
   }
   const sender = senderOf(body, apps, env);
@@ -324,10 +402,16 @@ async function runnerRoute(
     const claimed = await runnerClaim(sender.store, chat, message, now);
     if (claimed.ok) {
       await chatChanged(env, chat);
-      await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: "delivering" } }));
+      await later(
+        pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: "delivering" } }),
+      );
     }
-    return claimed.ok ? Response.json({ ...claimed, app: sender.app, login: sender.login, repo: sender.config.repo, role: sender.role })
-      : Response.json({ error: claimed.status === 404 ? "no such message" : "not pending" }, { status: claimed.status });
+    return claimed.ok
+      ? Response.json({ ...claimed, app: sender.app, login: sender.login, repo: sender.config.repo, role: sender.role })
+      : Response.json(
+          { error: claimed.status === 404 ? "no such message" : "not pending" },
+          { status: claimed.status },
+        );
   }
   if (kind === "result") {
     const delivered = body?.status === "delivered";
@@ -341,8 +425,10 @@ async function runnerRoute(
       const state = delivered ? "delivered" : "failed";
       await later(pushTo(env, sender, { alert: null, data: { chat, app: sender.app, kind: "status", status: state } }));
     }
-    return Response.json(status === 200 ? { ok: true } : { error: status === 404 ? "no such message" : "not delivering" },
-      { status });
+    return Response.json(
+      status === 200 ? { ok: true } : { error: status === 404 ? "no such message" : "not delivering" },
+      { status },
+    );
   }
   const agent = parseAgentSide(body, now);
   if (!agent) {
@@ -364,11 +450,11 @@ async function imageRoute(name: string, env: FeatureKitEnv): Promise<Response> {
   const object = isImageName(name) ? await env.FEEDBACK.get(`${IMAGES}${name}`) : null;
   return object
     ? new Response(object.body, {
-      headers: {
-        "Content-Type": object.httpMetadata?.contentType ?? "image/jpeg",
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    })
+        headers: {
+          "Content-Type": object.httpMetadata?.contentType ?? "image/jpeg",
+          "Cache-Control": "public, max-age=31536000, immutable",
+        },
+      })
     : new Response("not found\n", { status: 404 });
 }
 
@@ -376,16 +462,19 @@ async function imageRoute(name: string, env: FeatureKitEnv): Promise<Response> {
 type Later = (work: Promise<unknown>) => Promise<void>;
 
 export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?: ExecutionContext): Promise<Response> {
-  const later: Later = ctx ? async (work) => ctx.waitUntil(work) : async (work) => {
-    await work;
-  };
+  const later: Later = ctx
+    ? async (work) => ctx.waitUntil(work)
+    : async (work) => {
+        await work;
+      };
   const { pathname } = new URL(request.url);
   const image = IMAGE_PATH.exec(pathname);
   if (image && request.method === "GET") {
     return imageRoute(image[1], env);
   }
   if (pathname === "/admin/migrate" && request.method === "POST" && env.ADMIN_TOKEN) {
-    return hasBearer(request, env.ADMIN_TOKEN) ? Response.json(await migrate(env.FEEDBACK, env.DB))
+    return hasBearer(request, env.ADMIN_TOKEN)
+      ? Response.json(await migrate(env.FEEDBACK, env.DB))
       : new Response("unauthorized\n", { status: 401 });
   }
   if (pathname === "/admin/apns-check" && request.method === "POST" && env.ADMIN_TOKEN) {
@@ -394,13 +483,16 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
     }
     const topic = new URL(request.url).searchParams.get("topic") ?? "";
     return env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_P8 && topic
-      ? Response.json(await checkKey({ keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 }, topic, Date.now()))
+      ? Response.json(
+          await checkKey({ keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 }, topic, Date.now()),
+        )
       : Response.json({ error: "no APNs key, or no topic" }, { status: 400 });
   }
   const apps = parseApps(env.APPS);
   const runner = RUNNER_PATH.exec(pathname);
   if (runner && request.method === "POST") {
-    return hasBearer(request, env.RUNNER_TOKEN) ? runnerRoute(runner[1], request, env, apps, later)
+    return hasBearer(request, env.RUNNER_TOKEN)
+      ? runnerRoute(runner[1], request, env, apps, later)
       : new Response("unauthorized\n", { status: 401 });
   }
   const feedback = FEEDBACK_PATH.exec(pathname);
@@ -414,8 +506,17 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
     if (!config || !LOGIN.test(login)) {
       return Response.json({ error: "Unknown app or sender." }, { status: 400 });
     }
-    return guarded(() => feedbackRoute(feedback[1], request, env, app, config, login,
-      senderName(request.headers.get("X-FeedbackKit-Name"))));
+    return guarded(() =>
+      feedbackRoute(
+        feedback[1],
+        request,
+        env,
+        app,
+        config,
+        login,
+        senderName(request.headers.get("X-FeedbackKit-Name")),
+      ),
+    );
   }
   const picture = IMAGE_OF_CHAT_PATH.exec(pathname);
   if (picture && request.method === "GET") {
@@ -423,15 +524,25 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
     if (!sender) {
       return Response.json({ error: "Sign in again." }, { status: 401 });
     }
-    const found = await messageImage(senderStore(env.DB, env.FEEDBACK, sender.app, sender.login), picture[1], picture[2],
-      Number(picture[3]));
-    return found ? new Response(found.bytes, {
-      headers: { "Content-Type": found.mediaType, "Cache-Control": "private, max-age=86400, immutable" },
-    }) : notFound();
+    const found = await messageImage(
+      senderStore(env.DB, env.FEEDBACK, sender.app, sender.login),
+      picture[1],
+      picture[2],
+      Number(picture[3]),
+    );
+    return found
+      ? new Response(found.bytes, {
+          headers: { "Content-Type": found.mediaType, "Cache-Control": "private, max-age=86400, immutable" },
+        })
+      : notFound();
   }
   if (pathname === "/v2/acp") {
     return env.LIVE_ROOMS && env.ACP_SECRET
-      ? handleAcp(request, { adapter: liveAdapter(liveDeps(env)), rooms: liveRooms(env.LIVE_ROOMS), secret: env.ACP_SECRET })
+      ? handleAcp(request, {
+          adapter: liveAdapter(liveDeps(env)),
+          rooms: liveRooms(env.LIVE_ROOMS),
+          secret: env.ACP_SECRET,
+        })
       : notFound();
   }
   const direct = DIRECT_FEEDBACK_PATH.exec(pathname);
@@ -451,13 +562,16 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
 
 /** A push to the sender's devices, when the app has a topic and the Worker the team key; gone devices forgotten. */
 async function pushTo(env: FeatureKitEnv, sender: { app: string; login: string; config: AppConfig }, push: Push) {
-  const key: ApnsKey | null = env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_P8
-    ? { keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 } : null;
+  const key: ApnsKey | null =
+    env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_P8
+      ? { keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, p8: env.APNS_KEY_P8 }
+      : null;
   if (!key || !sender.config.topic) {
     return;
   }
   const { results } = await env.DB.prepare("SELECT token, environment FROM devices WHERE app = ? AND login = ?")
-    .bind(sender.app, sender.login.toLowerCase()).all<Device>();
+    .bind(sender.app, sender.login.toLowerCase())
+    .all<Device>();
   const gone = await sendPush(key, sender.config.topic, results, push, Date.now());
   if (gone.length) {
     await env.DB.batch(gone.map((token) => env.DB.prepare("DELETE FROM devices WHERE token = ?").bind(token)));
@@ -483,7 +597,8 @@ function liveDeps(env: FeatureKitEnv) {
     verify: async (request: Request): Promise<LiveWho | null> => {
       const sender = await tokenSender(request, env, parseApps(env.APPS));
       return sender && roleOf(sender.config, sender.login) !== "issue" && roleOf(sender.config, sender.login) !== null
-        ? { app: sender.app, login: sender.login.toLowerCase(), name: sender.name } : null;
+        ? { app: sender.app, login: sender.login.toLowerCase(), name: sender.name }
+        : null;
     },
     sent: async () => wakeRunner(env.RUNNER_WAKE),
   };
@@ -517,7 +632,11 @@ async function tokenSender(request: Request, env: FeatureKitEnv, apps: Record<st
  * registers it last), `DELETE /v2/devices/{token}` forgets it.
  */
 async function devicesRoute(
-  token: string | undefined, request: Request, env: FeatureKitEnv, app: string, login: string,
+  token: string | undefined,
+  request: Request,
+  env: FeatureKitEnv,
+  app: string,
+  login: string,
 ): Promise<Response> {
   const lower = login.toLowerCase();
   if (request.method === "DELETE" && token) {
@@ -529,15 +648,21 @@ async function devicesRoute(
   }
   const body = (await bodyOf(request)) as { token?: unknown; environment?: unknown } | null;
   const device = typeof body?.token === "string" ? body.token.toLowerCase() : "";
-  const environment = body?.environment === "sandbox" ? "sandbox" : body?.environment === "production" ? "production" : null;
+  const environment =
+    body?.environment === "sandbox" ? "sandbox" : body?.environment === "production" ? "production" : null;
   if (!APNS_TOKEN.test(device) || !environment) {
-    return Response.json({ error: "token (hex) and environment (production or sandbox) are required" }, { status: 400 });
+    return Response.json(
+      { error: "token (hex) and environment (production or sandbox) are required" },
+      { status: 400 },
+    );
   }
   await env.DB.prepare(
-    "INSERT INTO devices (token, app, login, environment, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (token)"
-      + " DO UPDATE SET app = excluded.app, login = excluded.login, environment = excluded.environment,"
-      + " updated_at = excluded.updated_at",
-  ).bind(device, app, lower, environment, Date.now()).run();
+    "INSERT INTO devices (token, app, login, environment, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (token)" +
+      " DO UPDATE SET app = excluded.app, login = excluded.login, environment = excluded.environment," +
+      " updated_at = excluded.updated_at",
+  )
+    .bind(device, app, lower, environment, Date.now())
+    .run();
   return Response.json({ ok: true });
 }
 

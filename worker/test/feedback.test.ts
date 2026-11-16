@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addFeedback, builderStatusOf, feedbackChat, feedbackList, type FeedbackStore, isFeedbackId, listServedLog,
-  parseAgentSide, parseFeedbackInput,
-  runnerAgent, runnerClaim, runnerPoll, runnerResult, senderStore, threadAgentState, titleOf,
+  addFeedback,
+  builderStatusOf,
+  feedbackChat,
+  feedbackList,
+  type FeedbackStore,
+  isFeedbackId,
+  listServedLog,
+  parseAgentSide,
+  parseFeedbackInput,
+  runnerAgent,
+  runnerClaim,
+  runnerPoll,
+  runnerResult,
+  senderStore,
+  threadAgentState,
+  titleOf,
 } from "../src/feedback.ts";
 import { memoryBucket, memoryD1 } from "./d1.ts";
 
@@ -16,8 +29,11 @@ const PNG = "iVBORw0KGgoAAAANSUhEUg==";
 const JPEG = "/9j/4AAQSkZJRg==";
 
 test("feedback is words with the build it is about, and nothing else gets through", () => {
-  assert.deepEqual(parseFeedbackInput({ text: "  The back button jumps  ", build: "142" }),
-    { text: "The back button jumps", build: "142", images: [] });
+  assert.deepEqual(parseFeedbackInput({ text: "  The back button jumps  ", build: "142" }), {
+    text: "The back button jumps",
+    build: "142",
+    images: [],
+  });
   assert.equal(parseFeedbackInput({ text: "   " }), null);
   assert.equal(parseFeedbackInput({ text: "x".repeat(8_001) }), null);
   assert.equal(parseFeedbackInput({ text: "ok", build: "1; rm -rf /" })?.build, null);
@@ -45,19 +61,31 @@ test("only up to four JPEG or PNG screenshots of at most 1.5 MB get through", ()
 
 test("new feedback waits for the runner: the chat works and the builder is offline until a poll", async () => {
   const store = memoryStore();
-  const input = parseFeedbackInput({ text: "Bigger clock", build: "180", images: [{ media_type: "image/png", data: PNG }] })!;
+  const input = parseFeedbackInput({
+    text: "Bigger clock",
+    build: "180",
+    images: [{ media_type: "image/png", data: PNG }],
+  })!;
   const chat = (await addFeedback(store, null, input, 1_000))!;
   assert.equal((await feedbackList(store, 2_000)).threads[0].title, "Bigger clock");
-  assert.deepEqual((await feedbackList(store, 2_000)).threads[0].agent, { state: "working", activity: "Starting" },
-    "a message waiting for the runner shows on the list as working");
+  assert.deepEqual(
+    (await feedbackList(store, 2_000)).threads[0].agent,
+    { state: "working", activity: "Starting" },
+    "a message waiting for the runner shows on the list as working",
+  );
   const waiting = (await feedbackChat(store, chat, 2_000))!;
-  assert.deepEqual(waiting.messages.map(({ role, text, images }) => ({ role, text, images })),
-    [{ role: "you", text: "Bigger clock", images: 1 }]);
+  assert.deepEqual(
+    waiting.messages.map(({ role, text, images }) => ({ role, text, images })),
+    [{ role: "you", text: "Bigger clock", images: 1 }],
+  );
   assert.equal(waiting.isWorking, true);
   assert.equal(waiting.builderOnline, false);
   assert.equal(waiting.costCents, null);
   const work = await runnerPoll(store, true, 3_000);
-  assert.deepEqual(work.map(({ chat: id, first }) => ({ id, first })), [{ id: chat, first: true }]);
+  assert.deepEqual(
+    work.map(({ chat: id, first }) => ({ id, first })),
+    [{ id: chat, first: true }],
+  );
   assert.equal((await feedbackChat(store, chat, 4_000))!.activity, "Starting");
   assert.equal((await feedbackList(store, 3_000 + 91_000)).builderOnline, false, "a runner quiet for 90 s is offline");
   assert.equal(await addFeedback(store, "fb_0000000000000000", input, 5_000), null, "a reply to no chat");
@@ -71,15 +99,22 @@ test("a later message in a chat goes to its agent, not a new one, and says so wh
   assert.equal(await runnerResult(store, chat, first.message, true, null), 200);
   assert.equal(await addFeedback(store, chat, parseFeedbackInput({ text: "And bolder" })!, 3_000), chat);
   const work = await runnerPoll(store, true, 3_500);
-  assert.deepEqual(work.map(({ chat: id, first: isFirst }) => ({ id, isFirst })), [{ id: chat, isFirst: false }]);
+  assert.deepEqual(
+    work.map(({ chat: id, first: isFirst }) => ({ id, isFirst })),
+    [{ id: chat, isFirst: false }],
+  );
   assert.equal((await feedbackChat(store, chat, 4_000))!.activity, "Passing your message to the agent");
   assert.equal((await feedbackList(store, 4_000)).threads.length, 1, "still one chat");
 });
 
 test("a message is claimed once, with its screenshots, then reported on", async () => {
   const store = memoryStore();
-  const chat = (await addFeedback(store, null,
-    parseFeedbackInput({ text: "Bigger clock", images: [{ media_type: "image/png", data: PNG }] })!, 1_000))!;
+  const chat = (await addFeedback(
+    store,
+    null,
+    parseFeedbackInput({ text: "Bigger clock", images: [{ media_type: "image/png", data: PNG }] })!,
+    1_000,
+  ))!;
   const [work] = await runnerPoll(store, true, 2_000);
   const claimed = await runnerClaim(store, chat, work.message, 3_000);
   assert.ok(claimed.ok);
@@ -98,37 +133,69 @@ test("a claim that loses the race to another is refused", async () => {
   const store = memoryStore();
   const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "x" })!, 1_000))!;
   const [work] = await runnerPoll(store, true, 2_000);
-  const both = await Promise.all([runnerClaim(store, chat, work.message, 3_000), runnerClaim(store, chat, work.message, 3_000)]);
+  const both = await Promise.all([
+    runnerClaim(store, chat, work.message, 3_000),
+    runnerClaim(store, chat, work.message, 3_000),
+  ]);
   assert.deepEqual(both.map((one) => one.ok).sort(), [false, true]);
-  assert.deepEqual(both.find((one) => !one.ok), { ok: false, status: 409 });
+  assert.deepEqual(
+    both.find((one) => !one.ok),
+    { ok: false, status: 409 },
+  );
 });
 
 test("the chat is Jai's messages and the agent's in time order, working until the agent's turn ends", async () => {
   const store = memoryStore();
-  const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "Bigger clock" })!, Date.parse("2026-11-09T10:00:00Z")))!;
+  const chat = (await addFeedback(
+    store,
+    null,
+    parseFeedbackInput({ text: "Bigger clock" })!,
+    Date.parse("2026-11-09T10:00:00Z"),
+  ))!;
   const [work] = await runnerPoll(store, true, Date.parse("2026-11-09T10:00:05Z"));
   await runnerClaim(store, chat, work.message, Date.parse("2026-11-09T10:00:06Z"));
   await runnerResult(store, chat, work.message, true, null);
   const delivered = (await feedbackChat(store, chat, Date.parse("2026-11-09T10:00:07Z")))!;
   assert.equal(delivered.isWorking, true, "delivered, and the runner has not looked since");
-  const side = parseAgentSide({
-    messages: [{ id: "a1", text: "On it.", at: "2026-11-09T10:00:20Z" }], isWorking: true, activity: "Running tests",
-    thread: { host: "build-mac", id: "orca-claude:abc" },
-  }, Date.parse("2026-11-09T10:00:30Z"))!;
+  const side = parseAgentSide(
+    {
+      messages: [{ id: "a1", text: "On it.", at: "2026-11-09T10:00:20Z" }],
+      isWorking: true,
+      activity: "Running tests",
+      thread: { host: "build-mac", id: "orca-claude:abc" },
+    },
+    Date.parse("2026-11-09T10:00:30Z"),
+  )!;
   assert.equal(await runnerAgent(store, chat, side), 200);
   const working = (await feedbackChat(store, chat, Date.parse("2026-11-09T10:00:31Z")))!;
-  assert.deepEqual(working.messages.map(({ role, text }) => `${role}: ${text}`), ["you: Bigger clock", "agent: On it."]);
+  assert.deepEqual(
+    working.messages.map(({ role, text }) => `${role}: ${text}`),
+    ["you: Bigger clock", "agent: On it."],
+  );
   assert.equal(working.activity, "Running tests");
   assert.deepEqual(working.thread, { host: "build-mac", id: "orca-claude:abc" });
-  await runnerAgent(store, chat, { ...side, isWorking: false, activity: null, updatedAt: Date.parse("2026-11-09T10:01:00Z") });
+  await runnerAgent(store, chat, {
+    ...side,
+    isWorking: false,
+    activity: null,
+    updatedAt: Date.parse("2026-11-09T10:01:00Z"),
+  });
   const done = (await feedbackChat(store, chat, Date.parse("2026-11-09T10:01:01Z")))!;
   assert.equal(done.isWorking, false);
   assert.equal(done.activity, null);
-  const reply = await addFeedback(store, chat, parseFeedbackInput({ text: "And the badge" })!, Date.parse("2026-11-09T10:02:00Z"));
+  const reply = await addFeedback(
+    store,
+    chat,
+    parseFeedbackInput({ text: "And the badge" })!,
+    Date.parse("2026-11-09T10:02:00Z"),
+  );
   assert.equal(reply, chat);
   const [next] = await runnerPoll(store, true, Date.parse("2026-11-09T10:02:01Z"));
   assert.equal(next.first, false);
-  assert.equal((await feedbackChat(store, chat, Date.parse("2026-11-09T10:02:02Z")))!.messages.at(-1)!.text, "And the badge");
+  assert.equal(
+    (await feedbackChat(store, chat, Date.parse("2026-11-09T10:02:02Z")))!.messages.at(-1)!.text,
+    "And the badge",
+  );
 });
 
 test("a message the runner took and never reported on fails after 15 minutes, and is not sent again", async () => {
@@ -162,45 +229,74 @@ test("each sender message keeps its persisted delivery state until the runner re
 
 test("the agent's side is checked before it is kept", () => {
   assert.equal(parseAgentSide({ messages: "no", isWorking: true, activity: null }, 0), null);
-  assert.equal(parseAgentSide({ messages: [{ id: "a", text: "x", at: "soon" }], isWorking: true, activity: null }, 0), null);
+  assert.equal(
+    parseAgentSide({ messages: [{ id: "a", text: "x", at: "soon" }], isWorking: true, activity: null }, 0),
+    null,
+  );
   assert.equal(parseAgentSide({ messages: [], isWorking: "yes", activity: null }, 0), null);
-  assert.deepEqual(parseAgentSide({ messages: [], isWorking: false, activity: null, thread: { host: 1 } }, 5),
-    { messages: [], isWorking: false, activity: null, thread: null, updatedAt: 5 });
+  assert.deepEqual(parseAgentSide({ messages: [], isWorking: false, activity: null, thread: { host: 1 } }, 5), {
+    messages: [],
+    isWorking: false,
+    activity: null,
+    thread: null,
+    updatedAt: 5,
+  });
 });
 
 test("the list says why the builder is offline: the runner's Mac, or a runner gone quiet", async () => {
   const store = memoryStore();
-  assert.deepEqual((await feedbackList(store, 1_000)).builderStatus,
-    { online: false, lastPollAt: null, detail: "The runner has never polled." });
+  assert.deepEqual((await feedbackList(store, 1_000)).builderStatus, {
+    online: false,
+    lastPollAt: null,
+    detail: "The runner has never polled.",
+  });
   await runnerPoll(store, false, 1_000, "orca worktree ps: Could not connect to the remote Orca runtime");
   assert.deepEqual((await feedbackList(store, 2_000)).builderStatus, {
-    online: false, lastPollAt: new Date(1_000).toISOString(),
+    online: false,
+    lastPollAt: new Date(1_000).toISOString(),
     detail: "orca worktree ps: Could not connect to the remote Orca runtime",
   });
   await runnerPoll(store, true, 3_000, "ignored when Orca answers");
-  assert.deepEqual((await feedbackList(store, 4_000)).builderStatus,
-    { online: true, lastPollAt: new Date(3_000).toISOString(), detail: null });
-  assert.equal(builderStatusOf({ at: 3_000, orca: true }, 3_000 + 120_000).detail, "The runner has not polled for 120 s.");
+  assert.deepEqual((await feedbackList(store, 4_000)).builderStatus, {
+    online: true,
+    lastPollAt: new Date(3_000).toISOString(),
+    detail: null,
+  });
+  assert.equal(
+    builderStatusOf({ at: 3_000, orca: true }, 3_000 + 120_000).detail,
+    "The runner has not polled for 120 s.",
+  );
   await runnerPoll(store, false, 5_000, "x".repeat(500));
   assert.equal((await feedbackList(store, 5_000)).builderStatus.detail?.length, 200);
 });
 
 test("a list read logs what the app was told about the builder", () => {
-  const line = JSON.parse(listServedLog(
-    { online: false, lastPollAt: new Date(1_000).toISOString(), detail: "Orca down" }, 2, 31_000,
-  ));
+  const line = JSON.parse(
+    listServedLog({ online: false, lastPollAt: new Date(1_000).toISOString(), detail: "Orca down" }, 2, 31_000),
+  );
   assert.deepEqual(line, {
-    event: "feedback_list_served", builderOnline: false, runnerPollAgeSeconds: 30, detail: "Orca down", threads: 2,
+    event: "feedback_list_served",
+    builderOnline: false,
+    runnerPollAgeSeconds: 30,
+    detail: "Orca down",
+    threads: 2,
   });
 });
 
 test("a thread's state on the list: working, needs you or idle", () => {
-  const side = (isWorking: boolean, updatedAt: number, activity: string | null = null) =>
-    ({ messages: [], isWorking, activity, thread: null, updatedAt });
+  const side = (isWorking: boolean, updatedAt: number, activity: string | null = null) => ({
+    messages: [],
+    isWorking,
+    activity,
+    thread: null,
+    updatedAt,
+  });
   assert.deepEqual(threadAgentState(null, null, null, false), { state: "idle", activity: null });
   assert.deepEqual(threadAgentState(null, 1000, null, true), { state: "working", activity: "Starting" });
-  assert.deepEqual(threadAgentState(side(true, 2000, "Running tests"), 1000, 1500, false),
-    { state: "working", activity: "Running tests" });
+  assert.deepEqual(threadAgentState(side(true, 2000, "Running tests"), 1000, 1500, false), {
+    state: "working",
+    activity: "Running tests",
+  });
   // A message after the agent's last look: its turn has started.
   assert.deepEqual(threadAgentState(side(false, 1000), 2000, 900, false), { state: "working", activity: "Starting" });
   // The agent spoke last and stopped: it waits on the sender.

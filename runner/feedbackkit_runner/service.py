@@ -23,8 +23,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Callable
+from typing import IO
 
 from . import agent_pager, update
 from .runner import (
@@ -55,7 +56,9 @@ LOG = logging.getLogger("feedbackkit-runner")
 
 
 def log(event: str, level: int = logging.INFO, **fields: object) -> None:
-    LOG.log(level, "%s", json.dumps(dict(event=event, **fields), ensure_ascii=False, separators=(",", ":"), default=str))
+    LOG.log(
+        level, "%s", json.dumps(dict(event=event, **fields), ensure_ascii=False, separators=(",", ":"), default=str)
+    )
 
 
 def old_runner_running(run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> str | None:
@@ -66,7 +69,9 @@ def old_runner_running(run: Callable[..., subprocess.CompletedProcess[str]] = su
     if loaded.returncode == 0:
         return f"{OLD_LABEL} is loaded"
     found = run(["/usr/bin/pgrep", "-f", OLD_MODULE], capture_output=True, text=True, check=False)
-    return f"{OLD_MODULE} is running (pid {found.stdout.split()[0]})" if found.returncode == 0 and found.stdout else None
+    return (
+        f"{OLD_MODULE} is running (pid {found.stdout.split()[0]})" if found.returncode == 0 and found.stdout else None
+    )
 
 
 def hold_lock(state_dir: Path) -> IO[str] | None:
@@ -314,7 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parent.parent / update.INSTALLED_FILE,
         help="install.py's record; without it the runner never updates itself",
     )
-    parser.add_argument("--agent-pager", type=Path, default=agent_pager.THREADS_DIR, help="Agent Pager's installed threads hub")
+    parser.add_argument(
+        "--agent-pager", type=Path, default=agent_pager.THREADS_DIR, help="Agent Pager's installed threads hub"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
     url = credential_record(args.credentials, "FEEDBACKKIT_URL")

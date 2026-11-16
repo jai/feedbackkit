@@ -165,9 +165,9 @@ private struct LiveWorkerSheet: View {
                 } footer: {
                     Text(settings.isDirect
                         ? "The app backend issues FeedbackKit tokens (POST /feedback/token, sample-worker/); the demo "
-                            + "then talks to FeedbackKit itself. The token stays in this device's Keychain."
+                        + "then talks to FeedbackKit itself. The token stays in this device's Keychain."
                         : "The app backend that serves /feedback (docs/api.md). The token stays in this device's "
-                            + "Keychain.")
+                        + "Keychain.")
                 }
                 .disabled(!settings.isEnabled)
             }

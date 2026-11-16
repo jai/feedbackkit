@@ -1,9 +1,9 @@
 import AgentChatLive
 import AgentChatLiveTesting
 import DurableNetworking
+@testable import FeedbackKit
 import Foundation
 import Testing
-@testable import FeedbackKit
 
 @MainActor
 struct FeedbackDirectTests {
@@ -122,10 +122,10 @@ struct FeedbackDirectTests {
         let endpoint = EndpointCapture()
         let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
                                     liveFactory: { value in
-            endpoint.url = value.acp
-            return LiveChatModel(endpoint: LiveEndpoint(acp: server.acp, session: server.session, bearer: value.bearer),
-                                 http: server, streams: server)
-        })
+                                        endpoint.url = value.acp
+                                        return LiveChatModel(endpoint: LiveEndpoint(acp: server.acp, session: server.session, bearer: value.bearer),
+                                                             http: server, streams: server)
+                                    })
         let live = direct.makeLive("chat-1")
         let following = Task { await live.follow() }
         defer { following.cancel() }

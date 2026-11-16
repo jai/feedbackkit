@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from feedbackkit_runner.runner import FeedbackApiError
 from feedbackkit_runner.service import Service, Waiter, hold_lock, old_runner_running
@@ -138,7 +138,7 @@ class StopTests(unittest.TestCase):
         self.assertEqual((runner.ticks, runner.saved), (["full"], 1))
 
     def test_a_stop_while_waiting_ends_the_wait_without_a_tick(self) -> None:
-        loop, runner, clock = service()
+        loop, runner, _clock = service()
         runner.full_seconds = 1.0
         timer = threading.Timer(0.05, loop.stop)
         timer.start()

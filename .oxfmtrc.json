@@ -1,0 +1,19 @@
+{
+  "$schema": "./worker/node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "**/*.md",
+    "**/*.yml",
+    "**/*.yaml",
+    ".github/**",
+    "CHANGELOG.md",
+    ".release-please-manifest.json",
+    "release-please-config.json",
+    "Package.resolved",
+    "**/package-lock.json",
+    "**/*.jsonc",
+    "worker/vendor/**",
+    "worker/migrations/**"
+  ]
+}

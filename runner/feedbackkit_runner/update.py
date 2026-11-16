@@ -15,9 +15,10 @@ import shutil
 import subprocess
 import tarfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Callable
+from typing import IO
 
 from .util import JsonObject, json_object
 
@@ -60,7 +61,7 @@ def read_installed(path: Path) -> Installed | None:
     """install.py's record; None when there is none (not an installed runner)."""
     try:
         record = json_object(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
     def text(key: str) -> str | None:
@@ -216,8 +217,16 @@ class Updater:
         output: IO[bytes] = open(self.work_dir / "install.log", "wb")  # noqa: SIM115 - handed to the child
         try:
             return self.spawn(
-                [self.python, str(folder / "install.py"), "--release", release.tag, "--commit", release.commit,
-                 "--runner-tree", release.runner_tree],
+                [
+                    self.python,
+                    str(folder / "install.py"),
+                    "--release",
+                    release.tag,
+                    "--commit",
+                    release.commit,
+                    "--runner-tree",
+                    release.runner_tree,
+                ],
                 cwd=folder,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
@@ -237,7 +246,7 @@ class Updater:
         """The update a runner before this one started, once; None when there was none."""
         try:
             pending = json_object(json.loads(self.pending_path.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return None
         self.clear_pending()
         return pending

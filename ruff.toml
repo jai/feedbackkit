@@ -1,0 +1,7 @@
+# Python lint and format for runner/ (make lint). The LaunchAgent runs Homebrew's Python 3.14 (runner/install.py).
+target-version = "py314"
+line-length = 120
+
+[lint]
+# A ValueError for a bad value read from JSON or the CLI is meant; callers catch ValueError.
+extend-ignore = ["TRY004"]

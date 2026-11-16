@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import Callable
+from collections.abc import Callable
 
 from .util import JsonObject
 
@@ -69,8 +69,15 @@ class GitHub:
         releases: list[JsonObject] = []
         if commits:
             listed = self.call(
-                "release", "list", "-R", repo, "--exclude-drafts", "-L", "100",
-                "--json", "tagName,name,isPrerelease,publishedAt",
+                "release",
+                "list",
+                "-R",
+                repo,
+                "--exclude-drafts",
+                "-L",
+                "100",
+                "--json",
+                "tagName,name,isPrerelease,publishedAt",
             )
             releases = sorted(
                 (one for one in listed if isinstance(one, dict)) if isinstance(listed, list) else [],
@@ -83,36 +90,57 @@ class GitHub:
             first = next((one for one in releases if one.get("tagName") in tags), None)
             runs = self.call("api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100")
             checks = runs.get("check_runs") if isinstance(runs, dict) else None
-            shipped_commits.append({
-                "sha": sha,
-                "title": str(commit.get("title") or "")[:300],
-                "at": commit.get("at") or None,
-                "url": f"https://github.com/{repo}/commit/{sha}",
-                "ci": ci_of([
-                    (str(one.get("status") or "").upper(), str(one.get("conclusion") or "").upper())
-                    for one in checks or [] if isinstance(one, dict)
-                ]),
-                "release": {
-                    "tag": str(first["tagName"]),
-                    "name": str(first.get("name") or first["tagName"])[:200],
-                    "url": f"https://github.com/{repo}/releases/tag/{first['tagName']}",
-                    "prerelease": bool(first.get("isPrerelease")),
-                } if first else None,
-            })
+            shipped_commits.append(
+                {
+                    "sha": sha,
+                    "title": str(commit.get("title") or "")[:300],
+                    "at": commit.get("at") or None,
+                    "url": f"https://github.com/{repo}/commit/{sha}",
+                    "ci": ci_of(
+                        [
+                            (str(one.get("status") or "").upper(), str(one.get("conclusion") or "").upper())
+                            for one in checks or []
+                            if isinstance(one, dict)
+                        ]
+                    ),
+                    "release": {
+                        "tag": str(first["tagName"]),
+                        "name": str(first.get("name") or first["tagName"])[:200],
+                        "url": f"https://github.com/{repo}/releases/tag/{first['tagName']}",
+                        "prerelease": bool(first.get("isPrerelease")),
+                    }
+                    if first
+                    else None,
+                }
+            )
         prs = []
         if branch and branch not in ("HEAD", "main"):
             listed = self.call(
-                "pr", "list", "-R", repo, "--head", branch, "--state", "all", "-L", str(MAX_PRS),
-                "--json", "number,title,url,state,statusCheckRollup",
+                "pr",
+                "list",
+                "-R",
+                repo,
+                "--head",
+                branch,
+                "--state",
+                "all",
+                "-L",
+                str(MAX_PRS),
+                "--json",
+                "number,title,url,state,statusCheckRollup",
             )
             for pr in listed if isinstance(listed, list) else []:
                 if isinstance(pr, dict):
                     rollup = pr.get("statusCheckRollup")
-                    prs.append({
-                        "number": pr["number"],
-                        "title": str(pr.get("title") or "")[:300],
-                        "url": str(pr["url"]),
-                        "state": str(pr.get("state") or "").lower(),
-                        "ci": rollup_ci([one for one in rollup if isinstance(one, dict)] if isinstance(rollup, list) else []),
-                    })
+                    prs.append(
+                        {
+                            "number": pr["number"],
+                            "title": str(pr.get("title") or "")[:300],
+                            "url": str(pr["url"]),
+                            "state": str(pr.get("state") or "").lower(),
+                            "ci": rollup_ci(
+                                [one for one in rollup if isinstance(one, dict)] if isinstance(rollup, list) else []
+                            ),
+                        }
+                    )
         return {"commits": shipped_commits, "prs": prs}

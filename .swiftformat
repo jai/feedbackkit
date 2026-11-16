@@ -1,0 +1,13 @@
+# SwiftFormat, pinned in the root Makefile (make fmt; make lint checks it). From jai/durable-networking's.
+# Layout rules only, like gofmt: whitespace, indentation, braces, import order and trailing commas. No rule that
+# rewrites code (throws, try, self, unused arguments) and none that wraps lines: line and body length stay
+# SwiftLint's (.swiftlint.yml), so the two tools cannot disagree.
+--swiftversion 6.0
+--exclude .build,runner/MenuBar/.build,Demo/*.xcodeproj
+--rules indent,braces,elseOnSameLine,linebreakAtEndOfFile,linebreaks,leadingDelimiters,semicolons,trailingSpace,consecutiveSpaces,consecutiveBlankLines,blankLinesAtStartOfScope,blankLinesAtEndOfScope,blankLineAfterImports,blankLinesAroundMark,spaceAroundOperators,spaceAroundParens,spaceAroundBrackets,spaceAroundBraces,spaceAroundComments,spaceAroundGenerics,spaceInsideBrackets,spaceInsideParens,spaceInsideBraces,spaceInsideGenerics,spaceInsideComments,sortImports,duplicateImports,trailingCommas
+--indent 4
+--ifdef no-indent
+--ranges preserve
+--commas always
+--importgrouping alpha
+--maxwidth none

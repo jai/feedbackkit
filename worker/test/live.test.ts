@@ -13,7 +13,9 @@ function world(clock = { now: 1_000_000 }) {
   const db = memoryD1();
   const bucket = memoryBucket();
   const adapter = liveAdapter({
-    db, bucket, now: () => clock.now,
+    db,
+    bucket,
+    now: () => clock.now,
     verify: async (request) => (request.headers.get("Authorization") === "Bearer jai" ? JAI : null),
     sent: async () => {},
   });
@@ -50,7 +52,9 @@ test("a delivery stuck 15 minutes reaches the state with no write: the room's re
   const before = await read(adapter, chat, null);
   clock.now += 15 * 60_000 + 1;
   const after = await read(adapter, chat, before.cursor);
-  const state = after.updates.map(({ update }) => update).find((update) => update.sessionUpdate === "state_update") as StateUpdate;
+  const state = after.updates
+    .map(({ update }) => update)
+    .find((update) => update.sessionUpdate === "state_update") as StateUpdate;
   assert.equal(state.state, "idle");
   assert.match(String(state._meta?.agentchatkit?.problem), /stopped while passing this on/);
   assert.ok(Number(after.cursor) > Number(before.cursor));
@@ -58,10 +62,20 @@ test("a delivery stuck 15 minutes reaches the state with no write: the room's re
 
 test("the person's message carries its status, sender and screenshots as links; the agent's words follow", async () => {
   const { adapter, store, db } = world();
-  const chat = (await addFeedback(store, null, parseFeedbackInput({
-    text: "See this", images: [{ media_type: "image/png", data: PNG }],
-  })!, Date.parse("2026-11-15T06:00:00Z")))!;
-  db.sqlite.prepare("INSERT INTO agent_messages (chat, id, seq, text, at) VALUES (?, 'a1', 99, 'On it.', '2026-11-15T06:00:05Z')").run(chat);
+  const chat = (await addFeedback(
+    store,
+    null,
+    parseFeedbackInput({
+      text: "See this",
+      images: [{ media_type: "image/png", data: PNG }],
+    })!,
+    Date.parse("2026-11-15T06:00:00Z"),
+  ))!;
+  db.sqlite
+    .prepare(
+      "INSERT INTO agent_messages (chat, id, seq, text, at) VALUES (?, 'a1', 99, 'On it.', '2026-11-15T06:00:05Z')",
+    )
+    .run(chat);
   db.sqlite.prepare("UPDATE chats SET seq = 99 WHERE id = ?").run(chat);
   const { updates } = await read(adapter, chat, null);
   const [mine, theirs] = updates.map(({ update }) => update);
@@ -70,13 +84,23 @@ test("the person's message carries its status, sender and screenshots as links; 
   const message = (db.sqlite.prepare("SELECT id FROM messages WHERE chat = ?").get(chat) as { id: string }).id;
   assert.deepEqual(mine.content, [
     { type: "text", text: "See this" },
-    { type: "resource_link", name: "Screenshot 1", mimeType: "image/png", uri: `/v2/feedback/${chat}/images/${message}/0` },
+    {
+      type: "resource_link",
+      name: "Screenshot 1",
+      mimeType: "image/png",
+      uri: `/v2/feedback/${chat}/images/${message}/0`,
+    },
   ]);
   assert.deepEqual(mine._meta?.agentchatkit, {
-    at: "2026-11-15T06:00:00.000Z", sender: { login: "jai", name: "Jai" }, status: "pending", detail: null,
+    at: "2026-11-15T06:00:00.000Z",
+    sender: { login: "jai", name: "Jai" },
+    status: "pending",
+    detail: null,
   });
   assert.deepEqual(theirs, {
-    sessionUpdate: "agent_message", messageId: "a1", content: [{ type: "text", text: "On it." }],
+    sessionUpdate: "agent_message",
+    messageId: "a1",
+    content: [{ type: "text", text: "On it." }],
     _meta: { agentchatkit: { at: "2026-11-15T06:00:05Z" } },
   });
 });
@@ -84,9 +108,14 @@ test("the person's message carries its status, sender and screenshots as links; 
 test("another person's chat, an issue chat, or no token: refused alike", async () => {
   const { adapter, store, db } = world();
   const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "x" })!, 1))!;
-  db.sqlite.exec("INSERT INTO chats (id, app, login, kind, title, created_at) VALUES ('fb_1111111111111111', 'pager', 'jai', 'issue', 'An issue', 1)");
-  const ask = (bearer: string | null, id: string) => adapter.authorize(
-    new Request("https://kit.example/v2/acp", { headers: bearer ? { Authorization: bearer } : {} }), id);
+  db.sqlite.exec(
+    "INSERT INTO chats (id, app, login, kind, title, created_at) VALUES ('fb_1111111111111111', 'pager', 'jai', 'issue', 'An issue', 1)",
+  );
+  const ask = (bearer: string | null, id: string) =>
+    adapter.authorize(
+      new Request("https://kit.example/v2/acp", { headers: bearer ? { Authorization: bearer } : {} }),
+      id,
+    );
   assert.deepEqual(await ask("Bearer jai", chat), JAI);
   const refused = async (bearer: string | null, id: string) => {
     const answer = await ask(bearer, id);
@@ -111,22 +140,39 @@ test("every change the runner reports tells the chat's live room", async () => {
     }),
   } as unknown as DurableObjectNamespace;
   const e: FeatureKitEnv = {
-    FEEDBACK: memoryBucket(), DB: memoryD1(), CALLER_TOKEN: "caller", RUNNER_TOKEN: "runner", LIVE_ROOMS: rooms,
+    FEEDBACK: memoryBucket(),
+    DB: memoryD1(),
+    CALLER_TOKEN: "caller",
+    RUNNER_TOKEN: "runner",
+    LIVE_ROOMS: rooms,
     APPS: JSON.stringify({ pager: { repo: "acme/pager", owners: ["jai"] } }),
   };
-  const sent = await serveFeatureKit(new Request("https://kit.example/feedback", {
-    method: "POST", body: JSON.stringify({ text: "Bigger clock" }),
-    headers: { Authorization: "Bearer caller", "X-FeedbackKit-App": "pager", "X-FeedbackKit-Login": "jai" },
-  }), e);
-  const chat = (await sent.json() as { id: string }).id;
-  const runner = (kind: string, body: unknown) => serveFeatureKit(new Request(`https://kit.example/runner/${kind}`, {
-    method: "POST", headers: { Authorization: "Bearer runner" }, body: JSON.stringify(body),
-  }), e);
-  const { work } = await (await runner("poll", { orca: true })).json() as { work: Array<{ message: string }> };
+  const sent = await serveFeatureKit(
+    new Request("https://kit.example/feedback", {
+      method: "POST",
+      body: JSON.stringify({ text: "Bigger clock" }),
+      headers: { Authorization: "Bearer caller", "X-FeedbackKit-App": "pager", "X-FeedbackKit-Login": "jai" },
+    }),
+    e,
+  );
+  const chat = ((await sent.json()) as { id: string }).id;
+  const runner = (kind: string, body: unknown) =>
+    serveFeatureKit(
+      new Request(`https://kit.example/runner/${kind}`, {
+        method: "POST",
+        headers: { Authorization: "Bearer runner" },
+        body: JSON.stringify(body),
+      }),
+      e,
+    );
+  const { work } = (await (await runner("poll", { orca: true })).json()) as { work: Array<{ message: string }> };
   const whose = { app: "pager", login: "jai", chat };
   await runner("claim", { ...whose, message: work[0].message });
   await runner("result", { ...whose, message: work[0].message, status: "delivered" });
   await runner("agent", { ...whose, messages: [], isWorking: true, activity: null, thread: null });
   assert.equal(told.length, 4);
-  assert.ok(told.every((one) => one.endsWith(` ${chat}`)), told.join(", "));
+  assert.ok(
+    told.every((one) => one.endsWith(` ${chat}`)),
+    told.join(", "),
+  );
 });

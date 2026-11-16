@@ -1,5 +1,5 @@
-import AgentChatLive
 import AgentChatKit
+import AgentChatLive
 import DurableNetworking
 import Foundation
 
@@ -114,4 +114,3 @@ struct DirectFeedbackConnection: FeedbackConnection {
         return try JSONDecoder().decode(type, from: data)
     }
 }
-

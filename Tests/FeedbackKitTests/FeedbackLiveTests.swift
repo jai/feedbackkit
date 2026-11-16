@@ -1,10 +1,10 @@
 import AgentChatLive
 import AgentChatLiveTesting
 import DurableNetworking
+@testable import FeedbackKit
 import Foundation
 import SwiftUI
 import Testing
-@testable import FeedbackKit
 
 @MainActor
 struct FeedbackLiveTests {
@@ -80,7 +80,8 @@ struct FeedbackLiveTests {
         await server.agentSays("late", "A late answer")
         await server.setState(.idle)
         try await eventually { model.chat(for: route)?.messages.last?.text == "A late answer"
-            && model.chat(for: route)?.isWorking == false }
+            && model.chat(for: route)?.isWorking == false
+        }
         #expect(model.chats["chat-1"]?.messages.isEmpty == true, "REST snapshot is not a stream-fed copy")
         #expect(await rest.requests.map { $0.url!.path } == ["/v2/feedback/chat-1"])
         following.cancel()
@@ -251,6 +252,6 @@ actor DirectHTTP: HTTPTransport {
             ? #"{"threads":[],"builderOnline":true}"#
             : #"{"id":"chat-1","messages":[],"isWorking":false,"builderOnline":true}"#
         return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status,
-                                                httpVersion: nil, headerFields: nil)!)
+                                                 httpVersion: nil, headerFields: nil)!)
     }
 }

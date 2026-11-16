@@ -14,17 +14,25 @@ function env(): FeatureKitEnv {
 }
 
 function fromApp(e: FeatureKitEnv, path: string, login: string, body?: unknown, app = "prhub") {
-  return serveFeatureKit(new Request(`https://kit.example${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { Authorization: "Bearer caller", "X-FeedbackKit-App": app, "X-FeedbackKit-Login": login },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }), e);
+  return serveFeatureKit(
+    new Request(`https://kit.example${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { Authorization: "Bearer caller", "X-FeedbackKit-App": app, "X-FeedbackKit-Login": login },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    e,
+  );
 }
 
 function fromRunner(e: FeatureKitEnv, kind: string, body: unknown) {
-  return serveFeatureKit(new Request(`https://kit.example/runner/${kind}`, {
-    method: "POST", headers: { Authorization: "Bearer runner" }, body: JSON.stringify(body),
-  }), e);
+  return serveFeatureKit(
+    new Request(`https://kit.example/runner/${kind}`, {
+      method: "POST",
+      headers: { Authorization: "Bearer runner" },
+      body: JSON.stringify(body),
+    }),
+    e,
+  );
 }
 
 test("each app says who builds: owners ship, builders open a PR, everyone else files an issue", () => {
@@ -42,21 +50,38 @@ test("an owner's and a builder's feedback each wait for the runner as their own 
   const again = await (await fromApp(e, "/feedback", "octocat", { text: "Bigger diff font", client_ref: "a" })).json();
   assert.equal(again.id, mine.id);
   const list = await (await fromApp(e, "/feedback", "octocat")).json();
-  assert.deepEqual(list.threads.map((thread: { id: string }) => thread.id), [mine.id]);
+  assert.deepEqual(
+    list.threads.map((thread: { id: string }) => thread.id),
+    [mine.id],
+  );
   const { work } = await (await fromRunner(e, "poll", { orca: true })).json();
-  assert.deepEqual(work.map((item: Record<string, string>) => [item.chat, item.login, item.repo, item.role]), [
-    [mine.id, "octocat", "acme/app", "owner"], [theirs.id, "hubot", "acme/app", "builder"],
-  ]);
-  const claim = await (await fromRunner(e, "claim", { app: "prhub", login: "hubot", chat: theirs.id, message: work[1].message })).json();
+  assert.deepEqual(
+    work.map((item: Record<string, string>) => [item.chat, item.login, item.repo, item.role]),
+    [
+      [mine.id, "octocat", "acme/app", "owner"],
+      [theirs.id, "hubot", "acme/app", "builder"],
+    ],
+  );
+  const claim = await (
+    await fromRunner(e, "claim", { app: "prhub", login: "hubot", chat: theirs.id, message: work[1].message })
+  ).json();
   assert.equal(claim.text, "Dark mode");
   assert.equal(claim.role, "builder");
-  const wrong = await fromRunner(e, "claim", { app: "prhub", login: "octocat", chat: theirs.id, message: work[1].message });
+  const wrong = await fromRunner(e, "claim", {
+    app: "prhub",
+    login: "octocat",
+    chat: theirs.id,
+    message: work[1].message,
+  });
   assert.equal(wrong.status, 404);
 });
 
 test("nobody reaches feedback without the app Worker's or the runner's token, and an app with no issues refuses others", async () => {
   const e = env();
-  const bare = await serveFeatureKit(new Request("https://kit.example/feedback", { headers: { "X-FeedbackKit-App": "prhub" } }), e);
+  const bare = await serveFeatureKit(
+    new Request("https://kit.example/feedback", { headers: { "X-FeedbackKit-App": "prhub" } }),
+    e,
+  );
   assert.equal(bare.status, 401);
   const runner = await serveFeatureKit(new Request("https://kit.example/runner/poll", { method: "POST" }), e);
   assert.equal(runner.status, 401);
@@ -74,22 +99,37 @@ test("sends at once each take their own place under the daily issue cap", async 
 
 test("the app may name its sender; the runner's work carries the name, and the list each chat's thread", async () => {
   const e = env();
-  const named = await serveFeatureKit(new Request("https://kit.example/feedback", {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer caller", "X-FeedbackKit-App": "pager", "X-FeedbackKit-Login": "Octocat",
-      "X-FeedbackKit-Name": "Octo Cat",
-    },
-    body: JSON.stringify({ text: "Bigger clock" }),
-  }), e);
+  const named = await serveFeatureKit(
+    new Request("https://kit.example/feedback", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer caller",
+        "X-FeedbackKit-App": "pager",
+        "X-FeedbackKit-Login": "Octocat",
+        "X-FeedbackKit-Name": "Octo Cat",
+      },
+      body: JSON.stringify({ text: "Bigger clock" }),
+    }),
+    e,
+  );
   const chat = await named.json();
   const { work } = await (await fromRunner(e, "poll", { orca: true })).json();
-  assert.deepEqual(work.map((item: Record<string, unknown>) => [item.chat, item.login, item.name]), [[chat.id, "octocat", "Octo Cat"]]);
+  assert.deepEqual(
+    work.map((item: Record<string, unknown>) => [item.chat, item.login, item.name]),
+    [[chat.id, "octocat", "Octo Cat"]],
+  );
   await fromRunner(e, "agent", {
-    app: "pager", login: "octocat", chat: chat.id, messages: [], isWorking: true, activity: null,
+    app: "pager",
+    login: "octocat",
+    chat: chat.id,
+    messages: [],
+    isWorking: true,
+    activity: null,
     thread: { host: "borg-cube-03", id: "orca-codex:1" },
   });
   const list = await (await fromApp(e, "/feedback", "octocat", undefined, "pager")).json();
-  assert.deepEqual(list.threads.map((row: { id: string; thread: unknown }) => [row.id, row.thread]),
-    [[chat.id, { host: "borg-cube-03", id: "orca-codex:1" }]]);
+  assert.deepEqual(
+    list.threads.map((row: { id: string; thread: unknown }) => [row.id, row.thread]),
+    [[chat.id, { host: "borg-cube-03", id: "orca-codex:1" }]],
+  );
 });

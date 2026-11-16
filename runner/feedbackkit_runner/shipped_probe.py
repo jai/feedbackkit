@@ -21,7 +21,9 @@ from typing import Any
 
 MAX_COMMITS = 20
 # The picks of a rebase, a commit or an amend; not a rebase's start, a reset or a checkout, which point at others' work.
-MADE_HERE = re.compile(r"^(commit( \(amend\)| \(initial\))?|cherry-pick|[\w -]*\((pick|reword|edit|squash|fixup|continue)\)):")
+MADE_HERE = re.compile(
+    r"^(commit( \(amend\)| \(initial\))?|cherry-pick|[\w -]*\((pick|reword|edit|squash|fixup|continue)\)):"
+)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -59,7 +61,9 @@ def probe(worktree: str, project: str, known: list[str], branch: str | None) -> 
         if run("git", "cat-file", "-e", f"{sha}^{{commit}}", cwd=folder, ok=(0, 1, 128)).returncode != 0:
             continue
         if run("git", "merge-base", "--is-ancestor", sha, "origin/main", cwd=folder, ok=(0, 1)).returncode == 0:
-            date, _, title = run("git", "log", "-1", "--format=%cI%x09%s", sha, cwd=folder).stdout.strip().partition("\t")
+            date, _, title = (
+                run("git", "log", "-1", "--format=%cI%x09%s", sha, cwd=folder).stdout.strip().partition("\t")
+            )
             tags = run("git", "tag", "--contains", sha, cwd=folder).stdout.split()
             landed.append({"sha": sha, "at": date or None, "title": title[:300], "tags": tags})
     landed.sort(key=lambda one: one["at"] or "", reverse=True)

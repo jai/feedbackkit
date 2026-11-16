@@ -97,7 +97,7 @@ struct FeedbackChatView: View {
                         .success(pendingImages)
                     }
                 } else if let live, let controls = model.controls(for: route),
-                   live.chat.message(message.id) != nil {
+                          live.chat.message(message.id) != nil {
                     LiveReplyStatus(controls: controls, messageID: message.id,
                                     identifiers: identifiers.replies(message.id), retry: model.client.direct?.retry)
                     if let direct = model.client.direct {
@@ -165,8 +165,8 @@ struct FeedbackChatView: View {
         return messages.map {
             if $0.id == Self.pendingID, let pending = model.pending[box] { return pendingRow(pending) }
             return ChatMessage(id: $0.id, role: $0.isJai ? .mine : .theirs,
-                        text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0)),
-                        hasExtras: $0.isJai && delivery(for: $0.id) != nil)
+                               text: ScreenshotLine.bubbleText($0.text, screenshots: screenshots($0)),
+                               hasExtras: $0.isJai && delivery(for: $0.id) != nil)
         }
     }
 

@@ -22,8 +22,9 @@ import logging
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Literal, NamedTuple, Protocol, TypedDict
+from typing import Literal, NamedTuple, Protocol, TypedDict
 
 from .brief import app_name, fields, first_prompt, later_prefix
 from .github import GitHub
@@ -526,7 +527,7 @@ class Cube:
         last message ran in, which is the clone or a folder in it once the agent has changed into one."""
         try:
             threads = json.loads((self.state_dir / (f"last-good-{self.machine.id}.json")).read_text("utf-8"))["threads"]
-        except (OSError, ValueError, KeyError, TypeError):
+        except OSError, ValueError, KeyError, TypeError:
             return None
         rows: list[RawRow] = [
             row
@@ -831,11 +832,13 @@ class Runner:
         self.state["journal"][key] = entry
         self.save()
         replies = self.state.setdefault("echoes", {}).setdefault(chat, [])
-        replies.append({
-            "id": f"echo-{message}",
-            "text": f"echo: {claimed.get('text') or ''}",
-            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.clock())),
-        })
+        replies.append(
+            {
+                "id": f"echo-{message}",
+                "text": f"echo: {claimed.get('text') or ''}",
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.clock())),
+            }
+        )
         del replies[:-MAX_AGENT_MESSAGES]
         side: JsonObject = {"messages": replies, "isWorking": False, "activity": None, "thread": None}
         outcome: Outcome
@@ -1026,7 +1029,9 @@ class Runner:
         try:
             found = builder.cube.shipped(known["clone"], project, known.get("shipped_shas", []), known.get("branch"))
             listed = found.get("commits")
-            commits = [one for one in listed if isinstance(one, dict) and one.get("sha")] if isinstance(listed, list) else []
+            commits = (
+                [one for one in listed if isinstance(one, dict) and one.get("sha")] if isinstance(listed, list) else []
+            )
             branch = found.get("branch") if isinstance(found.get("branch"), str) else known.get("branch")
             known["shipped"] = self.github.shipped(sender["repo"], commits, branch or None)
         except RuntimeError as failure:
@@ -1102,7 +1107,9 @@ class Runner:
         }
         journalled = {key.split("/", 1)[0] for key in self.state["journal"]}
         if "echoes" in self.state:
-            self.state["echoes"] = {chat: replies for chat, replies in self.state["echoes"].items() if chat in journalled}
+            self.state["echoes"] = {
+                chat: replies for chat, replies in self.state["echoes"].items() if chat in journalled
+            }
 
     def status(self) -> JsonObject:
         """What the runner knows, for status.json (docs: runner/README.md#statusjson): the last poll, each builder, and

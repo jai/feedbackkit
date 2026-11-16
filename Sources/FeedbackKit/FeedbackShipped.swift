@@ -165,9 +165,9 @@ struct FeedbackShippedChips: View {
         } icon: {
             Image(systemName: symbol).foregroundStyle(tint)
         }
-            .padding(.horizontal, ChatSpace.sm)
-            .padding(.vertical, 2)
-            .overlay(Capsule().strokeBorder(theme.line))
+        .padding(.horizontal, ChatSpace.sm)
+        .padding(.vertical, 2)
+        .overlay(Capsule().strokeBorder(theme.line))
     }
 
     private func stageSymbol(_ stage: FeedbackShipped.Stage) -> String {

@@ -42,7 +42,10 @@ class Gh:
             f"repos/jai/feedbackkit/commits/{latest}": {"sha": NEW_COMMIT},
             f"repos/jai/feedbackkit/compare/c0...{NEW_COMMIT}": {"status": compare},
             f"repos/jai/feedbackkit/git/trees/{NEW_COMMIT}": {
-                "tree": [{"path": "Sources", "type": "tree", "sha": "s"}, {"path": "runner", "type": "tree", "sha": tree}]
+                "tree": [
+                    {"path": "Sources", "type": "tree", "sha": "s"},
+                    {"path": "runner", "type": "tree", "sha": tree},
+                ]
             },
             f"repos/jai/feedbackkit/tarball/{NEW_COMMIT}": tarball(
                 {"README.md": "", "runner/install.py": "", "runner/tests/__init__.py": ""}
@@ -120,7 +123,7 @@ class UpdaterTests(unittest.TestCase):
     def test_a_release_that_leaves_the_runner_as_it_is_is_not_installed(self) -> None:
         gh = Gh(tree="t0")
         self.assertIsNone(self.updater(gh).prepare())
-        self.assertNotIn("tarball", " ".join(sum(gh.calls, [])))
+        self.assertNotIn("tarball", " ".join(arg for call in gh.calls for arg in call))
 
     def test_a_copy_installed_from_main_past_the_release_stays(self) -> None:
         self.assertIsNone(self.updater(Gh(compare="behind")).prepare())
@@ -182,8 +185,9 @@ class ServiceUpdateTests(unittest.TestCase):
 
     def test_nothing_to_restart_is_updated_at_once(self) -> None:
         _, events = self.update(0, "up to date\n")
-        self.assertEqual(events[-1], {"event": "FEEDBACK_RUNNER_UPDATED", "restarted": False, "from": "v0.6.0",
-                                      "to": "v0.7.0"})
+        self.assertEqual(
+            events[-1], {"event": "FEEDBACK_RUNNER_UPDATED", "restarted": False, "from": "v0.6.0", "to": "v0.7.0"}
+        )
 
     def test_a_restart_on_another_version_is_a_failed_update(self) -> None:
         self.updater.state_dir.mkdir(parents=True)
@@ -211,8 +215,19 @@ class InstallRecordTests(unittest.TestCase):
             package = Path(repo) / "runner" / "feedbackkit_runner"
             package.mkdir(parents=True)
             (package / "service.py").write_text("", encoding="utf-8")
-            git = ["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
-                   "-c", "tag.gpgsign=false"]
+            git = [
+                "git",
+                "-C",
+                repo,
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "tag.gpgsign=false",
+            ]
             for argv in (["init", "-q"], ["add", "."], ["commit", "-qm", "x"], ["tag", "v9.9.9"]):
                 subprocess.run([*git, *argv], check=True, capture_output=True)
             source, install.SOURCE = install.SOURCE, package
@@ -222,7 +237,9 @@ class InstallRecordTests(unittest.TestCase):
                 dirty = install.checkout_record()
             finally:
                 install.SOURCE = source
-        self.assertEqual((clean["tag"], len(clean["commit"] or ""), len(clean["runner_tree"] or "")), ("v9.9.9", 40, 40))
+        self.assertEqual(
+            (clean["tag"], len(clean["commit"] or ""), len(clean["runner_tree"] or "")), ("v9.9.9", 40, 40)
+        )
         self.assertEqual((dirty["commit"], dirty["runner_tree"]), (clean["commit"], None))
 
     def test_a_copy_outside_git_records_nothing(self) -> None:

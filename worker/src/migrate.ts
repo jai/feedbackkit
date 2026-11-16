@@ -24,7 +24,8 @@ const QUOTA = "feedback/issue-quota.json";
 const PENDING = "feedback/pending/";
 
 /** How far along a status is: a status only ever moves to a higher one. */
-const RANK = "CASE {s} WHEN 'pending' THEN 0 WHEN 'delivering' THEN 1 WHEN 'delivered' THEN 2 WHEN 'failed' THEN 2 ELSE -1 END";
+const RANK =
+  "CASE {s} WHEN 'pending' THEN 0 WHEN 'delivering' THEN 1 WHEN 'delivered' THEN 2 WHEN 'failed' THEN 2 ELSE -1 END";
 const rank = (column: string) => RANK.replace("{s}", column);
 
 export interface SenderCounts {
@@ -97,7 +98,12 @@ export async function migrate(bucket: R2Bucket, db: D1Database): Promise<Migrati
 }
 
 async function migrateSender(
-  bucket: R2Bucket, db: D1Database, app: string, login: string, rest: string[], report: MigrationReport,
+  bucket: R2Bucket,
+  db: D1Database,
+  app: string,
+  login: string,
+  rest: string[],
+  report: MigrationReport,
 ): Promise<SenderCounts> {
   const prefix = `apps/${app}/users/${login}/`;
   const counts = empty();
@@ -113,21 +119,44 @@ async function migrateSender(
   }
   for (const [chat, keys] of messages) {
     const stored = (await Promise.all(keys.map(({ key }) => read<StoredMessage>(bucket, `${prefix}${key}`))))
-      .filter((one): one is StoredMessage => one !== null).sort((a, b) => a.at - b.at);
+      .filter((one): one is StoredMessage => one !== null)
+      .sort((a, b) => a.at - b.at);
     const first = stored[0];
     const listedChat = titles.get(chat);
-    await db.prepare(
-      "INSERT OR IGNORE INTO chats (id, app, login, kind, title, created_at) VALUES (?, ?, ?, 'agent', ?, ?)",
-    ).bind(chat, app, login, listedChat?.title ?? titleOf(first?.text ?? ""),
-      listedChat ? Date.parse(listedChat.createdAt) : first?.at ?? 0).run();
+    await db
+      .prepare("INSERT OR IGNORE INTO chats (id, app, login, kind, title, created_at) VALUES (?, ?, ?, 'agent', ?, ?)")
+      .bind(
+        chat,
+        app,
+        login,
+        listedChat?.title ?? titleOf(first?.text ?? ""),
+        listedChat ? Date.parse(listedChat.createdAt) : (first?.at ?? 0),
+      )
+      .run();
     counts.chats += 1;
-    await db.batch(stored.map((message) => db.prepare(
-      "INSERT INTO messages (id, chat, at, text, build, images, first, status, claimed_at, detail)"
-        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET status = excluded.status,"
-        + " claimed_at = excluded.claimed_at, detail = excluded.detail"
-        + ` WHERE ${rank("excluded.status")} > ${rank("messages.status")}`,
-    ).bind(message.id, chat, message.at, message.text, message.build, message.images, message.first ? 1 : 0,
-      message.status, message.claimedAt, message.detail)));
+    await db.batch(
+      stored.map((message) =>
+        db
+          .prepare(
+            "INSERT INTO messages (id, chat, at, text, build, images, first, status, claimed_at, detail)" +
+              " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET status = excluded.status," +
+              " claimed_at = excluded.claimed_at, detail = excluded.detail" +
+              ` WHERE ${rank("excluded.status")} > ${rank("messages.status")}`,
+          )
+          .bind(
+            message.id,
+            chat,
+            message.at,
+            message.text,
+            message.build,
+            message.images,
+            message.first ? 1 : 0,
+            message.status,
+            message.claimedAt,
+            message.detail,
+          ),
+      ),
+    );
     for (const message of stored) {
       counts.messages += 1;
       counts.statuses[message.status] = (counts.statuses[message.status] ?? 0) + 1;
@@ -147,11 +176,16 @@ async function migrateSender(
         continue;
       }
       counts.images += 1;
-      const known = await db.prepare("SELECT 1 FROM images WHERE message = ? AND idx = ?").bind(message, Number(index)).first();
+      const known = await db
+        .prepare("SELECT 1 FROM images WHERE message = ? AND idx = ?")
+        .bind(message, Number(index))
+        .first();
       if (!known) {
         const body = await read<FeedbackImage>(bucket, `${prefix}${key}`);
-        await db.prepare("INSERT OR IGNORE INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)")
-          .bind(message, Number(index), `${prefix}${key}`, body?.media_type ?? "image/jpeg").run();
+        await db
+          .prepare("INSERT OR IGNORE INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)")
+          .bind(message, Number(index), `${prefix}${key}`, body?.media_type ?? "image/jpeg")
+          .run();
       }
       continue;
     }
@@ -162,11 +196,21 @@ async function migrateSender(
         if (agent.thread) {
           counts.withThread += 1;
         }
-        await db.prepare(
-          "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ?"
-            + " AND (agent IS NULL OR json_extract(agent, '$.updatedAt') < ?)",
-        ).bind(JSON.stringify(agent), agent.thread?.host ?? null, agent.thread?.id ?? null, side[1], app, login,
-          agent.updatedAt).run();
+        await db
+          .prepare(
+            "UPDATE chats SET agent = ?, thread_host = ?, thread_id = ? WHERE id = ? AND app = ? AND login = ?" +
+              " AND (agent IS NULL OR json_extract(agent, '$.updatedAt') < ?)",
+          )
+          .bind(
+            JSON.stringify(agent),
+            agent.thread?.host ?? null,
+            agent.thread?.id ?? null,
+            side[1],
+            app,
+            login,
+            agent.updatedAt,
+          )
+          .run();
       }
       continue;
     }
@@ -175,8 +219,10 @@ async function migrateSender(
       const chat = (await read<{ chat: string }>(bucket, `${prefix}${key}`))?.chat;
       if (chat) {
         counts.refs += 1;
-        await db.prepare("INSERT OR IGNORE INTO refs (app, login, key, chat) VALUES (?, ?, ?, ?)")
-          .bind(app, login, ref[1], chat).run();
+        await db
+          .prepare("INSERT OR IGNORE INTO refs (app, login, key, chat) VALUES (?, ?, ?, ?)")
+          .bind(app, login, ref[1], chat)
+          .run();
       }
       continue;
     }
@@ -185,30 +231,41 @@ async function migrateSender(
       const chat = await read<IssueChatObject>(bucket, `${prefix}${key}`);
       if (chat) {
         counts.issueChats += 1;
-        await db.prepare(
-          "INSERT OR IGNORE INTO chats (id, app, login, kind, title, created_at, issue_number, issue_url)"
-            + " VALUES (?, ?, ?, 'issue', ?, ?, ?, ?)",
-        ).bind(chat.id, app, login, chat.title, Date.parse(chat.createdAt), chat.issue.number, chat.issue.url).run();
+        await db
+          .prepare(
+            "INSERT OR IGNORE INTO chats (id, app, login, kind, title, created_at, issue_number, issue_url)" +
+              " VALUES (?, ?, ?, 'issue', ?, ?, ?, ?)",
+          )
+          .bind(chat.id, app, login, chat.title, Date.parse(chat.createdAt), chat.issue.number, chat.issue.url)
+          .run();
       }
       continue;
     }
     if (key === QUOTA) {
       const opens = (await read<number[]>(bucket, `${prefix}${key}`)) ?? [];
-      const known = await db.prepare("SELECT count(*) AS n FROM issue_opens WHERE app = ? AND login = ?")
-        .bind(app, login).first<number>("n");
+      const known = await db
+        .prepare("SELECT count(*) AS n FROM issue_opens WHERE app = ? AND login = ?")
+        .bind(app, login)
+        .first<number>("n");
       if (!known && opens.length) {
-        await db.batch(opens.map((at) => db.prepare("INSERT INTO issue_opens (app, login, at) VALUES (?, ?, ?)")
-          .bind(app, login, at)));
+        await db.batch(
+          opens.map((at) =>
+            db.prepare("INSERT INTO issue_opens (app, login, at) VALUES (?, ?, ?)").bind(app, login, at),
+          ),
+        );
       }
       continue;
     }
     if (key === BEAT) {
       const beat = await read<{ at: number; orca: boolean; detail?: string | null }>(bucket, `${prefix}${key}`);
       if (beat) {
-        await db.prepare(
-          "INSERT INTO runner_beat (id, at, orca, detail) VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET"
-            + " at = excluded.at, orca = excluded.orca, detail = excluded.detail WHERE excluded.at > runner_beat.at",
-        ).bind(beat.at, beat.orca ? 1 : 0, beat.detail ?? null).run();
+        await db
+          .prepare(
+            "INSERT INTO runner_beat (id, at, orca, detail) VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET" +
+              " at = excluded.at, orca = excluded.orca, detail = excluded.detail WHERE excluded.at > runner_beat.at",
+          )
+          .bind(beat.at, beat.orca ? 1 : 0, beat.detail ?? null)
+          .run();
       }
       continue;
     }
@@ -224,9 +281,10 @@ async function migrateSender(
       const message = await read<{ id: string; text: string; images: number; at: number }>(bucket, `${prefix}${key}`);
       if (message) {
         counts.messages += 1;
-        await db.prepare(
-          "INSERT OR IGNORE INTO messages (id, chat, at, text, images, status) VALUES (?, ?, ?, ?, ?, NULL)",
-        ).bind(message.id, found[1], message.at, message.text, message.images).run();
+        await db
+          .prepare("INSERT OR IGNORE INTO messages (id, chat, at, text, images, status) VALUES (?, ?, ?, ?, ?, NULL)")
+          .bind(message.id, found[1], message.at, message.text, message.images)
+          .run();
       }
     }
   }
@@ -236,9 +294,12 @@ async function migrateSender(
 /** The same counts, read back from D1. */
 export async function d1Counts(db: D1Database, app: string, login: string): Promise<SenderCounts> {
   const counts = empty();
-  const chats = await db.prepare(
-    "SELECT kind, count(*) AS n, count(thread_id) AS threads FROM chats WHERE app = ? AND login = ? GROUP BY kind",
-  ).bind(app, login).all<{ kind: string; n: number; threads: number }>();
+  const chats = await db
+    .prepare(
+      "SELECT kind, count(*) AS n, count(thread_id) AS threads FROM chats WHERE app = ? AND login = ? GROUP BY kind",
+    )
+    .bind(app, login)
+    .all<{ kind: string; n: number; threads: number }>();
   for (const row of chats.results) {
     if (row.kind === "agent") {
       counts.chats = row.n;
@@ -247,21 +308,31 @@ export async function d1Counts(db: D1Database, app: string, login: string): Prom
       counts.issueChats = row.n;
     }
   }
-  const statuses = await db.prepare(
-    "SELECT coalesce(m.status, 'issue') AS status, count(*) AS n, sum(m.images) AS images FROM messages m"
-      + " JOIN chats c ON c.id = m.chat WHERE c.app = ? AND c.login = ? GROUP BY m.status",
-  ).bind(app, login).all<{ status: string; n: number; images: number }>();
+  const statuses = await db
+    .prepare(
+      "SELECT coalesce(m.status, 'issue') AS status, count(*) AS n, sum(m.images) AS images FROM messages m" +
+        " JOIN chats c ON c.id = m.chat WHERE c.app = ? AND c.login = ? GROUP BY m.status",
+    )
+    .bind(app, login)
+    .all<{ status: string; n: number; images: number }>();
   for (const row of statuses.results) {
     counts.messages += row.n;
     if (row.status !== "issue") {
       counts.statuses[row.status] = row.n;
     }
   }
-  counts.images = (await db.prepare(
-    "SELECT count(*) AS n FROM images i JOIN messages m ON m.id = i.message JOIN chats c ON c.id = m.chat"
-      + " WHERE c.app = ? AND c.login = ? AND c.kind = 'agent'",
-  ).bind(app, login).first<number>("n")) ?? 0;
-  counts.refs = (await db.prepare("SELECT count(*) AS n FROM refs WHERE app = ? AND login = ?")
-    .bind(app, login).first<number>("n")) ?? 0;
+  counts.images =
+    (await db
+      .prepare(
+        "SELECT count(*) AS n FROM images i JOIN messages m ON m.id = i.message JOIN chats c ON c.id = m.chat" +
+          " WHERE c.app = ? AND c.login = ? AND c.kind = 'agent'",
+      )
+      .bind(app, login)
+      .first<number>("n")) ?? 0;
+  counts.refs =
+    (await db
+      .prepare("SELECT count(*) AS n FROM refs WHERE app = ? AND login = ?")
+      .bind(app, login)
+      .first<number>("n")) ?? 0;
   return counts;
 }

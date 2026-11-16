@@ -1,7 +1,7 @@
+@testable import FeedbackKit
 import Foundation
 import SwiftUI
 import Testing
-@testable import FeedbackKit
 
 @MainActor
 struct FeedbackConversationTests {
@@ -34,7 +34,7 @@ struct FeedbackConversationTests {
     @Test func unnamedListThreadMetadataKeepsTheSharedDefaultRow() throws {
         for reference in [#"{"host":" ","id":"session"}"#, #"{"host":"builder","id":""}"#] {
             let data = Data((#"{"id":"fb_1","title":"Feedback","createdAt":"2026-11-15","thread":"#
-                + reference + "}").utf8)
+                    + reference + "}").utf8)
             #expect(try JSONDecoder().decode(FeedbackThread.self, from: data).thread == nil)
         }
     }

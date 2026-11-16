@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 
 from .runner import CheckQueue, ConversationReader, Deliver, Machine
 
@@ -71,7 +72,9 @@ class HubWatch:
         """The imported hub files that differ from what was imported and held still since the last check; empty while
         nothing differs or the files are still changing."""
         self.seen()
-        now = tuple((path, digest) for path, known in sorted(self.known.items()) if (digest := file_hash(path)) != known)
+        now = tuple(
+            (path, digest) for path, known in sorted(self.known.items()) if (digest := file_hash(path)) != known
+        )
         settled = bool(now) and now == self.last
         self.last = now or None
         return [path for path, _ in now] if settled else []

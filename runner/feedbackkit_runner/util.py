@@ -51,7 +51,9 @@ def post_json(url: str, payload: Mapping[str, object], headers: dict[str, str], 
     """POST a JSON body; HTTP error statuses come back as JsonResponse when their body is a JSON object. Redirects are
     refused so the bearer never follows one."""
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    outgoing = request.Request(url, data=data, method="POST", headers=dict(headers, **{"Content-Type": "application/json"}))
+    outgoing = request.Request(
+        url, data=data, method="POST", headers=dict(headers, **{"Content-Type": "application/json"})
+    )
     try:
         with request.build_opener(_RefuseRedirects).open(outgoing, timeout=timeout) as response:
             return JsonResponse(response.status, _json_object(response.read(RESPONSE_LIMIT_BYTES + 1)))
