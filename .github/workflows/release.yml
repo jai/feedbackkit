@@ -38,7 +38,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-      - uses: jai/trips-ci/.github/actions/hourly-release@f92911549596da8308152306e247e72c15ac8914 # main
+      - uses: jai/trips-ci/.github/actions/hourly-release@fbb13cbf74fde247183b37b3301a5a4269d27cad # main
         with:
           token: ${{ steps.app-token.outputs.token }}
           ci-workflow: ci.yml

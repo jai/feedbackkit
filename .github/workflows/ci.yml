@@ -9,7 +9,9 @@ permissions:
 # One run at a time on main. A run in progress always finishes, so its commit can be released. A newer push
 # replaces a run that is still waiting to start: the hourly release takes the newest green commit anyway.
 concurrency:
-  group: ci-${{ github.ref }}
+  # A release commit gets a group of its own, so a newer push never replaces its waiting run and the release can tag.
+  # Other pushes share one group: the newest waiting run replaces older waiting ones. Pull requests group by ref.
+  group: "ci-${{ github.ref }}-${{ startsWith(github.event.head_commit.message, 'chore(main): release') && github.sha || 'main' }}"
   cancel-in-progress: false
 
 jobs:
