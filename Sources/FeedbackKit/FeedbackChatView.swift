@@ -7,6 +7,7 @@ import SwiftUI
 struct FeedbackChatView: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.scenePhase) private var scenePhase
+    @State private var app = AppActivity()
     @Bindable var model: FeedbackRequestsModel
     let route: FeedbackRoute
     let conversation: ((FeedbackConversation) -> AnyView?)?
@@ -48,6 +49,10 @@ struct FeedbackChatView: View {
         message.id == Self.pendingID ? model.pending[box]?.screenshots ?? 0 : chat?.screenshots[message.id] ?? 0
     }
 
+    /// In front of the person: its scene says so, or the app is active. Outside a SwiftUI app scene (a hosting
+    /// controller in a UIKit or React Native app) `scenePhase` stays `.background`, and the app's state decides (#9).
+    private var isForeground: Bool { scenePhase == .active || app.isActive }
+
     /// Whether Jai was reading the end of the chat when he last scrolled it: a new message then keeps him there.
     @State private var readsEnd = true
     @State private var screenshotViewing = SentScreenshotViewing()
@@ -73,10 +78,10 @@ struct FeedbackChatView: View {
         .task(id: FollowKey(
             thread: thread,
             isLive: model.client.direct == nil && (chat?.isWorking == true || model.isSending(box)),
-            isHosted: hosted != nil, foreground: scenePhase == .active
+            isHosted: hosted != nil, foreground: isForeground
         )) {
             await model.follow(route, mode: conversation == nil ? .whileWorking : .untilHandoff,
-                               isForeground: scenePhase == .active, isHosted: hosted != nil)
+                               isForeground: isForeground, isHosted: hosted != nil)
         }
         .task { await model.seedScreenshot(in: box) }
     }

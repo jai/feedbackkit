@@ -25,6 +25,19 @@ final class LiveFeedbackUITests: XCTestCase {
         capture("direct-live-status")
     }
 
+    /// A chat started here goes live once its first message makes it a thread: the agent's answer arrives over ACP.
+    func testANewDirectChatGoesLiveAndShowsTheAgentsAnswer() {
+        launch("status", opening: false)
+        activate(app.buttons["feedback-new"].firstMatch)
+        let field = element("sessionReplyField")
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        activate(field)
+        field.typeText("Make the clock bigger")
+        activate(element("sessionReplySend"))
+        XCTAssertTrue(text("Live answer to your feedback").waitForExistence(timeout: 20),
+                      "the new chat follows its live session and shows the agent's answer")
+    }
+
     func testQueuedWordsAppearOnceAndSharedActionsReachACP() {
         launch("queue")
         // The conversation loads after the row opens it; count once it shows.
@@ -89,7 +102,7 @@ final class LiveFeedbackUITests: XCTestCase {
         #endif
     }
 
-    private func launch(_ scenario: String, appearance: String = "light") {
+    private func launch(_ scenario: String, appearance: String = "light", opening: Bool = true) {
         app.terminate()
         app.launchEnvironment["FEEDBACKKIT_LIVE_FIXTURE"] = scenario
         if let host = ProcessInfo.processInfo.environment["FEEDBACKKIT_LIVE_SERVER"] {
@@ -100,7 +113,7 @@ final class LiveFeedbackUITests: XCTestCase {
         let row = app.buttons["feedback-thread"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         capture("direct-live-list-\(scenario)-\(appearance)")
-        activate(row)
+        if opening { activate(row) }
     }
 
     private func activate(_ element: XCUIElement) {
