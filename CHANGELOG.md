@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/jai/feedbackkit/compare/v0.8.0...v0.9.0) (2026-11-16)
+
+
+### Features
+
+* archive a feedback chat on this device — a long press or right-click, "Show archived (N)", Unarchive ([#14](https://github.com/jai/feedbackkit/issues/14)) ([e1488e8](https://github.com/jai/feedbackkit/commit/e1488e8c2e4a89f87fc631f7bd9fc2e815cb2dc5))
+
 ## [0.8.0](https://github.com/jai/feedbackkit/compare/v0.7.1...v0.8.0) (2026-11-16)
 
 
