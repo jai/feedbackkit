@@ -1,0 +1,48 @@
+# Deploys FeedbackKit's Worker `featurekit` and its D1 `feedbackkit` migrations from each vX.Y.Z GitHub Release, and
+# by hand for a tag: deploy/deploy.sh renders the config, runs the Worker's tests, applies D1's migrations and
+# deploys only when none is left (docs/worker.md#deploy). Its token (Workers Scripts and D1, edit, on Jai's account)
+# and account id are repository secrets; secrets never reach a fork.
+name: deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The vX.Y.Z tag to deploy."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.FEEDBACKKIT_CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.FEEDBACKKIT_CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Secrets
+        run: |
+          [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || {
+            echo "::error::FEEDBACKKIT_CLOUDFLARE_API_TOKEN and FEEDBACKKIT_CLOUDFLARE_ACCOUNT_ID are not set"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: deploy/deploy.sh
+      - name: Check
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST https://featurekit.jai-f89.workers.dev/feedback/token)
+          [ "$code" = 401 ] || { echo "POST /feedback/token answered $code, not 401"; exit 1; }
