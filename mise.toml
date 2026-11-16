@@ -1,0 +1,5 @@
+[tools]
+# runner/: the LaunchAgent runs Homebrew's Python 3.14 (runner/install.py).
+python = "3.14"
+# pipx: tools (pyrefly, in the Makefile) install through uv.
+uv = "0.13.8"

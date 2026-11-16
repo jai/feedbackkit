@@ -13,22 +13,30 @@ excluded:
 
 reporter: xcode
 
+# make lint runs SwiftLint with --strict, so a warning fails. The limits below were set when it first ran that way
+# (2026-11-16), so the code as it was passes; lower one once the code under it shrinks.
 line_length:
-  warning: 120
-  error: 160
+  warning: 160
+  error: 200
   ignores_comments: true
+  # JSON fixtures in the tests are one line each.
+  ignores_interpolated_strings: true
+large_tuple:
+  warning: 3
+function_parameter_count:
+  warning: 6
 
 identifier_name:
   excluded:
     - at
+    - ci
     - id
+    - ok
     - "on"
+    - pr
     - up
     - x
     - y
-
-trailing_comma:
-  mandatory_comma: true
 
 # `CodingKeys` inside a namespaced request/response type is two levels deep.
 nesting:
@@ -36,3 +44,13 @@ nesting:
 
 disabled_rules:
   - todo
+  # SwiftFormat owns layout: commas (.swiftformat --commas always), and where a closure's capture list and an else go.
+  - trailing_comma
+  - closure_parameter_position
+  - statement_position
+  # SwiftUI-style APIs take several closures.
+  - multiple_closures_with_trailing_closure
+  # String(decoding:as:) is meant: text is read leniently, never dropped.
+  - optional_data_string_conversion
+  # `var x: T? = nil` in a SwiftUI view keeps the memberwise initializer's parameter optional with a default.
+  - implicit_optional_initialization

@@ -15,19 +15,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
+  lint:
+    name: Lint
+    # make lint typecheck: SwiftFormat, SwiftLint, swift build (the kit and the menu bar app); oxfmt and oxlint for
+    # both Workers; ruff and Pyrefly for the runner; actionlint, shfmt, ShellCheck and gitleaks.
     # GitHub's own Mac runner: free for a public repo.
     runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: make setup
+      - run: make lint typecheck
+  test:
+    name: Unit Tests
+    # make test: swift test for the kit and the menu bar app, node --test for both Workers, and the runner's tests on
+    # Python 3.14 (mise.toml). GitHub's own Mac runner: free for a public repo.
+    runs-on: macos-latest
     timeout-minutes: 25
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
           # The tags too: the API check compares with the latest release.
           fetch-depth: 0
+      - uses: jdx/mise-action@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: swift test --skip "FeedbackKitTests.(FeedbackLiveTests|FeedbackDirectTests)"
+      - run: make setup
+      - run: make test SWIFT_TEST_ARGS='--skip "FeedbackKitTests.(FeedbackLiveTests|FeedbackDirectTests)"'
       # Never breaking (AGENTS.md): apps take every release, so a change that removes or changes public API fails here,
       # and the release, which waits for a green ci run, does not go out.
       - name: No public API break since the latest release
@@ -41,52 +64,9 @@ jobs:
       - name: Live suites (allowed to fail, jai/agentchatkit#3)
         continue-on-error: true
         run: swift test --filter "FeedbackKitTests.(FeedbackLiveTests|FeedbackDirectTests)"
-  worker:
-    # GitHub's own Linux runner: free for a public repo (jai/ci RULES.md).
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: worker
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: worker/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-  sample-worker:
-    # The sample app backend (sample-worker/): its tests, on GitHub's own Linux runner.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: sample-worker
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-  runner:
-    # The runner's tests, on the Python the Mac mini's LaunchAgent runs (Homebrew's 3.14, runner/install.py),
-    # standard library only.
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-      - run: make -C runner test
   runner-menu:
-    # The FeedbackKit Runner menu bar app (runner/MenuBar): its tests and its bundle. Each release publishes it
-    # (deploy.yml, job runner-menu).
+    # The FeedbackKit Runner menu bar app (runner/MenuBar): its bundle (its tests are in Unit Tests). Each release
+    # publishes it (deploy.yml, job runner-menu).
     runs-on: macos-latest
     timeout-minutes: 20
     defaults:
@@ -94,7 +74,6 @@ jobs:
         working-directory: runner/MenuBar
     steps:
       - uses: actions/checkout@v4
-      - run: swift test
       - run: ./bundle.sh FeedbackKitRunner.zip
   demo:
     # The demo app builds from a fresh clone, for iPhone and Mac, against the package by local path. Then end to end:

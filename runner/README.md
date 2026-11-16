@@ -63,7 +63,7 @@ git -C ~/Developer/feedbackkit pull --ff-only && make -C ~/Developer/feedbackkit
 ```
 
 After this first install the runner installs newer releases itself (above). `install.py` copies `feedbackkit_runner/` to `~/Library/Application Support/feedbackkit-runner/app/`, writes the
-LaunchAgent, and reloads or restarts the job when either changed. `make -C runner check` reports drift. It needs:
+LaunchAgent, and reloads or restarts the job when either changed. `make -C runner install-check` reports drift. It needs:
 
 - `~/.credentials/feedbackkit`: `FEEDBACKKIT_URL` and `FEEDBACKKIT_RUNNER_TOKEN`.
 - Each builder's Orca paired on the mini (`orca environment add`) and SSH to it (Agent Pager's fleet aliases).

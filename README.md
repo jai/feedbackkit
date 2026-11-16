@@ -76,7 +76,7 @@ cd Demo && xcodegen && open FeedbackDemo.xcodeproj    # run the FeedbackDemo sch
 
 - **Package**: `swift test`.
 - **Worker**: in `worker/`, run `npm ci`, `npm test` and `npm run typecheck`.
-- **Runner**: `make -C runner test` (Python 3.14, standard library only).
+- **Runner**: `make -C runner test` (Python 3.14, standard library only); `make test` at the root runs it with the rest.
 - **Demo UI test**: test the `FeedbackDemo` scheme on an iPhone simulator. `FeedbackDemoUITests` goes through each
   role's main flows. With `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>` set, it also writes the screenshots above.
 

@@ -1,0 +1,5 @@
+# Pyrefly (make typecheck). The LaunchAgent runs Homebrew's Python 3.14; hub is agent-pager's, imported at run time.
+python-version = "3.14"
+ignore-missing-imports = ["hub.*"]
+# The basic preset, as when Pyrefly first ran here (2026-11-16); move to the default once its findings are fixed.
+preset = "basic"

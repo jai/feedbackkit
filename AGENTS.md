@@ -27,6 +27,8 @@ Instructions for agents working in this repo.
 
 ## About this repo
 
+**Checks:** run `make setup` once per clone, and `make check` before you push.
+
 - **Never breaking** (Jai, 2026-11-16: "always latest, never breaking"). Apps take every release automatically, so a
   release must never break one. Add to the public API; never remove or change a public signature. To retire one,
   deprecate it and keep it working. CI's `test` job runs `swift package diagnose-api-breaking-changes <latest release

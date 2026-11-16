@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "node"],
+  "categories": { "correctness": "error" },
+  "ignorePatterns": ["vendor/**", "migrations/**"],
+  "overrides": [
+    {
+      "files": ["test/**"],
+      "rules": { "typescript/unbound-method": "off", "typescript/no-floating-promises": "off" }
+    }
+  ]
+}
