@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Walks the demo's main flows on iPhone: each role's chats, a send the mock agent answers, and the issue notice.
@@ -53,6 +54,35 @@ final class FeedbackDemoUITests: XCTestCase {
         role("Builder")
         XCTAssertTrue(text("PR open").waitForExistence(timeout: 5), "the builder's chat: its pull request is open")
         XCTAssertTrue(text("Pull request 57, open").exists)
+    }
+
+    func testASendingMessageShowsItsScreenshotAndOpensIt() throws {
+        app.terminate()
+        // A send that takes seconds, so the message is seen while it is on its way.
+        app.launchArguments += ["-DemoSlowSend"]
+        app.launch()
+        app.buttons["feedback-new"].tap()
+        let field = app.textViews["sessionReplyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("The badge is cut off")
+        // A picture on the clipboard, pasted through the composer's Attach menu (the Paste control asks nothing).
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 200)).image { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 200))
+        }
+        app.descendants(matching: .any)["composerAttach"].firstMatch.tap()
+        app.descendants(matching: .any)["composerAttachPaste"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["composerAttachment"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["sessionReplySend"].tap()
+        let thumbnail = app.descendants(matching: .any)["feedback-screenshot-sending-0"].firstMatch
+        XCTAssertTrue(thumbnail.waitForExistence(timeout: 3), "the screenshot shows in the message while it sends")
+        screenshot("sending-screenshot")
+        thumbnail.tap()
+        let viewer = app.descendants(matching: .any)["sent-screenshot-viewer"].firstMatch
+        XCTAssertTrue(viewer.waitForExistence(timeout: 5), "a tap opens it")
+        app.descendants(matching: .any)["sent-screenshot-viewer-close"].firstMatch.tap()
+        XCTAssertTrue(viewer.waitForNonExistence(timeout: 5))
     }
 
     func testFeedbackUsesTheSharedSentReplyTicks() throws {

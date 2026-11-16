@@ -35,7 +35,9 @@ actor DemoWorker: FeedbackConnection {
     func send<Body: Encodable & Sendable, Answer: Decodable & Sendable>(
         _ path: String, _ body: Body, as type: Answer.Type
     ) async throws -> Answer {
-        try await Task.sleep(for: .milliseconds(300))
+        // `-DemoSlowSend`: a send that takes seconds, so a UI test sees a message while it is still on its way.
+        let slow = ProcessInfo.processInfo.arguments.contains("-DemoSlowSend")
+        try await Task.sleep(for: slow ? .seconds(4) : .milliseconds(300))
         let message = try JSONDecoder().decode(Sent.self, from: JSONEncoder().encode(body))
         let id: String
         switch Route(path) {

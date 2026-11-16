@@ -4,11 +4,13 @@ import AgentChatKit
 import AgentChatLive
 import SwiftUI
 
-/// Words on their way, shown as sent until the chat has them.
+/// Words on their way, shown as sent until the chat has them, with their screenshots as thumbnails.
 struct PendingMessage: Equatable, Sendable {
     var text: String
     var screenshots: Int
     var clientRef: String? = nil
+    /// The screenshots' JPEGs, shown in the message while it sends.
+    var images: [Data] = []
 }
 
 /// A conversation open on the screen: one started here and not sent yet (or just sent), or one in the list. A new one
@@ -172,7 +174,7 @@ public final class FeedbackRequestsModel {
         sending.insert(box)
         error = nil
         let screenshots = attachments.take()
-        pending[box] = PendingMessage(text: text, screenshots: screenshots.count)
+        pending[box] = PendingMessage(text: text, screenshots: screenshots.count, images: screenshots.map(\.jpeg))
         drafts[box] = nil
         defer {
             sending.remove(box)
