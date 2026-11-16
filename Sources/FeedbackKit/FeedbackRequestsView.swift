@@ -203,6 +203,7 @@ private struct FeedbackListView: View {
     let customLabel: ((FeedbackThread) -> AnyView?)?
     let actions: (FeedbackThread) -> ChatThreadActions
     let open: (FeedbackRoute) -> Void
+    @State private var showsArchived = false
 
     private var unsent: FeedbackRoute? {
         guard let selected, case .new = selected, model.thread(for: selected) == nil else {
@@ -222,7 +223,7 @@ private struct FeedbackListView: View {
     }
 
     var body: some View {
-        ChatThreadList(items: model.list.threads, title: \.title, actions: actions,
+        ChatThreadList(items: model.visibleThreads, title: \.title, actions: rowActions,
                        selection: threadSelection, open: { open(.thread($0.id)) }) { thread in
             row(
                 route: .thread(thread.id), title: thread.title,
@@ -237,7 +238,7 @@ private struct FeedbackListView: View {
                 row(route: unsent, title: "New feedback", date: nil, isSelected: true)
                     .transition(.opacity)
             }
-            if model.list.threads.isEmpty, unsent == nil {
+            if model.visibleThreads.isEmpty, unsent == nil {
                 Text(model.list.notice ?? FeedbackList.agentNotice)
                     .font(theme.font(.footnote))
                     .foregroundStyle(theme.inkQuiet)
@@ -245,6 +246,7 @@ private struct FeedbackListView: View {
                     .accessibilityIdentifier("feedback-empty")
             }
         } footer: {
+            archivedSection
             if let error = model.error {
                 Text(error)
                     .font(theme.font(.footnote))
@@ -253,8 +255,55 @@ private struct FeedbackListView: View {
             }
         }
         .animation(ChatMotion.fold, value: model.list)
+        .animation(ChatMotion.fold, value: model.archived)
         .animation(ChatMotion.fold, value: unsent)
         .refreshable { await model.refresh() }
+    }
+
+    /// The host's actions, with Archive on this device when the host brings none.
+    private func rowActions(_ thread: FeedbackThread) -> ChatThreadActions {
+        var actions = actions(thread)
+        if actions.archive == nil {
+            actions.archive = { [model] in
+                model.archive(thread.id)
+                return .success(())
+            }
+        }
+        return actions
+    }
+
+    /// "Show archived (N)", and when open each archived chat with Unarchive.
+    @ViewBuilder private var archivedSection: some View {
+        let archived = model.archivedThreads
+        if !archived.isEmpty {
+            VStack(alignment: .leading, spacing: ChatSpace.xs) {
+                Button(showsArchived ? "Hide archived" : "Show archived (\(archived.count))") {
+                    withAnimation(ChatMotion.fold) { showsArchived.toggle() }
+                }
+                .chatTextStyle(.control)
+                .accessibilityIdentifier("feedback-show-archived")
+                if showsArchived {
+                    ForEach(archived) { thread in
+                        HStack(spacing: ChatSpace.sm) {
+                            Text(thread.title)
+                                .font(theme.font(.subheadline))
+                                .foregroundStyle(theme.inkQuiet)
+                                .lineLimit(1)
+                            Spacer(minLength: ChatSpace.sm)
+                            Button("Unarchive") {
+                                withAnimation(ChatMotion.fold) { model.unarchive(thread.id) }
+                            }
+                            .chatTextStyle(.control)
+                            .accessibilityIdentifier("feedback-unarchive")
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("feedback-archived-thread")
+                    }
+                }
+            }
+            .padding(.horizontal, ChatSpace.lg)
+            .padding(.vertical, ChatSpace.sm)
+        }
     }
 
     @ViewBuilder

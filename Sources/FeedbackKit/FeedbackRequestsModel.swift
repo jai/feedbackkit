@@ -88,8 +88,21 @@ public final class FeedbackRequestsModel {
         return FeedbackChat(live: live.chat, id: id, bootstrap: chats[id])
     }
 
+    /// The chats archived on this device (#14): out of the list until unarchived. Nothing changes on the Worker.
+    private(set) var archived: Set<String>
+    @ObservationIgnored private let defaults: UserDefaults
+    static let archivedKey = "FeedbackKit.archivedThreads"
+
     public init(client: FeedbackClient) {
         self.client = client
+        defaults = .standard
+        archived = Set(defaults.stringArray(forKey: Self.archivedKey) ?? [])
+    }
+
+    init(client: FeedbackClient, defaults: UserDefaults) {
+        self.client = client
+        self.defaults = defaults
+        archived = Set(defaults.stringArray(forKey: Self.archivedKey) ?? [])
     }
 
     func draft(for box: String) -> String { drafts[box] ?? "" }
@@ -331,5 +344,22 @@ public final class FeedbackRequestsModel {
             seeded.insert(box)
             await attachments.add(screenshot)
         }
+    }
+}
+
+/// Archive on this device (#14).
+extension FeedbackRequestsModel {
+    /// The list's chats less the archived ones, newest first.
+    var visibleThreads: [FeedbackThread] { list.threads.filter { !archived.contains($0.id) } }
+    /// The archived chats the list still has, newest first.
+    var archivedThreads: [FeedbackThread] { list.threads.filter { archived.contains($0.id) } }
+
+    func archive(_ thread: String) { setArchived(archived.union([thread])) }
+
+    func unarchive(_ thread: String) { setArchived(archived.subtracting([thread])) }
+
+    private func setArchived(_ threads: Set<String>) {
+        archived = threads
+        defaults.set(threads.sorted(), forKey: Self.archivedKey)
     }
 }

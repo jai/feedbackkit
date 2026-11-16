@@ -146,6 +146,25 @@ struct FeedbackRequestsModelTests {
     }
 
     /// Samples: nothing reaches a Worker, and the agent answers a moment after a send.
+    @Test func anArchivedChatLeavesTheListOnThisDeviceOnlyAndComesBack() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "FeedbackRequestsModelTests.archive"))
+        defaults.removePersistentDomain(forName: "FeedbackRequestsModelTests.archive")
+        let worker = Worker()
+        let model = FeedbackRequestsModel(client: client(worker), defaults: defaults)
+        await model.refresh()
+        model.archive("sesn_1")
+        #expect(model.visibleThreads.isEmpty)
+        #expect(model.archivedThreads.map(\.id) == ["sesn_1"])
+        #expect(worker.requests == ["GET /feedback"], "archive asks nothing of the Worker")
+
+        let again = FeedbackRequestsModel(client: client(worker), defaults: defaults)
+        await again.refresh()
+        #expect(again.visibleThreads.isEmpty, "kept on this device")
+        again.unarchive("sesn_1")
+        #expect(again.visibleThreads.map(\.id) == ["sesn_1"])
+        #expect(FeedbackRequestsModel(client: client(worker), defaults: defaults).archived.isEmpty)
+    }
+
     @Test func samplesAnswerWithoutAWorker() async throws {
         let samples = FeedbackSamples(
             list: FeedbackList(threads: [], builderOnline: true),

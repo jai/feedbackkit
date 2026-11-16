@@ -13,7 +13,29 @@ final class FeedbackDemoUITests: XCTestCase {
         app = XCUIApplication()
         // The mock, whatever the hidden setting says on this simulator.
         app.launchArguments += ["-liveWorkerEnabled", "NO"]
+        // No chat archived by an earlier run on this simulator.
+        app.launchArguments += ["-FeedbackKit.archivedThreads", "()"]
         app.launch()
+    }
+
+    /// With no Archive of the host's, a row's long press archives the chat on this device; "Show archived (1)" lists
+    /// it with Unarchive, which brings it back (#14).
+    func testArchiveHidesAChatAndUnarchiveBringsItBack() throws {
+        let title = "Export my notes as CSV"
+        let row = self.row(title)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.press(forDuration: 1.2)
+        app.buttons["Archive"].firstMatch.tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "the archived chat left the list")
+        let show = app.buttons["feedback-show-archived"]
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        XCTAssertEqual(show.label, "Show archived (1)")
+        show.tap()
+        XCTAssertTrue(text(title).waitForExistence(timeout: 5))
+        screenshot("archived-chats")
+        app.buttons["feedback-unarchive"].firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "the unarchived chat is back in the list")
+        XCTAssertFalse(show.exists)
     }
 
     func testSharedRowsCallOnlyTheHostsConfirmedActions() throws {
