@@ -134,6 +134,17 @@ struct FeedbackRequestsModelTests {
         #expect(worker.requests.last == "POST /feedback/sesn_1")
     }
 
+    /// Battery (#12): a chat that is not in front of the person is never read, and an idle one is read slower.
+    @Test func aChatInTheBackgroundIsNeverReadAndAnIdleOneIsReadSlower() async {
+        let worker = Worker()
+        let model = FeedbackRequestsModel(client: client(worker))
+        await model.follow(.thread("sesn_1"), mode: .untilHandoff, isForeground: false)
+        await model.follow(.thread("sesn_1"), mode: .untilHandoff, isForeground: true, isHosted: true)
+        #expect(worker.requests.isEmpty, "in the background, or handed to the host's own conversation: no reads")
+        #expect(FeedbackRequestsModel.pollDelay(working: true) == .seconds(3))
+        #expect(FeedbackRequestsModel.pollDelay(working: false) == .seconds(15))
+    }
+
     /// Samples: nothing reaches a Worker, and the agent answers a moment after a send.
     @Test func samplesAnswerWithoutAWorker() async throws {
         let samples = FeedbackSamples(

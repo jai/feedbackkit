@@ -47,6 +47,13 @@ enum FeedbackFollowMode {
 @Observable
 public final class FeedbackRequestsModel {
     static let pollInterval: Duration = .seconds(3)
+    /// A legacy chat's read while its agent is idle: a host that waits for its handoff reads on until it comes, but
+    /// slower, for the battery (#12).
+    static let idlePollInterval: Duration = .seconds(15)
+
+    /// How long until a legacy chat is read again: soon while its agent works or a message of the sender's is on its
+    /// way, else slower.
+    static func pollDelay(working: Bool) -> Duration { working ? pollInterval : idlePollInterval }
 
     private(set) var list = FeedbackList(threads: [], builderOnline: false)
     private(set) var chats: [String: FeedbackChat] = [:]
@@ -271,7 +278,9 @@ public final class FeedbackRequestsModel {
             guard mode.keepsReading(chats[thread]) || sending.contains(route.box) else {
                 return
             }
-            try? await Task.sleep(for: Self.pollInterval)
+            try? await Task.sleep(for: Self.pollDelay(
+                working: chats[thread]?.isWorking == true || sending.contains(route.box)
+            ))
         }
     }
 
