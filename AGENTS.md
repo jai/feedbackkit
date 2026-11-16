@@ -27,6 +27,11 @@ Instructions for agents working in this repo.
 
 ## About this repo
 
+- **Never breaking** (Jai, 2026-11-16: "always latest, never breaking"). Apps take every release automatically, so a
+  release must never break one. Add to the public API; never remove or change a public signature. To retire one,
+  deprecate it and keep it working. CI's `test` job runs `swift package diagnose-api-breaking-changes <latest release
+  tag>` and fails on any break, which also holds the release. A deliberate break needs Jai's OK and a major version.
+
 README.md says what the package, the Worker and the demo are. What it leaves out:
 
 - **Old names stay.** `OldNames.swift` keeps every `Feature*` name as a typealias without a deprecation: Agent Pager

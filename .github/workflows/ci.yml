@@ -16,13 +16,23 @@ jobs:
   test:
     # GitHub's own Mac runner: free for a public repo.
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The tags too: the API check compares with the latest release.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: swift test --skip "FeedbackKitTests.(FeedbackLiveTests|FeedbackDirectTests)"
+      # Never breaking (AGENTS.md): apps take every release, so a change that removes or changes public API fails here,
+      # and the release, which waits for a green ci run, does not go out.
+      - name: No public API break since the latest release
+        run: |
+          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)
+          echo "Comparing with $base"
+          swift package diagnose-api-breaking-changes "$base" --products FeedbackKit
       # The suites on AgentChatKit's live dev host, on their own and allowed to fail: on GitHub's macOS 26 runner the
       # test process dies with SIGBUS in the Swift task allocator once several of them share it (jai/agentchatkit#3).
       # They pass on macOS 27. Their result still shows; it does not turn main red.
