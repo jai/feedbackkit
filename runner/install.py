@@ -7,6 +7,12 @@ login and again by launchd if it ever exits. A changed plist reloads the job; ch
 
   install.py --check     report drift; exit 1 if anything differs or the job is not loaded
   install.py             install
+  install.py --release vX.Y.Z --commit SHA --runner-tree SHA
+                         install a release's runner/, as the runner's own self-update does (feedbackkit_runner/update.py)
+
+It records what it installed in app/installed.json ({tag, commit, runner_tree, installed_at}): the release given, or
+this checkout's HEAD (its runner/ tree only when runner/ has no uncommitted change). The runner updates itself only
+when that record exists.
 
 No credential is installed: the runner reads ~/.credentials/feedbackkit (FEEDBACKKIT_URL, FEEDBACKKIT_RUNNER_TOKEN) as
 it starts. It also needs Agent Pager's installed threads hub and its scans (runner/README.md).
@@ -15,6 +21,7 @@ it starts. It also needs Agent Pager's installed threads hub and its scans (runn
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import plistlib
 import subprocess
@@ -27,6 +34,7 @@ LABEL = "com.jai.feedbackkit-runner"
 # Homebrew's Python 3.14: this path stays put across 3.14.x upgrades; CI tests the runner on 3.14 too.
 PYTHON = "/opt/homebrew/opt/python@3.14/bin/python3.14"
 LOG_NAME = "feedbackkit-runner.log"
+INSTALLED_FILE = "installed.json"
 
 
 def app_dir(home: Path) -> Path:
@@ -73,6 +81,30 @@ def stale(home: Path, files: dict[Path, bytes]) -> list[Path]:
     return [path for path in folder.glob("*.py") if path not in files] if folder.exists() else []
 
 
+def git(*arguments: str) -> str | None:
+    done = subprocess.run(["git", "-C", str(SOURCE.parent), *arguments], capture_output=True, text=True, check=False)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def checkout_record() -> dict[str, str | None]:
+    """This checkout's HEAD: its commit, its tag when HEAD is one, and its runner/ tree when runner/ is as committed."""
+    commit = git("rev-parse", "HEAD")
+    if commit is None:
+        return {"tag": None, "commit": None, "runner_tree": None}
+    clean = git("status", "--porcelain", "--", ".") == ""
+    return {
+        "tag": git("describe", "--tags", "--exact-match", "--match", "v*", "HEAD"),
+        "commit": commit,
+        "runner_tree": git("rev-parse", "HEAD:runner") if clean else None,
+    }
+
+
+def write_record(home: Path, record: dict[str, str | None], now: float) -> None:
+    path = app_dir(home) / INSTALLED_FILE
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(json.dumps({**record, "installed_at": now}, indent=2) + "\n", encoding="utf-8")
+
+
 def loaded(domain: str) -> bool:
     return subprocess.run(["/bin/launchctl", "print", f"{domain}/{LABEL}"], capture_output=True, check=False).returncode == 0
 
@@ -80,7 +112,12 @@ def loaded(domain: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--release", help="the release tag being installed (the runner's self-update)")
+    parser.add_argument("--commit", help="with --release: its commit")
+    parser.add_argument("--runner-tree", help="with --release: its runner/ tree")
     args = parser.parse_args(argv)
+    if args.release and not (args.commit and args.runner_tree):
+        parser.error("--release needs --commit and --runner-tree")
     home = Path.home()
     domain = f"gui/{os.getuid():d}"
     files = wanted(home)
@@ -100,6 +137,12 @@ def main(argv: list[str] | None = None) -> int:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.write_bytes(files[path])
         print(f"wrote {path}")
+    record = (
+        {"tag": args.release, "commit": args.commit, "runner_tree": args.runner_tree}
+        if args.release
+        else checkout_record()
+    )
+    write_record(home, record, time.time())
     plist = plist_path(home)
     if plist in changed or not is_loaded:
         if is_loaded:

@@ -3,6 +3,9 @@
 poll (`/runner/wait`); a message sent wakes the runner for a fast tick at once, even between two chats of a full tick.
 A Worker without the long poll gets the full ticks only.
 
+Between two ticks, once an hour, it installs a newer FeedbackKit release that changes the runner (update.py) and
+restarts itself through launchd.
+
 Never two runners: it waits while Agent Pager's old LaunchAgent is loaded or its process runs, and holds a lock in its
 state folder against a second copy of itself. Only then does it move the old runner's state over (runner.migrate).
 """
@@ -22,7 +25,7 @@ import time
 from pathlib import Path
 from typing import IO, Callable
 
-from . import agent_pager
+from . import agent_pager, update
 from .runner import (
     BUILDERS,
     SCAN_DIR,
@@ -36,6 +39,7 @@ from .runner import (
     Runner,
     migrate,
 )
+from .update import UpdateFailed, Updater
 from .util import JsonObject, credential_record, write_private_json
 
 CREDENTIALS = Path.home() / ".credentials" / "feedbackkit"
@@ -90,8 +94,10 @@ class Service:
         old_runner: Callable[[], str | None] = lambda: None,
         status_path: Path | None = None,
         wall: Callable[[], float] = time.time,
+        updater: Updater | None = None,
     ) -> None:
         self.runner = runner
+        self.updater = updater
         self.api = api
         self.clock = clock
         self.old_runner = old_runner
@@ -109,9 +115,9 @@ class Service:
         self.stopping = True
         self.woke.set()
 
-    def finish(self) -> None:
+    def finish(self, reason: str = "SIGTERM") -> None:
         self.runner.save()
-        log("FEEDBACK_RUNNER_STOPPED", reason="SIGTERM")
+        log("FEEDBACK_RUNNER_STOPPED", reason=reason)
         self.write_status()
         raise SystemExit(0)
 
@@ -152,6 +158,7 @@ class Service:
         if old is not None:
             log("FEEDBACK_OLD_RUNNER", logging.WARNING, reason=f"{old}; stopping so two runners never run at once")
             raise SystemExit(0)
+        self.maintain()
         next_full = self.clock() + FULL_TICK_SECONDS
         self.tick(fast=False)
         while not self.stopping and (remaining := next_full - self.clock()) > 0:
@@ -160,6 +167,59 @@ class Service:
                 self.tick(fast=True)
         if self.stopping:
             self.finish()
+
+    def maintain(self) -> None:
+        """Between two ticks, where no delivery is in progress: the hourly self-update when it is due."""
+        if self.updater is not None and self.updater.due():
+            self.update(self.updater)
+
+    def announce(self) -> None:
+        """At start: how the update the runner before this one started went."""
+        if self.updater is None or (pending := self.updater.take_pending()) is None:
+            return
+        installed = update.read_installed(self.updater.installed_path)
+        if installed is not None and installed.label == pending.get("to"):
+            log("FEEDBACK_RUNNER_UPDATED", **{"from": pending.get("from"), "to": pending.get("to")})
+        else:
+            reason = f"restarted on {installed.label if installed else 'no record'}, not {pending.get('to')}"
+            log("FEEDBACK_RUNNER_UPDATE_FAILED", logging.WARNING, to=pending.get("to"), reason=reason)
+
+    def update(self, updater: Updater) -> None:
+        """Check, fetch and test a newer release, then run its install.py and wait for it. A restart (SIGTERM from
+        launchd) ends this runner here; the next one announces the update. A failure keeps this version running."""
+        try:
+            prepared = updater.prepare()
+        except UpdateFailed as failure:
+            log("FEEDBACK_RUNNER_UPDATE_FAILED", logging.WARNING, reason=str(failure))
+            return
+        if prepared is None:
+            return
+        release, folder, installed = prepared
+        if self.stopping:
+            return
+        log("FEEDBACK_RUNNER_UPDATING", **{"from": installed.label, "to": release.tag})
+        try:
+            child = updater.install(release, folder, installed)
+        except OSError as failure:
+            updater.clear_pending()
+            log("FEEDBACK_RUNNER_UPDATE_FAILED", logging.WARNING, to=release.tag, reason=f"install.py: {failure}")
+            return
+        while True:
+            try:
+                code = child.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if self.stopping:
+                    self.finish(reason=f"update to {release.tag}")
+        lines = updater.install_output().strip().splitlines()
+        if code != 0:
+            updater.clear_pending()
+            updater.last_error = f"install.py exited {code}: {lines[-1][:200] if lines else ''}"
+            log("FEEDBACK_RUNNER_UPDATE_FAILED", logging.WARNING, to=release.tag, reason=updater.last_error)
+        elif lines and lines[-1] == "up to date":  # only tests or docs changed: nothing to restart
+            updater.clear_pending()
+            log("FEEDBACK_RUNNER_UPDATED", restarted=False, **{"from": installed.label, "to": release.tag})
+        # Otherwise install.py restarted the job: launchd's SIGTERM stops this runner at its next safe point.
 
     def status(self) -> JsonObject:
         return {
@@ -171,6 +231,7 @@ class Service:
             "last_full_tick": self.last_full,
             "last_fast_tick": self.last_fast,
             "long_poll": {"on": not self.waiter.ended, "last_wake": self.waiter.woke_at, "error": self.waiter.error},
+            **({"update": self.updater.status()} if self.updater is not None else {}),
             **self.runner.status(),
         }
 
@@ -240,6 +301,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-dir", type=Path, default=STATE_DIR)
     parser.add_argument("--scan-dir", type=Path, default=SCAN_DIR, help="Agent Pager's threads hub state folder")
     parser.add_argument("--credentials", type=Path, default=CREDENTIALS)
+    parser.add_argument(
+        "--installed",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / update.INSTALLED_FILE,
+        help="install.py's record; without it the runner never updates itself",
+    )
     parser.add_argument("--agent-pager", type=Path, default=agent_pager.THREADS_DIR, help="Agent Pager's installed threads hub")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
@@ -276,8 +343,16 @@ def main(argv: list[str] | None = None) -> int:
         check_queue=hub.check_queue,
     )
     log("FEEDBACK_RUNNER_STARTED", pid=os.getpid())
-    service = Service(runner, api, old_runner=old_runner_running, status_path=args.state_dir / STATUS_FILE)
+    python = update.PYTHON if Path(update.PYTHON).exists() else sys.executable
+    service = Service(
+        runner,
+        api,
+        old_runner=old_runner_running,
+        status_path=args.state_dir / STATUS_FILE,
+        updater=Updater(args.installed, args.state_dir, python),
+    )
     signal.signal(signal.SIGTERM, service.stop)
+    service.announce()
     service.run()
     return 0
 

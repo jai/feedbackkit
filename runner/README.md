@@ -19,6 +19,16 @@ thread's words back. It runs on Jais-Mac-mini as jai: `python3 -m feedbackkit_ru
   (`feedbackkit_runner/agent_pager.py`; a LaunchAgent's python may not read `~/Developer`), and its scans of the
   builders. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager hub.
 
+- **Keeps itself current.** Once an hour, between two ticks (never in a delivery), it asks GitHub (`gh`) for the
+  newest FeedbackKit release. When that release is newer than the installed copy (`compare` says ahead, so a copy
+  installed from main past it stays) and its `runner/` tree differs, it installs it as `make -C runner install` does:
+  the release's `runner/` from its tarball into `update/<tag>/` in the state folder, its tests on the LaunchAgent's
+  Python, then that copy's `install.py --release … --commit … --runner-tree …`, in its own session so it outlives the
+  restart it asks launchd for. A failed check, fetch, test or install keeps the running version, logs
+  `FEEDBACK_RUNNER_UPDATE_FAILED` and is tried again an hour later. The restarted runner logs
+  `FEEDBACK_RUNNER_UPDATED` (`update.json` in the state folder carries `from` and `to` across the restart).
+  `install.py` records what it installed in `app/installed.json` (`tag`, `commit`, `runner_tree`); a runner without
+  that record (run from a checkout) never updates itself.
 - **Stopping.** SIGTERM (`launchctl kickstart -k`, a reinstall) stops it after the delivery in progress, between two
   chats of a full tick or in a wait, never in the middle of a delivery. launchd waits up to 330 s for that.
 
@@ -29,6 +39,8 @@ menu bar app on Jai's Mac reads over SSH ([MenuBar/](MenuBar/README.md)). Times 
 
 - `version` (1), `written_at`, `pid`, `started_at`, `stopping`.
 - `last_full_tick`, `last_fast_tick`: `{at, seconds}` or null.
+- `update`: `{installed, last_check, error}`: the installed release (or commit), when the last hourly check ran, and why
+  the last update failed (null when it did not).
 - `long_poll`: `{on, last_wake, error}`. `on` is false when the Worker has no `/runner/wait`.
 - `poll`: the last `/runner/poll`, `{at, ok, error}`: whether the Worker answered.
 - `builders`: `[{host, name, up, detail}]`, from the last full tick's `orca worktree ps`.
@@ -47,7 +59,7 @@ git clone git@github.com:jai/feedbackkit.git ~/Developer/feedbackkit   # once
 git -C ~/Developer/feedbackkit pull --ff-only && make -C ~/Developer/feedbackkit/runner install
 ```
 
-`install.py` copies `feedbackkit_runner/` to `~/Library/Application Support/feedbackkit-runner/app/`, writes the
+After this first install the runner installs newer releases itself (above). `install.py` copies `feedbackkit_runner/` to `~/Library/Application Support/feedbackkit-runner/app/`, writes the
 LaunchAgent, and reloads or restarts the job when either changed. `make -C runner check` reports drift. It needs:
 
 - `~/.credentials/feedbackkit`: `FEEDBACKKIT_URL` and `FEEDBACKKIT_RUNNER_TOKEN`.
@@ -130,5 +142,6 @@ two differ, when a field is left unfilled, or when anything but the fields is ad
 `~/Library/Logs/feedbackkit-runner.log`: `FEEDBACK chat=… message=… outcome=…` per message, `FEEDBACK_ORCA_DOWN
 host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_SHIPPED_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
 JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
-`FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_STOPPED`,
+`FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_UPDATING` / `FEEDBACK_RUNNER_UPDATED` (`from`, `to`) /
+`FEEDBACK_RUNNER_UPDATE_FAILED` (`to`, `reason`), `FEEDBACK_RUNNER_STOPPED`,
 `FEEDBACK_STATUS_NOT_WRITTEN`.
