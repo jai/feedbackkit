@@ -88,7 +88,7 @@ struct FeedbackChatView: View {
 
     private var feedbackConversation: some View {
         ChatView(
-            messages: displayedMessages,
+            messages: displayedMessages, emptyText: model.list.notice ?? FeedbackList.agentNotice,
             sent: displayedMessages.count(where: { $0.role == .mine }), readsEnd: $readsEnd, focus: $isWriting,
             extras: { message in
                 if message.id == Self.pendingID, !pendingImages.isEmpty {
@@ -114,16 +114,6 @@ struct FeedbackChatView: View {
                 }
                 if chat?.builderOnline == false || (isNew && !model.list.builderOnline) {
                     BuilderNote()
-                }
-                if messages.isEmpty {
-                    Text(model.list.notice ?? FeedbackList.agentNotice)
-                        .font(theme.font(.footnote))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, theme.spacing.lg)
-                        .transition(.opacity)
-                        .accessibilityIdentifier("feedback-new-hint")
                 }
             },
             footer: {
@@ -198,14 +188,7 @@ struct FeedbackChatView: View {
 
     @ViewBuilder private var status: some View {
         if showsWorking {
-            HStack(spacing: theme.spacing.sm) {
-                ProgressView().controlSize(.small)
-                Text(activity)
-                    .font(theme.font(.caption))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, theme.spacing.md)
-            .accessibilityIdentifier("feedback-working")
+            ChatWorkingLine(activity: activity, identifier: "feedback-working")
         } else if let problem = handoffProblem {
             Text(problem)
                 .font(theme.font(.footnote))
