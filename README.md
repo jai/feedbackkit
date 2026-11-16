@@ -87,6 +87,15 @@ CI runs all three on every push to main. Each hour, a release job tags the newes
 if a `feat` or `fix` commit is waiting. The commit messages pick the version
 ([Conventional Commits](https://www.conventionalcommits.org)).
 
+**Never breaking** (Jai, 2026-11-16: "always latest, never breaking"). Apps take every release automatically, so a
+release must never break one:
+
+- Add to the public API. Never remove or change a public signature.
+- To retire one, deprecate it and keep it working.
+- CI's `test` job runs `swift package diagnose-api-breaking-changes <latest release tag>` and fails on any break,
+  which also holds the release.
+- A deliberate break needs Jai's OK and a major version.
+
 ## License
 
 [MIT](LICENSE)
