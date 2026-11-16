@@ -3,7 +3,8 @@
 poll (`/runner/wait`); a message sent wakes the runner for a fast tick at once, even between two chats of a full tick.
 A Worker without the long poll gets the full ticks only.
 
-Between two ticks, once an hour, it installs a newer FeedbackKit release that changes the runner (update.py) and
+Between two ticks it restarts itself through launchd when Agent Pager's installed hub changed under it
+(agent_pager.HubWatch), and once an hour it installs a newer FeedbackKit release that changes the runner (update.py) and
 restarts itself through launchd.
 
 Never two runners: it waits while Agent Pager's old LaunchAgent is loaded or its process runs, and holds a lock in its
@@ -95,9 +96,11 @@ class Service:
         status_path: Path | None = None,
         wall: Callable[[], float] = time.time,
         updater: Updater | None = None,
+        hub: agent_pager.HubWatch | None = None,
     ) -> None:
         self.runner = runner
         self.updater = updater
+        self.hub = hub
         self.api = api
         self.clock = clock
         self.old_runner = old_runner
@@ -169,7 +172,11 @@ class Service:
             self.finish()
 
     def maintain(self) -> None:
-        """Between two ticks, where no delivery is in progress: the hourly self-update when it is due."""
+        """Between two ticks, where no delivery is in progress: a restart onto a changed hub (launchd starts the runner
+        again), then the hourly self-update when it is due."""
+        if self.hub is not None and (changed := self.hub.changed()):
+            log("FEEDBACK_RUNNER_RELOADED", reason="hub", changed=[path.name for path in changed])
+            self.finish(reason="hub changed")
         if self.updater is not None and self.updater.due():
             self.update(self.updater)
 
@@ -328,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     if migrated:
         LOG.info(migrated)
     hub = agent_pager.load(args.agent_pager)
+    hub_watch = agent_pager.HubWatch(args.agent_pager)
     builders = [
         Builder(host, name, Orca(environment), Cube(hub.machines[host], args.scan_dir))
         for host, name, environment in BUILDERS
@@ -350,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         old_runner=old_runner_running,
         status_path=args.state_dir / STATUS_FILE,
         updater=Updater(args.installed, args.state_dir, python),
+        hub=hub_watch,
     )
     signal.signal(signal.SIGTERM, service.stop)
     service.announce()

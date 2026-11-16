@@ -17,7 +17,10 @@ thread's words back. It runs on Jais-Mac-mini as jai: `python3 -m feedbackkit_ru
 - **Agent Pager.** Finding a chat's thread, reading its transcript and sending a later message use Agent Pager's
   threads hub, imported from the copy its install keeps in `~/Library/Application Support/agent-pager-threads`
   (`feedbackkit_runner/agent_pager.py`; a LaunchAgent's python may not read `~/Developer`), and its scans of the
-  builders. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager hub.
+  builders. The hub is imported once, at start, so between two ticks the runner hashes the hub files it imported
+  (`agent_pager.HubWatch`). When one differs and has held still for one more check (a reinstall may still be writing),
+  it logs `FEEDBACK_RUNNER_RELOADED` (`reason: hub`, `changed`) and exits, and launchd starts it on the new hub: within
+  a minute of a `make threads-install`. Follow-up: the runner's own Orca send and thread lookup, so it needs no Agent Pager hub.
 
 - **Keeps itself current.** Once an hour, between two ticks (never in a delivery), it asks GitHub (`gh`) for the
   newest FeedbackKit release. When that release is newer than the installed copy (`compare` says ahead, so a copy
@@ -143,5 +146,5 @@ two differ, when a field is left unfilled, or when anything but the fields is ad
 host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_SHIPPED_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT`, and as
 JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
 `FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_UPDATING` / `FEEDBACK_RUNNER_UPDATED` (`from`, `to`) /
-`FEEDBACK_RUNNER_UPDATE_FAILED` (`to`, `reason`), `FEEDBACK_RUNNER_STOPPED`,
+`FEEDBACK_RUNNER_UPDATE_FAILED` (`to`, `reason`), `FEEDBACK_RUNNER_RELOADED`, `FEEDBACK_RUNNER_STOPPED`,
 `FEEDBACK_STATUS_NOT_WRITTEN`.
