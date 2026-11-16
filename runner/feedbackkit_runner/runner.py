@@ -466,7 +466,7 @@ class Cube:
         self.sh(
             'set -e; [ -d "$1/.git" ] || git clone -q "$2" "$1"; cd "$1"; git fetch -q origin; '
             'git config user.name "Jai Govindani"; '
-            "git config user.email jai.g@ewa-services.com",
+            "git config user.email jai@govindani.com",
             path,
             f"git@github.com:{repo}.git",
         )
