@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/jai/feedbackkit/compare/v0.7.1...v0.8.0) (2026-11-16)
+
+
+### Features
+
+* the Feedback chat uses AgentChatKit's ChatWorkingLine and ChatView emptyText ([#16](https://github.com/jai/feedbackkit/issues/16)) ([890b926](https://github.com/jai/feedbackkit/commit/890b926b992c9c033f17e2d426fcccf469c8daac))
+
+
+### Bug Fixes
+
+* take AgentChatKit 0.7.1, whose LiveChatModel no longer awaits a stored pause closure that crashed macOS 26.5 (SIGBUS) ([#17](https://github.com/jai/feedbackkit/issues/17)) ([815ed4f](https://github.com/jai/feedbackkit/commit/815ed4fdc6821c74f33a880c6ace643792aa05dc))
+
 ## [0.7.1](https://github.com/jai/feedbackkit/compare/v0.7.0...v0.7.1) (2026-11-16)
 
 
