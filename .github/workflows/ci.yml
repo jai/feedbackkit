@@ -101,15 +101,6 @@ jobs:
               --notes "$notes" --prerelease --latest=false
           fi
           gh release upload runner-menu FeedbackKitRunner.zip --clobber
-  release-script:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: node --test 'release/*.test.mjs'
   demo:
     # The demo app builds from a fresh clone, for iPhone and Mac, against the package by local path. Then end to end:
     # FeedbackDemoUITests drives the app on an iPhone simulator through each role's flows on the in-app mock Worker.
