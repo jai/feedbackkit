@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/jai/feedbackkit/compare/v0.7.0...v0.7.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **runner:** the runner's and the menu bar app's installs register a launchd job only for a new or changed plist, and replace only files that changed ([#11](https://github.com/jai/feedbackkit/issues/11)) ([8c2ab72](https://github.com/jai/feedbackkit/commit/8c2ab722f28f94797742b130629b8e675f8b896c))
+
 ## [0.7.0](https://github.com/jai/feedbackkit/compare/v0.6.1...v0.7.0) (2026-11-16)
 
 
