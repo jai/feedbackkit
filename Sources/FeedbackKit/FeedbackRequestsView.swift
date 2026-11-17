@@ -336,8 +336,8 @@ private struct FeedbackListView: View {
             } else {
                 ChatThreadRow(title: title) {
                     HStack(spacing: ChatSpace.sm) {
-                        if let agent {
-                            FeedbackAgentStatus(agent: agent)
+                        if let status = FeedbackStatus(agent: agent, shipped: shipped) {
+                            FeedbackStatusLabel(status: status)
                         }
                         if let date {
                             Text(ThreadTimeFormat().age(date, now: .now))
@@ -372,29 +372,5 @@ struct BuilderNote: View {
         .foregroundStyle(theme.toneWaiting)
         .padding(.horizontal, ChatSpace.lg)
         .accessibilityIdentifier("feedback-builder-offline")
-    }
-}
-
-/// A feedback chat's agent on its row: a spinner and what it is doing, "Needs you", or "Idle".
-struct FeedbackAgentStatus: View {
-    @Environment(\.chatTheme) private var theme
-    let agent: FeedbackThreadAgent
-
-    var body: some View {
-        HStack(spacing: ChatSpace.xs) {
-            switch agent.state {
-            case .working:
-                ProgressView().controlSize(.mini)
-                Text(agent.activity ?? "Working").foregroundStyle(theme.inkQuiet)
-            case .needsYou:
-                Text("Needs you").foregroundStyle(theme.toneWaiting).fontWeight(.semibold)
-            case .idle:
-                Text("Idle").foregroundStyle(theme.inkQuiet)
-            }
-        }
-        .chatTextStyle(.meta)
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("feedback-agent-\(agent.state.rawValue)")
     }
 }

@@ -135,6 +135,26 @@ class GitHubTests(unittest.TestCase):
         )
         self.assertEqual(shipped["prs"], [], "a chat on main has no pull request")
 
+    def test_a_component_s_commit_is_released_by_that_component_s_release_only(self) -> None:
+        sha = "c" * 40
+        releases = [
+            {"tagName": "worker-v2.4.0", "name": "", "isPrerelease": False, "publishedAt": "2026-11-17T07:00:00Z"},
+            {"tagName": "ios-v1.3.0", "name": "", "isPrerelease": False, "publishedAt": "2026-11-17T10:00:00Z"},
+            {"tagName": "mac-556", "name": "Mac 556", "isPrerelease": False, "publishedAt": "2026-11-15T00:00:00Z"},
+        ]
+        github = self.gh({"release list": releases, "api": {"check_runs": []}})
+
+        def release(title: str, tags: list[str]) -> object:
+            commit = {"sha": sha, "title": title, "at": None, "tags": tags}
+            return github.shipped("jai/app", [commit], "main")["commits"][0]["release"]
+
+        both = ["worker-v2.4.0", "ios-v1.3.0"]
+        self.assertEqual(release("fix(ios): bigger clock", both)["tag"], "ios-v1.3.0")  # type: ignore[index]
+        self.assertEqual(release("feat(worker): faster", both)["tag"], "worker-v2.4.0")  # type: ignore[index]
+        self.assertIsNone(release("fix(ios): bigger clock", ["worker-v2.4.0"]), "only the Worker's release: not yet")
+        self.assertEqual(release("fix: no scope", both)["tag"], "worker-v2.4.0", "no component: the first")  # type: ignore[index]
+        self.assertEqual(release("fix(docs): typo", both)["tag"], "worker-v2.4.0", "no docs releases: the first")  # type: ignore[index]
+
     def test_a_pull_request_from_the_branch(self) -> None:
         github = self.gh(
             {

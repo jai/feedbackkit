@@ -1,10 +1,11 @@
 """GitHub's side of what a chat shipped (docs/api.md#shipped), asked from the runner's own Mac with its gh: each landed
-commit's first release and checks, and the pull requests from the chat's branch. The commits themselves come from the
+commit's first release (its component's, when the repo releases components apart) and checks, and the pull requests from the chat's branch. The commits themselves come from the
 builder (shipped_probe.py)."""
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable
 
@@ -27,6 +28,22 @@ def ci_of(states: list[tuple[str, str]]) -> str | None:
     if any(conclusion in FAILED for _, conclusion in states):
         return "failure"
     return "success" if all(conclusion in PASSED for _, conclusion in states) else "pending"
+
+
+SCOPE = re.compile(r"^[a-z]+\(([\w.-]+)\)!?:")
+
+
+def first_release(releases: list[JsonObject], tags: set[str], title: str) -> JsonObject | None:
+    """The first release (by date) whose tag contains the commit. In a repo that releases each component under its own
+    tag (`ios-v1.3.0`, `worker-v2.4.0`), a commit whose title names a component (`fix(ios): ...`) is released only by
+    that component's releases: a Worker release cut after an app change also contains it, but ships no build of it."""
+    containing = [one for one in releases if one.get("tagName") in tags]
+    scope = SCOPE.match(title)
+    if scope:
+        prefix = f"{scope.group(1)}-"
+        if any(str(one.get("tagName") or "").startswith(prefix) for one in releases):
+            containing = [one for one in containing if str(one.get("tagName") or "").startswith(prefix)]
+    return containing[0] if containing else None
 
 
 def rollup_ci(rollup: list[JsonObject]) -> str | None:
@@ -87,7 +104,7 @@ class GitHub:
         for commit in commits:
             sha = str(commit["sha"])
             tags = set(commit.get("tags") or [])
-            first = next((one for one in releases if one.get("tagName") in tags), None)
+            first = first_release(releases, tags, str(commit.get("title") or ""))
             runs = self.call("api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100")
             checks = runs.get("check_runs") if isinstance(runs, dict) else None
             shipped_commits.append(

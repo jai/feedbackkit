@@ -40,15 +40,19 @@ export interface FeedbackThread {
   shipped?: Shipped | null;
 }
 
-/** An agent chat's state on the list: working (with what at), waiting on the sender, or idle. */
+/**
+ * An agent chat's state on the list: working (with what at), waiting on the sender, or idle. `queued`, while working:
+ * a message waits for the runner or the agent's next turn (an older app shows it as working).
+ */
 export interface ThreadAgentState {
   state: "working" | "needs_you" | "idle";
   activity: string | null;
+  queued?: true;
 }
 
 /**
- * Working while the agent says so or a message of the sender's has not reached its last look; needs you when the
- * agent spoke last and stopped; else idle.
+ * Working while the agent says so; queued while a message of the sender's waits for the runner or has not reached the
+ * agent's last look; needs you when the agent spoke last and stopped; else idle.
  */
 export function threadAgentState(
   agent: AgentSide | null,
@@ -57,8 +61,11 @@ export function threadAgentState(
   waiting: boolean,
 ): ThreadAgentState {
   const unseen = lastSentAt !== null && (agent?.updatedAt ?? 0) < lastSentAt;
-  if (waiting || agent?.isWorking || unseen) {
-    return { state: "working", activity: agent?.isWorking ? (agent.activity ?? "Working") : "Starting" };
+  if (agent?.isWorking) {
+    return { state: "working", activity: agent.activity ?? "Working" };
+  }
+  if (waiting || unseen) {
+    return { state: "working", activity: null, queued: true };
   }
   if (lastAgentAt !== null && (lastSentAt === null || lastAgentAt >= lastSentAt)) {
     return { state: "needs_you", activity: null };

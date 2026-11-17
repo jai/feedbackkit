@@ -7,6 +7,8 @@ public struct FeedbackConversation {
     public let thread: FeedbackAgentThread
     public let draft: Binding<String>
     public let attachments: ComposerAttachments
+    /// What the feedback shipped, so the host can end its conversation with `FeedbackReleaseNote`.
+    public let shipped: FeedbackShipped?
 }
 
 extension View {

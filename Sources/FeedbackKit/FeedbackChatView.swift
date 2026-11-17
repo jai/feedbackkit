@@ -27,8 +27,13 @@ struct FeedbackChatView: View {
             return nil
         }
         return conversation(FeedbackConversation(
-            thread: thread, draft: model.binding(for: box), attachments: model.attachments(for: box)
+            thread: thread, draft: model.binding(for: box), attachments: model.attachments(for: box), shipped: shipped
         ))
+    }
+
+    /// The chat's own, else its row's: a hosted chat stops reading its chat at handoff, and the list reads on.
+    private var shipped: FeedbackShipped? {
+        chat?.shipped ?? thread.flatMap { id in model.list.threads.first { $0.id == id }?.shipped }
     }
 
     /// Once the first message created the feedback chat, the host's coding thread receives every follow-up.
@@ -125,6 +130,9 @@ struct FeedbackChatView: View {
                 } else if let live, case .stopped = live.phase {
                     Text("Live feedback is unavailable.").chatTextStyle(.meta)
                         .accessibilityIdentifier("feedback-live-stopped")
+                }
+                if !showsWorking, let note = FeedbackReleaseNote(shipped: shipped) {
+                    note
                 }
                 status
                     .animation(ChatMotion.fold, value: chat?.isWorking)
