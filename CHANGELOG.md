@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/jai/feedbackkit/compare/v0.10.0...v0.11.0) (2026-11-18)
+
+
+### Features
+
+* **runner:** a message's videos are fetched with /runner/media and saved beside its screenshots, and the agent is told each one's file and length and how to make stills from it (ffmpeg, else frames.swift with AVFoundation) ([#4](https://github.com/jai/feedbackkit/issues/4)) ([03fc619](https://github.com/jai/feedbackkit/commit/03fc619eaa213e6def4dc89a74b638319a0dbb8d))
+* **worker:** videos on a message: POST /v2/feedback/uploads asks for room and PUT sends the bytes raw to R2, a message names them in videos, the chat and the live stream serve them, and the runner's claim lists them for /runner/media ([#4](https://github.com/jai/feedbackkit/issues/4)) ([d2f6c37](https://github.com/jai/feedbackkit/commit/d2f6c37bcce9726a106ea0fc55f4be40264c835b))
+
 ## [0.10.0](https://github.com/jai/feedbackkit/compare/v0.9.0...v0.10.0) (2026-11-18)
 
 
