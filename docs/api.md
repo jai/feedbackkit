@@ -28,6 +28,13 @@ App routes, on the app's backend with the app's own auth:
   Neither: `400`. A repeat `client_ref` keeps the message once.
 - `isWorking` from a send until the agent's turn ends; `problem` says why the last message was not passed on.
   Each row's `thread` is the existing coding thread `{host, id}`, or `null` until the runner names it. A host can use it to draw live status and accessories without opening every conversation.
+  Each row's `agent` is `{state, activity, queued?}`: `working` (with `activity`) while the agent works, and with
+  `queued: true` while a message waits for the runner or the agent's next turn; `needs_you` when it spoke last and
+  stopped; else `idle`.
+- **A row's status**, as FeedbackKit shows it (`FeedbackStatus`): Queued, Building (the agent works), then what shipped
+  (Released, Checks failed, On main, PR open), then Needs you or Idle. An agent that stopped after it shipped is done,
+  not waiting. A released chat ends with the release that carries it (`FeedbackReleaseNote`); a host that shows its own
+  conversation gets `shipped` in `FeedbackConversation`.
 
   `builderOnline`: the runner polled in the last 90 seconds and said its Mac answers. `notice`, when sending opens a public issue, says so;
   the app shows it above a new chat.
@@ -123,7 +130,7 @@ hourly until each commit is in a release, its checks have finished and no pull r
 | Field | Value |
 |---|---|
 | `commits` | `[{sha, title, at, url, ci, release}]`, newest first, at most 20: the commits the chat's worktree made that are on `main` |
-| `commits[].release` | `{tag, name, url, prerelease}`: the first published GitHub Release (by date) whose tag contains the commit; `null`: on `main`, in no release yet |
+| `commits[].release` | `{tag, name, url, prerelease}`: the first published GitHub Release (by date) whose tag contains the commit; `null`: on `main`, in no release yet. A commit whose title names a component (`fix(ios): …`) in a repo with that component's releases (`ios-v1.3.0`) counts only those |
 | `prs` | `[{number, title, url, state: "open" \| "merged" \| "closed", ci}]`, at most 10: those whose head is the worktree's branch (a builder's chat) |
 | `ci` | `pending` while any check runs, `failure` when any failed, else `success`; `null`: no checks |
 

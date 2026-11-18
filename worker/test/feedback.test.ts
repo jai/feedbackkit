@@ -70,8 +70,8 @@ test("new feedback waits for the runner: the chat works and the builder is offli
   assert.equal((await feedbackList(store, 2_000)).threads[0].title, "Bigger clock");
   assert.deepEqual(
     (await feedbackList(store, 2_000)).threads[0].agent,
-    { state: "working", activity: "Starting" },
-    "a message waiting for the runner shows on the list as working",
+    { state: "working", activity: null, queued: true },
+    "a message waiting for the runner shows on the list as queued",
   );
   const waiting = (await feedbackChat(store, chat, 2_000))!;
   assert.deepEqual(
@@ -283,7 +283,7 @@ test("a list read logs what the app was told about the builder", () => {
   });
 });
 
-test("a thread's state on the list: working, needs you or idle", () => {
+test("a thread's state on the list: queued, working, needs you or idle", () => {
   const side = (isWorking: boolean, updatedAt: number, activity: string | null = null) => ({
     messages: [],
     isWorking,
@@ -292,13 +292,22 @@ test("a thread's state on the list: working, needs you or idle", () => {
     updatedAt,
   });
   assert.deepEqual(threadAgentState(null, null, null, false), { state: "idle", activity: null });
-  assert.deepEqual(threadAgentState(null, 1000, null, true), { state: "working", activity: "Starting" });
+  assert.deepEqual(threadAgentState(null, 1000, null, true), { state: "working", activity: null, queued: true });
   assert.deepEqual(threadAgentState(side(true, 2000, "Running tests"), 1000, 1500, false), {
     state: "working",
     activity: "Running tests",
   });
-  // A message after the agent's last look: its turn has started.
-  assert.deepEqual(threadAgentState(side(false, 1000), 2000, 900, false), { state: "working", activity: "Starting" });
+  // A message after the agent's last look: it waits for the agent's turn.
+  assert.deepEqual(threadAgentState(side(false, 1000), 2000, 900, false), {
+    state: "working",
+    activity: null,
+    queued: true,
+  });
+  // The agent working wins over a message still waiting.
+  assert.deepEqual(threadAgentState(side(true, 1000, "Building"), 2000, 900, true), {
+    state: "working",
+    activity: "Building",
+  });
   // The agent spoke last and stopped: it waits on the sender.
   assert.deepEqual(threadAgentState(side(false, 3000), 1000, 2500, false), { state: "needs_you", activity: null });
   // The sender spoke last and the agent has seen it but said nothing: idle.

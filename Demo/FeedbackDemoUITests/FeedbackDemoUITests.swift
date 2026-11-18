@@ -71,6 +71,8 @@ final class FeedbackDemoUITests: XCTestCase {
         open("Settings should follow dark mode")
         XCTAssertTrue(app.descendants(matching: .any)["feedback-shipped-header"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(text("fix(settings): follow the system appearance").exists, "the commit, a link")
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-release-note"].firstMatch.exists,
+                      "a released chat ends with the release that carries it")
         screenshot("shipped-header")
         back()
         role("Builder")
@@ -116,10 +118,9 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.
         XCTAssertTrue(text("An agent makes the change, tests it and ships a build.").waitForExistence(timeout: 10))
-        // Each request's row says where its agent stands.
-        XCTAssertTrue(app.descendants(matching: .any)["feedback-agent-working"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["feedback-agent-needs_you"].exists
-            || app.descendants(matching: .any)["feedback-agent-idle"].exists)
+        // Each request's row says where it stands: the agent building, and the shipped one released.
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-status-building"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-status-released"].exists)
         screenshot("owner-list")
         open("Make the sync button bigger, it's hard to hit")
         XCTAssertTrue(app.descendants(matching: .any)["feedback-working"].waitForExistence(timeout: 5))

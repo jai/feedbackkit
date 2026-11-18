@@ -38,7 +38,8 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
     }
 }
 
-/// A feedback chat's agent on the list: working (and at what), waiting on the sender, or idle.
+/// A feedback chat's agent on the list: working (and at what), waiting on the sender, or idle. Working and `isQueued`:
+/// a message waits for the runner or the agent's next turn.
 public struct FeedbackThreadAgent: Decodable, Equatable, Hashable, Sendable {
     public enum State: String, Decodable, Sendable {
         case working
@@ -48,10 +49,26 @@ public struct FeedbackThreadAgent: Decodable, Equatable, Hashable, Sendable {
 
     public let state: State
     public let activity: String?
+    /// False from a Worker before it served `queued`.
+    public let isQueued: Bool
 
     public init(state: State, activity: String? = nil) {
+        self.init(state: state, activity: activity, isQueued: false)
+    }
+
+    public init(state: State, activity: String?, isQueued: Bool) {
         self.state = state
         self.activity = activity
+        self.isQueued = isQueued
+    }
+
+    private enum CodingKeys: String, CodingKey { case state, activity, queued }
+
+    public init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        state = try fields.decode(State.self, forKey: .state)
+        activity = try fields.decodeIfPresent(String.self, forKey: .activity)
+        isQueued = (try? fields.decodeIfPresent(Bool.self, forKey: .queued)) ?? false
     }
 }
 
