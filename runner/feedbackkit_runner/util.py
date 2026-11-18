@@ -67,6 +67,27 @@ def post_json(url: str, payload: Mapping[str, object], headers: dict[str, str], 
         raise HttpJsonError(f"HTTP_JSON_UNREACHABLE: {type(failure).__name__}") from failure
 
 
+def post_for_bytes(
+    url: str, payload: Mapping[str, object], headers: dict[str, str], timeout: float, limit: int
+) -> tuple[int, bytes]:
+    """POST a JSON body and read the answer's bytes, at most `limit` (a video's): its status and body. Redirects are
+    refused, as post_json refuses them."""
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    outgoing = request.Request(
+        url, data=data, method="POST", headers=dict(headers, **{"Content-Type": "application/json"})
+    )
+    try:
+        with request.build_opener(_RefuseRedirects).open(outgoing, timeout=timeout) as response:
+            body = response.read(limit + 1)
+            if len(body) > limit:
+                raise HttpJsonError("HTTP_BYTES_RESPONSE_TOO_LARGE", response.status)
+            return response.status, body
+    except error.HTTPError as failure:
+        return failure.code, b""
+    except (error.URLError, OSError, ValueError) as failure:
+        raise HttpJsonError(f"HTTP_BYTES_UNREACHABLE: {type(failure).__name__}") from failure
+
+
 def _json_object(raw: bytes) -> JsonObject:
     if len(raw) > RESPONSE_LIMIT_BYTES:
         raise HttpJsonError("HTTP_JSON_RESPONSE_TOO_LARGE")

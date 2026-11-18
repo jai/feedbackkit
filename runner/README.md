@@ -99,6 +99,12 @@ which a Mac UI test on the mini can click into System Settings. `make -C runner 
   launching a second agent. The runner state records the worktree's path (`clone`) and `layout: "worktree"`. The agent
   is told the screenshots' paths. The brief is FeedbackKit's one template, filled from declared fields of the work
   item ([docs/api.md](../docs/api.md#the-brief)). It never removes its worktree.
+- A message's videos (the claim names them; `POST /runner/media` fetches each with the runner's token) are saved beside
+  its screenshots as `<message>-video-<n>.mov|mp4`, with `frames.swift`. After the message's words the agent reads each
+  video's path and length and how to see it: stills with `ffmpeg` when the builder has it, else
+  `swift frames.swift <video> <folder>` (AVFoundation, `feedbackkit_runner/videos.py`). A video that cannot be fetched
+  fails the message. The first message's note goes in the brief's `message` field, after the words; the template is
+  unchanged.
 - Each later message: into the same Orca chat, as an Agent Pager thread reply goes (its `orca_send`, `agentSession.send`), prefixed
   `<login> via <app name>:` (`jai via Agent Pager:`), its screenshots saved into the
   worktree's `tmp/feedback/` first. The thread is the chat's Orca Claude thread (`orca-claude`), or its Orca Codex thread (`orca-codex`) for a

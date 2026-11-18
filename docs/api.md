@@ -61,6 +61,8 @@ fills it ([runner/feedbackkit_runner/brief.py](../runner/feedbackkit_runner/brie
 - Everyone else's feedback never reaches a coding thread: it becomes a GitHub issue.
 - Each later message goes into the same thread as `{sender} via {app_name}: {text}`, and when it has screenshots,
   `[{sender} attached … Open each image file and look at it before you answer: {paths}]` after the words.
+- A message's videos follow as `[{sender} attached a video: {path} ({length}). Look at each before you answer. …]`,
+  which says how to make stills to look at. On a first message that note is part of `message`, after the words.
 
 ## Direct
 

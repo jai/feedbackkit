@@ -28,7 +28,17 @@ from typing import Literal, NamedTuple, Protocol, TypedDict
 
 from .brief import app_name, fields, first_prompt, later_prefix
 from .github import GitHub
-from .util import IMAGE_EXTENSIONS, HttpJsonError, JsonObject, image_note, json_object, post_json, write_private_json
+from .util import (
+    IMAGE_EXTENSIONS,
+    HttpJsonError,
+    JsonObject,
+    image_note,
+    json_object,
+    post_for_bytes,
+    post_json,
+    write_private_json,
+)
+from .videos import FRAMES_SCRIPT, FRAMES_SCRIPT_NAME, VIDEO_EXTENSIONS, video_note
 
 STATE_DIR = Path.home() / "Library" / "Application Support" / "feedbackkit-runner"
 STATE_FILE = "state.json"
@@ -54,6 +64,9 @@ LOGIN = re.compile(r"^[A-Za-z0-9-]{1,39}$")
 # An app id names its project's folder, so it is a plain slug.
 APP = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 HTTP_TIMEOUT_SECONDS = 30
+# A video from /runner/media: at most the Worker's 50 MB, and time to fetch it.
+MEDIA_LIMIT_BYTES = 50 << 20
+MEDIA_TIMEOUT_SECONDS = 120
 # The longest the Worker holds a `/runner/wait` (worker/src/runner-wake.ts WAIT_MS).
 WAIT_SECONDS = 25
 ORCA_TIMEOUT_SECONDS = 60
@@ -298,6 +311,19 @@ class FeedbackApi:
         """False when the Worker has no such chat."""
         return self._post("agent", {**side, **self.whose(sender), "chat": chat}, refused=(404,)) is not None
 
+    def media(self, chat: str, message: str, index: int, sender: Sender | None = None) -> bytes:
+        """One of a message's attachments by its index (a video, which the claim only names): its bytes."""
+        body = {**self.whose(sender), "chat": chat, "message": message, "index": index}
+        try:
+            status, data = post_for_bytes(
+                f"{self.url}/runner/media", body, self.headers, MEDIA_TIMEOUT_SECONDS, MEDIA_LIMIT_BYTES
+            )
+        except HttpJsonError as failure:
+            raise FeedbackApiError(failure.reason) from failure
+        if status != 200 or not data:
+            raise FeedbackApiError(f"media answered {status:d}")
+        return data
+
     def wait(self, since: int | None, seconds: float = WAIT_SECONDS) -> int | None:
         """The long poll: the Worker's wake count, at once when it is past `since` (or `since` is None), else when a
         message wakes it or after `seconds` (at most WAIT_SECONDS) unchanged. None when the Worker has no
@@ -489,6 +515,22 @@ class Cube:
             self.sh('mkdir -p "$1" && cat > "$2"', folder, path, stdin=base64.b64decode(data, validate=True))
             paths.append(path)
         return paths
+
+    def save_videos(self, folder: str, message: str, videos: list[tuple[str, bytes]]) -> tuple[list[str], str]:
+        """Each video (its media type and bytes) into `folder`, beside the screenshots, and frames.swift with them: the
+        videos' paths and the script's, for the agent."""
+        script = f"{folder}/{FRAMES_SCRIPT_NAME}"
+        paths = []
+        for index, (media_type, data) in enumerate(videos):
+            extension = VIDEO_EXTENSIONS.get(media_type)
+            if extension is None:
+                raise RuntimeError("the videos are not usable videos")
+            path = f"{folder}/{message}-video-{index + 1:d}.{extension}"
+            self.sh('mkdir -p "$1" && cat > "$2"', folder, path, stdin=data)
+            paths.append(path)
+        if paths:
+            self.sh('mkdir -p "$1" && cat > "$2"', folder, script, stdin=FRAMES_SCRIPT.encode("utf-8"))
+        return paths, script
 
     def check_pushed(self, folder: str) -> bool:
         """False when the checkout is gone already (nothing in it can be lost); RuntimeError saying what is left when it
@@ -869,7 +911,9 @@ class Runner:
         base, name = project_path(sender["app"]), worktree_name(chat)
         builder.cube.clone(base, sender["repo"])
         project = builder.orca.project(base, project_name(sender["app"]))
-        paths = builder.cube.save_images(first_screenshots(sender["app"], chat), message, claimed.get("images") or [])
+        folder = first_screenshots(sender["app"], chat)
+        paths = builder.cube.save_images(folder, message, claimed.get("images") or [])
+        videos = self.save_videos(builder, folder, chat, message, claimed, sender, who or sender["login"])
         prompt = first_prompt(
             fields(
                 sender["app"],
@@ -878,7 +922,7 @@ class Runner:
                 sender["repo"],
                 str(claimed.get("build") or ""),
                 paths,
-                str(claimed.get("text") or ""),
+                (str(claimed.get("text") or "") + videos).strip(),
             )
         )
         worktree = builder.orca.create(project, name, prompt)
@@ -941,10 +985,14 @@ class Runner:
             builder.cube.clone(clone, sender["repo"])
             known["removed"] = False
         paths = builder.cube.save_images(f"{clone}/tmp/feedback", message, claimed.get("images") or [])
+        videos = self.save_videos(
+            builder, f"{clone}/tmp/feedback", chat, message, claimed, sender, who or sender["login"]
+        )
         text = (
             later_prefix(sender["app"], who or sender["login"])
             + str(claimed.get("text") or "")
             + (image_note(paths, who or sender["login"]) if paths else "")
+            + videos
         )
         job: DeliveryJob = {"app": thread["app"], "session_id": thread["session_id"], "cwd": clone, "text": text}
         outcome = self.deliver(builder.cube.machine, job)
@@ -958,6 +1006,31 @@ class Runner:
             }
         known["last_activity"] = known["told_at"] = self.clock()
         return outcome
+
+    def save_videos(
+        self, builder: Builder, folder: str, chat: str, message: str, claimed: JsonObject, sender: Sender, who: str
+    ) -> str:
+        """The claim's videos fetched from the Worker and saved on the builder beside the screenshots: the note the
+        agent reads after the words, or "" when the message has none."""
+        listed = claimed.get("videos") or []
+        if not isinstance(listed, list):
+            raise RuntimeError("the videos are not usable videos")
+        fetched: list[tuple[str, bytes]] = []
+        durations: list[object] = []
+        for video in listed:
+            index = video.get("index") if isinstance(video, dict) else None
+            if not isinstance(video, dict) or not isinstance(index, int) or isinstance(index, bool):
+                raise RuntimeError("the videos are not usable videos")
+            try:
+                data = self.api.media(chat, message, index, sender)
+            except FeedbackApiError as failure:
+                raise RuntimeError(f"a video could not be fetched: {failure}") from failure
+            fetched.append((str(video.get("media_type")), data))
+            durations.append(video.get("duration_ms"))
+        if not fetched:
+            return ""
+        paths, script = builder.cube.save_videos(folder, message, fetched)
+        return video_note(list(zip(paths, durations, strict=True)), who, script)
 
     def look(self, chat: str, agents: dict[str, dict[str, JsonObject] | None]) -> str | None:
         """The agent's side from Orca's live state and its transcript, sent when it changed; then tidy if done. While
