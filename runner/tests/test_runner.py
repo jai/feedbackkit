@@ -171,6 +171,9 @@ class FakeCube(Cube):
             raise RuntimeError("unpushed commits")
         return not self.gone
 
+    def is_there(self, folder: str) -> bool:
+        return not self.gone
+
     def remove_folder(self, folder: str) -> None:
         self.removed.append(folder)
 
@@ -804,6 +807,19 @@ class LegacyCloneTests(RunnerCase):
         self.assertEqual((self.orca.removed, self.cube.removed), ([], []))
         self.assertTrue(any(line.startswith(f"FEEDBACK_CLONE_KEPT chat={CHAT} clone={CLONE_PATH}") for line in lines))
         self.assertEqual(self.runner().tick(), [], "said once a day, not every poll")
+
+    def test_a_clone_whose_folder_is_gone_counts_as_removed(self) -> None:
+        self.legacy()
+        self.cube.gone = True
+        self.now += TIDY_AFTER_SECONDS + 1
+        lines = self.runner().tick()
+        self.assertEqual(self.orca.removed, [], "Orca has nothing to remove")
+        self.assertTrue(
+            any(line.startswith(f"FEEDBACK_CLONE_GONE chat={CHAT} worktree={CLONE_PATH}") for line in lines)
+        )
+        self.assertTrue(self.runner().state["chats"][CHAT]["removed"])
+        self.now += TIDY_AFTER_SECONDS + 1
+        self.assertFalse(any("FEEDBACK_CLONE" in line for line in self.runner().tick()), "not asked again")
 
     def test_a_clone_tidied_before_worktrees_is_made_again_for_a_reply(self) -> None:
         self.legacy(removed=True)

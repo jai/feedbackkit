@@ -518,6 +518,10 @@ class Cube:
         except ValueError as failure:
             raise RuntimeError(f"shipped answered no JSON: {failure}") from failure
 
+    def is_there(self, folder: str) -> bool:
+        """Whether the folder is on this builder; RuntimeError when the builder did not answer."""
+        return "there" in self.sh('[ -d "$1" ] && echo there || true', folder)
+
     def remove_folder(self, folder: str) -> None:
         """A folder of the runner's own (a chat's first screenshots); gone already is fine."""
         self.sh('rm -rf "$1"', folder)
@@ -1043,20 +1047,29 @@ class Runner:
 
     def tidy(self, builder: Builder, chat: str, known: ChatState) -> str:
         """A quiet chat's worktree out of Orca and git once its work is pushed; else kept, and asked again in a day.
-        A full clone from before worktrees is left for Jai: removing its folder would leave its Orca project behind."""
+        A full clone from before worktrees is left for Jai: removing its folder would leave its Orca project behind.
+        Once its folder is gone, it counts as removed like a worktree."""
         folder = known["clone"]
         if known["layout"] == "clone":
-            known["last_activity"] = self.clock()
-            return f"FEEDBACK_CLONE_KEPT chat={chat} clone={folder} reason=a full clone from before worktrees; Jai removes it"
-        try:
-            there = builder.cube.check_pushed(folder)
+            try:
+                there = builder.cube.is_there(folder)
+            except RuntimeError as failure:
+                known["last_activity"] = self.clock()
+                return f"FEEDBACK_CLONE_KEPT chat={chat} clone={folder} reason={failure}"
             if there:
-                builder.orca.remove(folder)
-        except RuntimeError as failure:
-            known["last_activity"] = self.clock()
-            return f"FEEDBACK_WORKTREE_KEPT chat={chat} worktree={folder} reason={failure}"
+                known["last_activity"] = self.clock()
+                return f"FEEDBACK_CLONE_KEPT chat={chat} clone={folder} reason=a full clone from before worktrees; Jai removes it"
+            done = "FEEDBACK_CLONE_GONE"
+        else:
+            try:
+                there = builder.cube.check_pushed(folder)
+                if there:
+                    builder.orca.remove(folder)
+            except RuntimeError as failure:
+                known["last_activity"] = self.clock()
+                return f"FEEDBACK_WORKTREE_KEPT chat={chat} worktree={folder} reason={failure}"
+            done = "FEEDBACK_WORKTREE_REMOVED" if there else "FEEDBACK_WORKTREE_GONE"
         known["removed"] = True
-        done = "FEEDBACK_WORKTREE_REMOVED" if there else "FEEDBACK_WORKTREE_GONE"
         sender = known.get("sender")
         if sender:
             try:
