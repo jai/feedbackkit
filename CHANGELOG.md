@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/jai/feedbackkit/compare/v0.9.0...v0.10.0) (2026-11-18)
+
+
+### Features
+
+* each feedback row says where it stands (Queued, Building, PR open, On main, Checks failed, Released, Needs you); a released chat ends with its release ([#20](https://github.com/jai/feedbackkit/issues/20)) ([d1be311](https://github.com/jai/feedbackkit/commit/d1be31123e8d0e0ce6840d42c44aa8e4c496d558))
+
+
+### Bug Fixes
+
+* **runner:** a full clone from before worktrees whose folder is gone counts as removed, like a worktree, instead of kept for Jai every day ([4e1e641](https://github.com/jai/feedbackkit/commit/4e1e6414f9742378c7caebc61daaf632be15a47f))
+
 ## [0.9.0](https://github.com/jai/feedbackkit/compare/v0.8.0...v0.9.0) (2026-11-16)
 
 
