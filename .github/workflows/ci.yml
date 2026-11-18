@@ -58,11 +58,9 @@ jobs:
           base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)
           echo "Comparing with $base"
           swift package diagnose-api-breaking-changes "$base" --products FeedbackKit
-      # The suites on AgentChatKit's live dev host, on their own and allowed to fail: on GitHub's macOS 26 runner the
-      # test process dies with SIGBUS in the Swift task allocator once several of them share it (jai/agentchatkit#3).
-      # They pass on macOS 27. Their result still shows; it does not turn main red.
-      - name: Live suites (allowed to fail, jai/agentchatkit#3)
-        continue-on-error: true
+      # The suites on AgentChatKit's live dev host, in their own step so their result shows on its own. They are
+      # required: the macOS 26 SIGBUS (jai/agentchatkit#3) is fixed in AgentChatKit 0.7.1 (#17).
+      - name: Live suites
         run: swift test --filter "FeedbackKitTests.(FeedbackLiveTests|FeedbackDirectTests)"
   runner-menu:
     # The FeedbackKit Runner menu bar app (runner/MenuBar): its bundle (its tests are in Unit Tests). Each release
