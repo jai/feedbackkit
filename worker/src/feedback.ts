@@ -15,6 +15,19 @@ const MAX_IMAGE_BYTES = 1_500_000;
 const IMAGE_STARTS = { "image/jpeg": "/9j/", "image/png": "iVBORw0KGgo" } as const;
 type ImageType = keyof typeof IMAGE_STARTS;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+/** Videos on one message, what they may be, and each one's size: they go up first (`newUpload`, `putUpload`). */
+export const MAX_VIDEOS = 2;
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+export const VIDEO_TYPES = ["video/mp4", "video/quicktime"] as const;
+/** Pictures and videos together, as the app's tray holds them. */
+const MAX_ATTACHMENTS = 4;
+/** A day's videos at most: one longer is refused. */
+const MAX_VIDEO_MS = 86_400_000;
+/** Uploads a sender may hold that no message took yet; ones a day old are dropped as a new one is asked for. */
+const MAX_OPEN_UPLOADS = 10;
+const UPLOAD_STALE_MS = 86_400_000;
+const UPLOAD_ID = /^up_[0-9a-f]{16}$/;
+const UPLOAD_URI = /^\/v2\/feedback\/uploads\/(up_[0-9a-f]{16})$/;
 const CHAT_ID = /^fb_[0-9a-f]{16}$/;
 const MESSAGE_ID = /^m_[0-9a-f]{16}$/;
 /** The runner says it is alive on every poll; quieter than this, the builder is offline. */
@@ -27,6 +40,12 @@ const MAX_AGENT_TEXT = 20_000;
 /** Under each sender's R2 prefix: a message's screenshots, as `{media_type, data}` JSON. */
 export const imageKey = (prefix: string, chat: string, message: string, index: number) =>
   `${prefix}feedback/chats/${chat}/img/${message}/${index}.json`;
+
+/** Under each sender's R2 prefix: an uploaded video's bytes, as they came. */
+export const uploadKey = (prefix: string, upload: string) => `${prefix}feedback/uploads/${upload}`;
+
+/** Where an upload's bytes go (`PUT`) and the `uri` a message's `videos` name it by: one path. */
+export const uploadPath = (upload: string) => `/v2/feedback/uploads/${upload}`;
 
 export interface FeedbackThread {
   id: string;
@@ -79,11 +98,19 @@ export interface FeedbackImage {
   data: string;
 }
 
+/** A video on a message: an upload of the sender's, put and not yet taken, and how long it runs when the app said. */
+export interface FeedbackVideo {
+  upload: string;
+  duration_ms: number | null;
+}
+
 export interface FeedbackInput {
   text: string;
   /** The app's build, so the agent knows what Jai was looking at. */
   build: string | null;
   images: FeedbackImage[];
+  /** After the pictures; absent from callers before videos. */
+  videos?: FeedbackVideo[];
 }
 
 export type MessageStatus = "pending" | "delivering" | "delivered" | "failed" | "removed";
@@ -95,7 +122,10 @@ export interface StoredMessage {
   at: number;
   text: string;
   build: string | null;
+  /** Its pictures and videos. */
   images: number;
+  /** How many of `images` are videos. */
+  videos: number;
   /** The chat's first message starts the agent; every other one is told to it. */
   first: boolean;
   status: MessageStatus;
@@ -117,9 +147,13 @@ export interface AgentSide {
   shipped?: Shipped | null;
 }
 
-/** A message of the chat, with how many screenshots Jai sent on it. */
+/**
+ * A message of the chat, with how many screenshots Jai sent on it. `images` counts its videos too, so an app from before
+ * videos still says the message carries something; `videos` says how many of them are videos.
+ */
 export interface FeedbackMessage extends ChatMessage {
   images: number;
+  videos?: number;
   /** The sender's persisted delivery state; absent on messages from the agent. */
   status?: MessageStatus;
 }
@@ -144,10 +178,15 @@ export interface RunnerWork {
   name: string | null;
 }
 
-/** R2, as this needs it for screenshots. */
+/** R2, as this needs it for screenshots and videos. */
 export interface ImageBucket {
-  put(key: string, value: string): Promise<unknown>;
-  get(key: string): Promise<{ json<T>(): Promise<T> } | null>;
+  put(
+    key: string,
+    value: string | ArrayBuffer,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<unknown>;
+  get(key: string): Promise<{ json<T>(): Promise<T>; body: ReadableStream | string | Uint8Array; size: number } | null>;
+  delete(keys: string | string[]): Promise<unknown>;
 }
 
 /**
@@ -191,6 +230,7 @@ interface MessageRow {
   text: string;
   build: string | null;
   images: number;
+  videos?: number;
   first: number;
   status: MessageStatus | null;
   claimed_at: number | null;
@@ -204,6 +244,7 @@ function stored(row: MessageRow): StoredMessage {
     text: row.text,
     build: row.build,
     images: row.images,
+    videos: row.videos ?? 0,
     first: row.first === 1,
     status: row.status ?? "delivered",
     claimedAt: row.claimed_at,
@@ -249,18 +290,58 @@ export function newId(prefix: string): string {
   return `${prefix}_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** Words, screenshots or both; `null` for anything the agent should not get. */
+/** Words, screenshots, videos or any of them; `null` for anything the agent should not get. */
 export function parseFeedbackInput(body: unknown): FeedbackInput | null {
-  const { text, build, images } = (body ?? {}) as { text?: unknown; build?: unknown; images?: unknown };
+  const { text, build, images, videos } = (body ?? {}) as {
+    text?: unknown;
+    build?: unknown;
+    images?: unknown;
+    videos?: unknown;
+  };
   const pictures = parseImages(images);
-  if (typeof text !== "string" || text.length > MAX_TEXT || pictures === null || (!text.trim() && !pictures.length)) {
+  const films = parseVideos(videos);
+  if (
+    typeof text !== "string" ||
+    text.length > MAX_TEXT ||
+    pictures === null ||
+    films === null ||
+    pictures.length + films.length > MAX_ATTACHMENTS ||
+    (!text.trim() && !pictures.length && !films.length)
+  ) {
     return null;
   }
   return {
     text: text.trim(),
     build: typeof build === "string" && /^[\w.-]{1,20}$/.test(build) ? build : null,
     images: pictures,
+    videos: films,
   };
+}
+
+/** `[{uri, mimeType, size, duration_ms?}]`, each naming an upload by the `uri` its ticket gave. */
+function parseVideos(value: unknown): FeedbackVideo[] | null {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_VIDEOS) {
+    return null;
+  }
+  const videos: FeedbackVideo[] = [];
+  for (const item of value) {
+    const { uri, duration_ms: duration } = (item ?? {}) as { uri?: unknown; duration_ms?: unknown };
+    const upload = typeof uri === "string" ? UPLOAD_URI.exec(uri)?.[1] : undefined;
+    if (
+      !upload ||
+      videos.some((video) => video.upload === upload) ||
+      (duration !== undefined &&
+        duration !== null &&
+        (typeof duration !== "number" || !Number.isInteger(duration) || duration < 0 || duration > MAX_VIDEO_MS))
+    ) {
+      return null;
+    }
+    videos.push({ upload, duration_ms: typeof duration === "number" ? duration : null });
+  }
+  return videos;
 }
 
 function parseImages(value: unknown): FeedbackImage[] | null {
@@ -289,9 +370,9 @@ function parseImages(value: unknown): FeedbackImage[] | null {
   return images;
 }
 
-export function titleOf(text: string): string {
+export function titleOf(text: string, untitled = "Screenshot"): string {
   if (!text.trim()) {
-    return "Screenshot";
+    return untitled;
   }
   const line = text.split("\n")[0].trim();
   return line.length > 60 ? `${line.slice(0, 59)}…` : line;
@@ -393,8 +474,9 @@ export function listServedLog(status: BuilderStatus, threadCount: number, now: n
 async function messagesOf(store: FeedbackStore, chat: string): Promise<StoredMessage[]> {
   const { results } = await store.db
     .prepare(
-      "SELECT id, at, text, build, images, first, status, claimed_at, detail FROM messages" +
-        " WHERE chat = ? AND status IS NOT 'removed' ORDER BY at, id",
+      "SELECT id, at, text, build, images, first, status, claimed_at, detail," +
+        " (SELECT count(*) FROM images i WHERE i.message = messages.id AND i.media_type LIKE 'video/%') AS videos" +
+        " FROM messages WHERE chat = ? AND status IS NOT 'removed' ORDER BY at, id",
     )
     .bind(chat)
     .all<MessageRow>();
@@ -438,6 +520,7 @@ export function chatView(
       text: message.text,
       anchor: null,
       images: message.images,
+      ...(message.videos ? { videos: message.videos } : {}),
       status: message.status,
     },
   }));
@@ -508,6 +591,10 @@ export async function addMessage(
   if (chat && !(await chatRow(store, chat))) {
     return null;
   }
+  const videos = await readyUploads(store, input.videos ?? []);
+  if (videos === null) {
+    throw new Error("a video is not the sender's ready upload");
+  }
   const id = chat ?? newId("fb");
   const message = newId("m");
   const keys = input.images.map((_, index) => imageKey(store.prefix, id, message, index));
@@ -519,7 +606,14 @@ export async function addMessage(
         .prepare(
           "INSERT INTO chats (id, app, login, kind, title, created_at, sender_name) VALUES (?, ?, ?, 'agent', ?, ?, ?)",
         )
-        .bind(id, store.app, store.login, titleOf(input.text), now, store.name ?? null),
+        .bind(
+          id,
+          store.app,
+          store.login,
+          titleOf(input.text, !input.images.length && videos.length ? "Video" : "Screenshot"),
+          now,
+          store.name ?? null,
+        ),
     );
   } else if (store.name) {
     writes.push(store.db.prepare("UPDATE chats SET sender_name = ? WHERE id = ?").bind(store.name, id));
@@ -531,13 +625,33 @@ export async function addMessage(
         "INSERT INTO messages (id, chat, at, text, build, images, first, status, seq, client_ref)" +
           " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', (SELECT seq FROM chats WHERE id = ?), ?)",
       )
-      .bind(message, id, now, input.text, input.build, input.images.length, chat === null ? 1 : 0, id, clientRef),
+      .bind(
+        message,
+        id,
+        now,
+        input.text,
+        input.build,
+        input.images.length + videos.length,
+        chat === null ? 1 : 0,
+        id,
+        clientRef,
+      ),
   );
   input.images.forEach((image, index) =>
     writes.push(
       store.db
         .prepare("INSERT INTO images (message, idx, r2_key, media_type) VALUES (?, ?, ?, ?)")
         .bind(message, index, keys[index], image.media_type),
+    ),
+  );
+  videos.forEach((video, index) =>
+    writes.push(
+      store.db
+        .prepare("INSERT INTO images (message, idx, r2_key, media_type, size, duration_ms) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(message, input.images.length + index, video.r2_key, video.media_type, video.size, video.duration_ms),
+      store.db
+        .prepare("UPDATE uploads SET message = ? WHERE id = ? AND app = ? AND login = ? AND message IS NULL")
+        .bind(message, video.id, store.app, store.login),
     ),
   );
   await store.db.batch(writes);
@@ -574,6 +688,145 @@ export async function changePending(
           .bind(change.text, chat, message, chat),
   ]);
   return changed.meta.changes === 1;
+}
+
+// --- Videos ----------------------------------------------------------------------------------------------------------
+
+/** An upload's ticket, as the live protocol's `_agentchatkit/upload` answers one: where to `PUT`, and the `uri`. */
+export interface UploadTicket {
+  uploadUrl: string;
+  uri: string;
+  headers: Record<string, string>;
+}
+
+interface UploadRow {
+  id: string;
+  media_type: string;
+  size: number;
+  put_at: number | null;
+  r2_key: string;
+  message: string | null;
+}
+
+/**
+ * Room for one of the sender's videos (`POST /v2/feedback/uploads {name, mimeType, size}`): a ticket, or the status
+ * that refuses it: `413` larger than 50 MB, `415` not MP4 or QuickTime, `429` too many not yet sent, `400` no size.
+ * Uploads a day old that no message took go first, bytes and all.
+ */
+export async function newUpload(
+  store: FeedbackStore,
+  body: unknown,
+  now: number,
+): Promise<UploadTicket | { status: 400 | 413 | 415 | 429; error: string }> {
+  const { mimeType, size } = (body ?? {}) as { mimeType?: unknown; size?: unknown };
+  if (typeof size !== "number" || !Number.isInteger(size) || size < 1) {
+    return { status: 400, error: "An upload needs its size in bytes." };
+  }
+  if (size > MAX_VIDEO_BYTES) {
+    return { status: 413, error: "A video can be at most 50 MB." };
+  }
+  const type = typeof mimeType === "string" ? mimeType.toLowerCase() : "";
+  if (!(VIDEO_TYPES as readonly string[]).includes(type)) {
+    return { status: 415, error: "Only MP4 and QuickTime videos can be sent." };
+  }
+  const { results: stale } = await store.db
+    .prepare("SELECT id, r2_key FROM uploads WHERE app = ? AND login = ? AND message IS NULL AND created_at < ?")
+    .bind(store.app, store.login, now - UPLOAD_STALE_MS)
+    .all<{ id: string; r2_key: string }>();
+  if (stale.length) {
+    await store.bucket.delete(stale.map((row) => row.r2_key));
+    await store.db.batch(stale.map((row) => store.db.prepare("DELETE FROM uploads WHERE id = ?").bind(row.id)));
+  }
+  const open = await store.db
+    .prepare("SELECT count(*) AS n FROM uploads WHERE app = ? AND login = ? AND message IS NULL")
+    .bind(store.app, store.login)
+    .first<number>("n");
+  if ((open ?? 0) >= MAX_OPEN_UPLOADS) {
+    return { status: 429, error: "Too many videos waiting to be sent. Send or remove some first." };
+  }
+  const id = newId("up");
+  await store.db
+    .prepare("INSERT INTO uploads (id, app, login, media_type, size, created_at, r2_key) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, store.app, store.login, type, size, now, uploadKey(store.prefix, id))
+    .run();
+  return { uploadUrl: uploadPath(id), uri: uploadPath(id), headers: { "Content-Type": type } };
+}
+
+/**
+ * An upload's bytes (`PUT /v2/feedback/uploads/{id}`), kept raw in R2 with their type. Again is fine until a message
+ * takes it. `404`: not the sender's upload, or no such one; `409`: a message has it; `413`: more bytes than it asked
+ * room for; `400`: no bytes.
+ */
+export async function putUpload(
+  store: FeedbackStore,
+  upload: string,
+  bytes: ArrayBuffer,
+  now: number,
+): Promise<200 | 400 | 404 | 409 | 413> {
+  const row = UPLOAD_ID.test(upload)
+    ? await store.db
+        .prepare(
+          "SELECT id, media_type, size, put_at, r2_key, message FROM uploads WHERE id = ? AND app = ? AND login = ?",
+        )
+        .bind(upload, store.app, store.login)
+        .first<UploadRow>()
+    : null;
+  if (!row) {
+    return 404;
+  }
+  if (row.message !== null) {
+    return 409;
+  }
+  if (!bytes.byteLength) {
+    return 400;
+  }
+  if (bytes.byteLength > row.size) {
+    return 413;
+  }
+  await store.bucket.put(row.r2_key, bytes, { httpMetadata: { contentType: row.media_type } });
+  await store.db
+    .prepare("UPDATE uploads SET put_at = ?, size = ? WHERE id = ? AND message IS NULL")
+    .bind(now, bytes.byteLength, row.id)
+    .run();
+  return 200;
+}
+
+/** The declared size of one of the sender's uploads still open for its bytes; null for any other. */
+export async function uploadRoom(store: FeedbackStore, upload: string): Promise<number | null> {
+  if (!UPLOAD_ID.test(upload)) {
+    return null;
+  }
+  return store.db
+    .prepare("SELECT size FROM uploads WHERE id = ? AND app = ? AND login = ? AND message IS NULL")
+    .bind(upload, store.app, store.login)
+    .first<number>("size");
+}
+
+/** Each video's upload, when every one is the sender's, put, and taken by no message; null otherwise. */
+async function readyUploads(
+  store: FeedbackStore,
+  videos: FeedbackVideo[],
+): Promise<Array<UploadRow & { duration_ms: number | null }> | null> {
+  const rows: Array<UploadRow & { duration_ms: number | null }> = [];
+  for (const video of videos) {
+    const row = await store.db
+      .prepare(
+        "SELECT id, media_type, size, put_at, r2_key, message FROM uploads" +
+          " WHERE id = ? AND app = ? AND login = ? AND put_at IS NOT NULL AND message IS NULL",
+      )
+      .bind(video.upload, store.app, store.login)
+      .first<UploadRow>();
+    if (!row) {
+      return null;
+    }
+    rows.push({ ...row, duration_ms: video.duration_ms });
+  }
+  return rows;
+}
+
+/** Whether a message may carry these videos: each the sender's upload, put, and not on another message. */
+export async function videosReady(store: FeedbackStore, input: FeedbackInput): Promise<boolean> {
+  return (await readyUploads(store, input.videos ?? [])) !== null;
 }
 
 // --- The runner ------------------------------------------------------------------------------------------------------
@@ -636,8 +889,24 @@ async function findMessage(store: FeedbackStore, chat: string, id: string): Prom
   return row ? stored(row) : null;
 }
 
+/** A video on a claimed message: the runner fetches its bytes with `POST /runner/media` and its `index`. */
+export interface ClaimedVideo {
+  index: number;
+  media_type: string;
+  size: number | null;
+  duration_ms: number | null;
+}
+
 export type ClaimAnswer =
-  | { ok: true; text: string; build: string | null; first: boolean; images: FeedbackImage[]; title: string }
+  | {
+      ok: true;
+      text: string;
+      build: string | null;
+      first: boolean;
+      images: FeedbackImage[];
+      videos: ClaimedVideo[];
+      title: string;
+    }
   | { ok: false; status: 404 | 409 };
 
 /** Pending → delivering, once: a second claim, or one racing it, is refused. Answers what the agent is to be told. */
@@ -659,11 +928,13 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
     return { ok: false, status: 409 };
   }
   const { results } = await store.db
-    .prepare("SELECT r2_key FROM images WHERE message = ? ORDER BY idx")
+    .prepare("SELECT idx, r2_key, media_type, size, duration_ms FROM images WHERE message = ? ORDER BY idx")
     .bind(id)
-    .all<{ r2_key: string }>();
+    .all<{ idx: number; r2_key: string; media_type: string; size: number | null; duration_ms: number | null }>();
+  // The pictures inline, as before; a video's bytes are too many for JSON, so it is only named.
+  const pictures = results.filter((row) => !isVideo(row.media_type));
   const images = await Promise.all(
-    results.map(async ({ r2_key }) => (await (await store.bucket.get(r2_key))?.json<FeedbackImage>()) ?? undefined),
+    pictures.map(async ({ r2_key }) => (await (await store.bucket.get(r2_key))?.json<FeedbackImage>()) ?? undefined),
   );
   const title = (await chatRow(store, chat))?.title ?? titleOf(found.text);
   return {
@@ -672,6 +943,9 @@ export async function runnerClaim(store: FeedbackStore, chat: string, id: string
     build: found.build,
     first: found.first,
     images: images.filter((image) => image !== undefined),
+    videos: results
+      .filter((row) => isVideo(row.media_type))
+      .map((row) => ({ index: row.idx, media_type: row.media_type, size: row.size, duration_ms: row.duration_ms })),
     title,
   };
 }
@@ -748,26 +1022,37 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
   };
 }
 
-/** One of the sender's screenshots: its bytes and type; null when the chat, message or image is not theirs. */
+export const isVideo = (mediaType: string) => mediaType.startsWith("video/");
+
+/**
+ * One of the sender's screenshots or videos: its bytes and type; null when the chat, message or attachment is not
+ * theirs. A video comes as R2 streams it, never through base64.
+ */
 export async function messageImage(
   store: FeedbackStore,
   chat: string,
   message: string,
   index: number,
-): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
+): Promise<{ bytes: Uint8Array | ReadableStream | string; mediaType: string; size?: number } | null> {
   if (!MESSAGE_ID.test(message) || !Number.isInteger(index) || index < 0 || !(await chatRow(store, chat))) {
     return null;
   }
   const row = await store.db
     .prepare(
-      "SELECT i.r2_key AS r2_key FROM images i JOIN messages m ON m.id = i.message WHERE i.message = ? AND m.chat = ? AND i.idx = ?",
+      "SELECT i.r2_key AS r2_key, i.media_type AS media_type FROM images i JOIN messages m ON m.id = i.message" +
+        " WHERE i.message = ? AND m.chat = ? AND i.idx = ?",
     )
     .bind(message, chat, index)
-    .first<{ r2_key: string }>();
-  const image = row ? await (await store.bucket.get(row.r2_key))?.json<FeedbackImage>() : null;
-  return image
-    ? { bytes: Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0)), mediaType: image.media_type }
-    : null;
+    .first<{ r2_key: string; media_type: string }>();
+  const object = row ? await store.bucket.get(row.r2_key) : null;
+  if (!row || !object) {
+    return null;
+  }
+  if (isVideo(row.media_type)) {
+    return { bytes: object.body, mediaType: row.media_type, size: object.size };
+  }
+  const image = await object.json<FeedbackImage>();
+  return { bytes: Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0)), mediaType: image.media_type };
 }
 
 /** A chat's title and its agent side as it stands, before the runner replaces the side. */
@@ -780,9 +1065,9 @@ export async function chatSide(
 }
 
 /**
- * One of the sender's chats removed with all it keeps: its messages and their screenshots' rows, the agent's words,
- * and the send receipts that name it. Answers the screenshots' R2 keys, for the caller to remove; null when the chat
- * is not the sender's.
+ * One of the sender's chats removed with all it keeps: its messages and their screenshots' and videos' rows, the
+ * agent's words, and the send receipts that name it. Answers the screenshots' and videos' R2 keys, for the caller to
+ * remove; null when the chat is not the sender's.
  */
 export async function deleteChat(store: FeedbackStore, chat: string): Promise<string[] | null> {
   if (!(await chatRow(store, chat))) {
@@ -793,6 +1078,7 @@ export async function deleteChat(store: FeedbackStore, chat: string): Promise<st
     .bind(chat)
     .all<{ r2_key: string }>();
   await store.db.batch([
+    store.db.prepare("DELETE FROM uploads WHERE message IN (SELECT id FROM messages WHERE chat = ?)").bind(chat),
     store.db.prepare("DELETE FROM images WHERE message IN (SELECT id FROM messages WHERE chat = ?)").bind(chat),
     store.db.prepare("DELETE FROM messages WHERE chat = ?").bind(chat),
     store.db.prepare("DELETE FROM agent_messages WHERE chat = ?").bind(chat),

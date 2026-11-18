@@ -10,6 +10,10 @@ import {
   chatSide,
   deleteChat,
   messageImage,
+  newUpload,
+  putUpload,
+  uploadRoom,
+  videosReady,
   feedbackChat,
   feedbackList,
   type FeedbackStore,
@@ -171,9 +175,11 @@ const FEEDBACK_PATH = /^\/feedback(?:\/([^/]+))?$/;
 const DIRECT_FEEDBACK_PATH = /^\/v2\/feedback(?:\/([^/]+))?$/;
 /** A screenshot of the sender's own, for the live protocol's `resource_link` (agentchatkit docs/live-protocol.md). */
 const IMAGE_OF_CHAT_PATH = /^\/v2\/feedback\/([^/]+)\/images\/([^/]+)\/(\d{1,2})$/;
+/** A video's room (`POST`), and its bytes (`PUT .../{id}`), before the message that names it (docs/api.md#videos). */
+const UPLOADS_PATH = /^\/v2\/feedback\/uploads(?:\/([^/]+))?$/;
 const DEVICES_PATH = /^\/v2\/devices(?:\/([0-9a-f]{64,200}))?$/;
 const APNS_TOKEN = /^[0-9a-f]{64,200}$/;
-const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait)$/;
+const RUNNER_PATH = /^\/runner\/(poll|claim|result|agent|wait|media)$/;
 
 function hasBearer(request: Request, token: string | undefined): boolean {
   return !!token && request.headers.get("Authorization") === `Bearer ${token}`;
@@ -213,6 +219,7 @@ async function feedbackRoute(
       : Response.json({ error: "Only the test app's chats can be deleted." }, { status: 403 });
   }
   const now = Date.now();
+  let refusedVideo = false;
   if (role !== "issue") {
     if (request.method !== "POST") {
       if (!id) {
@@ -228,7 +235,17 @@ async function feedbackRoute(
     if (!input) {
       return Response.json({ error: "That feedback can't be sent." }, { status: 400 });
     }
-    const target = await once(store, id, body, () => addFeedback(store, id ?? null, input, now));
+    // A retry of a message that went names uploads it took already: its receipt answers before they are checked.
+    const target = await once(store, id, body, async () => {
+      if (!(await videosReady(store, input))) {
+        refusedVideo = true;
+        return null;
+      }
+      return addFeedback(store, id ?? null, input, now);
+    });
+    if (refusedVideo) {
+      return Response.json({ error: "A video on this message has not been uploaded." }, { status: 400 });
+    }
     if (target) {
       await Promise.all([wakeRunner(env.RUNNER_WAKE), chatChanged(env, target)]);
     }
@@ -266,8 +283,11 @@ async function feedbackRoute(
   }
   const body = await bodyOf(request);
   const input = parseFeedbackInput(body);
-  if (!input) {
-    return Response.json({ error: "That feedback can't be sent." }, { status: 400 });
+  if (!input || input.videos?.length) {
+    return Response.json(
+      { error: input ? "Videos can't go on a public issue." : "That feedback can't be sent." },
+      { status: 400 },
+    );
   }
   let limited = false;
   const target = await once(store, id, body, async () => {
@@ -413,6 +433,11 @@ async function runnerRoute(
           { status: claimed.status },
         );
   }
+  if (kind === "media") {
+    const index = typeof body?.index === "number" ? body.index : -1;
+    const found = await messageImage(sender.store, chat, message, index);
+    return found ? attachmentResponse(found, "no-store") : Response.json({ error: "no such media" }, { status: 404 });
+  }
   if (kind === "result") {
     const delivered = body?.status === "delivered";
     if (!delivered && body?.status !== "failed") {
@@ -518,6 +543,14 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
       ),
     );
   }
+  const uploads = UPLOADS_PATH.exec(pathname);
+  if (uploads) {
+    const sender = await tokenSender(request, env, apps);
+    if (!sender) {
+      return Response.json({ error: "Sign in again." }, { status: 401 });
+    }
+    return guarded(() => uploadRoute(uploads[1], request, env, sender));
+  }
   const picture = IMAGE_OF_CHAT_PATH.exec(pathname);
   if (picture && request.method === "GET") {
     const sender = await tokenSender(request, env, apps);
@@ -530,11 +563,7 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
       picture[2],
       Number(picture[3]),
     );
-    return found
-      ? new Response(found.bytes, {
-          headers: { "Content-Type": found.mediaType, "Cache-Control": "private, max-age=86400, immutable" },
-        })
-      : notFound();
+    return found ? attachmentResponse(found, "private, max-age=86400, immutable") : notFound();
   }
   if (pathname === "/v2/acp") {
     return env.LIVE_ROOMS && env.ACP_SECRET
@@ -558,6 +587,64 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
     return guarded(() => feedbackRoute(direct![1], request, env, sender.app, sender.config, sender.login, sender.name));
   }
   return new Response("not found\n", { status: 404 });
+}
+
+/** A screenshot's or a video's bytes, with their type and, for a video, their length. */
+function attachmentResponse(
+  found: { bytes: Uint8Array | ReadableStream | string; mediaType: string; size?: number },
+  cache: string,
+): Response {
+  const headers: Record<string, string> = { "Content-Type": found.mediaType, "Cache-Control": cache };
+  if (found.size !== undefined) {
+    headers["Content-Length"] = String(found.size);
+  }
+  return new Response(found.bytes as BodyInit, { headers });
+}
+
+/**
+ * A video before its message (docs/api.md#videos): `POST /v2/feedback/uploads {name, mimeType, size}` asks for room and
+ * answers the ticket; `PUT /v2/feedback/uploads/{id}` sends its bytes, with the same token. Owners and builders only:
+ * an issue takes no videos.
+ */
+async function uploadRoute(
+  id: string | undefined,
+  request: Request,
+  env: FeatureKitEnv,
+  sender: { app: string; login: string; config: AppConfig },
+): Promise<Response> {
+  const role = roleOf(sender.config, sender.login);
+  if (role === null || role === "issue") {
+    return Response.json({ error: "Videos can't be sent here." }, { status: 403 });
+  }
+  const store = senderStore(env.DB, env.FEEDBACK, sender.app, sender.login);
+  const now = Date.now();
+  if (request.method === "POST" && id === undefined) {
+    const ticket = await newUpload(store, await bodyOf(request), now);
+    return "status" in ticket
+      ? Response.json({ error: ticket.error }, { status: ticket.status })
+      : Response.json(ticket);
+  }
+  if (request.method !== "PUT" || id === undefined) {
+    return notFound();
+  }
+  // More than it asked room for is refused before a byte is read, when the request says its length.
+  const room = await uploadRoom(store, id);
+  const length = Number(request.headers.get("Content-Length") ?? NaN);
+  if (room !== null && length > room) {
+    return Response.json({ error: "That is more than this upload asked room for." }, { status: 413 });
+  }
+  const status =
+    room === null
+      ? await putUpload(store, id, new ArrayBuffer(0), now)
+      : await putUpload(store, id, await request.arrayBuffer(), now);
+  const words: Record<number, string> = {
+    200: "",
+    400: "An upload needs its bytes.",
+    404: "No such upload.",
+    409: "That upload is on a message already.",
+    413: "That is more than this upload asked room for.",
+  };
+  return status === 200 ? Response.json({ ok: true }) : Response.json({ error: words[status] }, { status });
 }
 
 /** A push to the sender's devices, when the app has a topic and the Worker the team key; gone devices forgotten. */

@@ -23,6 +23,7 @@ import {
   type FeedbackChat,
   feedbackChat,
   type FeedbackStore,
+  isVideo,
   type MessageStatus,
   parseFeedbackInput,
   senderStore,
@@ -70,6 +71,8 @@ interface ImageRow {
   message: string;
   idx: number;
   media_type: string;
+  size: number | null;
+  duration_ms: number | null;
 }
 
 interface AgentRow {
@@ -130,13 +133,24 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
     name: string | null,
   ): SessionUpdate {
     const content: ContentBlock[] = row.text ? [{ type: "text", text: row.text }] : [];
+    let pictures = 0;
+    let videos = 0;
     for (const image of images) {
-      content.push({
-        type: "resource_link",
-        name: `Screenshot ${image.idx + 1}`,
-        mimeType: image.media_type,
-        uri: `/v2/feedback/${chat}/images/${row.id}/${image.idx}`,
-      });
+      const uri = `/v2/feedback/${chat}/images/${row.id}/${image.idx}`;
+      if (isVideo(image.media_type)) {
+        videos += 1;
+        content.push({
+          type: "resource_link",
+          name: `Video ${videos}`,
+          mimeType: image.media_type,
+          uri,
+          ...(image.size !== null ? { size: image.size } : {}),
+          ...(image.duration_ms !== null ? { _meta: { agentchatkit: { durationMs: image.duration_ms } } } : {}),
+        });
+      } else {
+        pictures += 1;
+        content.push({ type: "resource_link", name: `Screenshot ${pictures}`, mimeType: image.media_type, uri });
+      }
     }
     return {
       sessionUpdate: "user_message",
@@ -199,7 +213,8 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
           .all<AgentRow>(),
         deps.db
           .prepare(
-            "SELECT i.message AS message, i.idx AS idx, i.media_type AS media_type FROM images i JOIN messages m ON m.id = i.message" +
+            "SELECT i.message AS message, i.idx AS idx, i.media_type AS media_type, i.size AS size," +
+              " i.duration_ms AS duration_ms FROM images i JOIN messages m ON m.id = i.message" +
               " WHERE m.chat = ? AND m.seq > ? ORDER BY i.idx",
           )
           .bind(chat, since)

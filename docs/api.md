@@ -76,13 +76,36 @@ and bodies are the ones above, under `/v2`:
 | `DELETE /v2/feedback/{id}` | | as `DELETE /feedback/{id}` |
 | `POST /v2/devices` | `{token, environment: "production" \| "sandbox"}`: the device's APNs token, in hex | `{ok}`; `400` |
 | `DELETE /v2/devices/{token}` | | `{ok}` |
-| `GET /v2/feedback/{id}/images/{message}/{n}` | | the message's `n`th screenshot (from 0), its bytes with their `Content-Type`; `404` |
+| `GET /v2/feedback/{id}/images/{message}/{n}` | | the message's `n`th screenshot or video (from 0), its bytes with their `Content-Type`; `404` |
+| `POST /v2/feedback/uploads` | `{name, mimeType, size}`: a video to send | `{uploadUrl, uri, headers}`; `413`, `415`, `429` ([videos](#videos)) |
+| `PUT /v2/feedback/uploads/{id}` | the video's bytes | `{ok}`; `404`, `409`, `413` |
 
 - Every request carries `Authorization: Bearer <FeedbackKit token>`. None, or one that does not verify: `401`, and
   the app asks its backend for a new one.
 - A message's answer is its first checkmark: FeedbackKit has it stored (`pending`). `delivered` is the second: it is
   in the coding thread.
 - A device token belongs to whoever registered it last.
+
+### Videos
+
+A video is too large for a message's JSON, so it goes up first, then the message names it. Owners and builders only:
+an issue takes none (`403`, and `400` on the message).
+
+1. `POST /v2/feedback/uploads {name, mimeType, size}` asks for room. The answer is the live protocol's upload ticket:
+   `uploadUrl` (where to `PUT` the bytes, with the same token and `headers`) and `uri` (what the message names). It is
+   refused `413` over 50 MB, `415` unless `video/mp4` or `video/quicktime`, and `429` while the sender holds ten
+   uploads that no message took; those are dropped, bytes and all, a day after they were asked for.
+2. `PUT {uploadUrl}` sends the bytes, raw. `413`: more than `size`; `404`: not the sender's upload; `409`: a message
+   has it. Again is fine until then.
+3. `POST /v2/feedback[/{id}]` with `videos: [{uri, mimeType, size, duration_ms?}]` (at most two, at most four
+   pictures and videos together). Each `uri` must be the sender's own upload, put, and on no other message: else `400`.
+   A message can be only a video; a new chat from one is titled "Video".
+
+- In the chat, a video is an attachment after the message's pictures: `images` counts both (so an app from before
+  videos shows one), and `videos` says how many are videos. Live, it is a `resource_link` named `Video N` with `size`
+  and `_meta.agentchatkit.durationMs`; `/v2/feedback/{id}/images/{message}/{n}` streams its bytes.
+- The runner's claim lists a message's `videos` (`index`, `media_type`, `size`, `duration_ms`) without their bytes;
+  it fetches each with `POST /runner/media` ([worker.md](worker.md#the-runners-messages)).
 
 ### Tokens
 
@@ -110,8 +133,8 @@ the same token. FeedbackKit's side is [worker/src/live.ts](../worker/src/live.ts
 - A chat is a session: `sessionId` is its id. The app `session/resume`s it; it never calls `session/new`. New chats
   and the list stay on `POST /v2/feedback` and `GET /v2/feedback`.
 - The person's messages are `user_message`s with `_meta.agentchatkit` `{at, sender, status, clientRef?, detail}`:
-  `pending` (one tick), `delivering`, `delivered` (two ticks), `failed`, `removed`. Screenshots are `resource_link`s to
-  `/v2/feedback/{id}/images/{message}/{n}`. The agent's words are `agent_message`s. The chat's state is a
+  `pending` (one tick), `delivering`, `delivered` (two ticks), `failed`, `removed`. Screenshots and videos are
+  `resource_link`s to `/v2/feedback/{id}/images/{message}/{n}`. The agent's words are `agent_message`s. The chat's state is a
   `state_update`, `running` or `idle`, with `activity`, `problem` and `extra` `{builderOnline, thread}`.
 - The cursor is the chat's change counter. A cursor FeedbackKit can't resume from answers `-32602`; resume from start.
 - Writes: `session/prompt` sends a message at once (a repeat `clientRef` answers the first). `_agentchatkit/edit`

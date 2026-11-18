@@ -33,6 +33,7 @@ test("feedback is words with the build it is about, and nothing else gets throug
     text: "The back button jumps",
     build: "142",
     images: [],
+    videos: [],
   });
   assert.equal(parseFeedbackInput({ text: "   " }), null);
   assert.equal(parseFeedbackInput({ text: "x".repeat(8_001) }), null);

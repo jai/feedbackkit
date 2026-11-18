@@ -80,20 +80,34 @@ export function memoryD1(before?: string): D1Database & { sqlite: DatabaseSync }
   } as unknown as D1Database & { sqlite: DatabaseSync };
 }
 
-/** R2 as the Worker uses it: versions, a put over a moved version refused, prefix listing, text bodies. */
-export function memoryBucket(): R2Bucket & { objects: Map<string, { body: string; etag: string }> } {
-  const objects = new Map<string, { body: string; etag: string }>();
+/** An object in `memoryBucket`: text as it came, bytes (a video's) as bytes, with their type. */
+type MemoryObject = { body: string | Uint8Array; etag: string; contentType?: string };
+
+/** R2 as the Worker uses it: versions, a put over a moved version refused, prefix listing, text and byte bodies. */
+export function memoryBucket(): R2Bucket & { objects: Map<string, MemoryObject> } {
+  const objects = new Map<string, MemoryObject>();
   let version = 0;
   const object = (key: string) => {
     const found = objects.get(key)!;
-    return { key, etag: found.etag, json: async () => JSON.parse(found.body), body: found.body, httpMetadata: {} };
+    return {
+      key,
+      etag: found.etag,
+      json: async () => JSON.parse(String(found.body)),
+      body: found.body,
+      size: typeof found.body === "string" ? found.body.length : found.body.byteLength,
+      httpMetadata: { contentType: found.contentType },
+    };
   };
   return {
     objects,
     async get(key: string) {
       return objects.has(key) ? object(key) : null;
     },
-    async put(key: string, value: unknown, options?: { onlyIf?: { etagMatches?: string } | Headers }) {
+    async put(
+      key: string,
+      value: unknown,
+      options?: { onlyIf?: { etagMatches?: string } | Headers; httpMetadata?: { contentType?: string } },
+    ) {
       const onlyIf = options?.onlyIf;
       if (
         onlyIf instanceof Headers
@@ -102,7 +116,15 @@ export function memoryBucket(): R2Bucket & { objects: Map<string, { body: string
       ) {
         return null;
       }
-      objects.set(key, { body: typeof value === "string" ? value : "bytes", etag: `v${++version}` });
+      const body =
+        typeof value === "string"
+          ? value
+          : value instanceof ArrayBuffer
+            ? new Uint8Array(value.slice(0))
+            : value instanceof Uint8Array
+              ? value.slice()
+              : "bytes";
+      objects.set(key, { body, etag: `v${++version}`, contentType: options?.httpMetadata?.contentType });
       return object(key);
     },
     async list({ prefix, cursor }: { prefix: string; cursor?: string }) {
@@ -117,5 +139,5 @@ export function memoryBucket(): R2Bucket & { objects: Map<string, { body: string
         objects.delete(key);
       }
     },
-  } as unknown as R2Bucket & { objects: Map<string, { body: string; etag: string }> };
+  } as unknown as R2Bucket & { objects: Map<string, MemoryObject> };
 }

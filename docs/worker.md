@@ -49,7 +49,8 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
 | Route | Body | Answer |
 |---|---|---|
 | `/runner/poll` | `{orca, detail?}`: whether the agents' Mac answers, and why not | `{work: [{chat, message, first, at}]}`, oldest first |
-| `/runner/claim` | `{chat, message}` | `{ok, text, build, first, title, images}`; `409` not pending; `404` |
+| `/runner/claim` | `{chat, message}` | `{ok, text, build, first, title, images, videos}`; `409` not pending; `404` |
+| `/runner/media` | `{chat, message, index}` | the message's `index`th attachment, its bytes with their `Content-Type`; `404` |
 | `/runner/result` | `{chat, message, status: "delivered" \| "failed", detail?}` | `{ok}`; `409` not claimed |
 | `/runner/agent` | `{chat, messages: [{id, text, at}], isWorking, activity, thread, shipped?}` | `{ok}`; `404` no chat; `400` a bad side |
 | `/runner/wait` | `{since, ms}`: the wake count the runner last saw, and how long to hold (at most 25,000) | `{seq}`; `404` no long poll |
@@ -64,6 +65,8 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
 - `agent` replaces the agent's side of the chat: all its messages so far (at most 500, 20,000 characters each), and
   `shipped` ([api.md](api.md#shipped), `worker/src/shipped.ts`): kept with the side, `null` when absent. A `shipped` that
   is not as described refuses the whole side.
+- A claim's `images` are the message's screenshots inline (`{media_type, data}`); its `videos`
+  (`[{index, media_type, size, duration_ms}]`) are only named, and `media` fetches each one's bytes.
 - Storage ([below](#storage)): a message is in D1 before its send answers.
 
 ## Storage
@@ -72,6 +75,8 @@ FeedbackKit's Worker is the one durable store. D1 (`feedbackkit`, binding `DB`, 
 [worker/migrations](../worker/migrations)) holds every chat, message, delivery state, agent side and coding thread;
 R2 (`featurekit`, binding `FEEDBACK`) holds the screenshots, each message's under
 `apps/<app>/users/<login>/feedback/chats/<chat>/img/<message>/<n>.json` and an issue's public ones under `images/`.
+A video's bytes are raw under `apps/<app>/users/<login>/feedback/uploads/<upload>`, from its `PUT`
+([api.md](api.md#videos)); D1's `uploads` says whose it is and which message took it.
 
 - A send writes its screenshots to R2, then its chat and message to D1 in one transaction, then answers: a message
   the app has an answer for is kept (one checkmark). `delivered` from the runner is the second.
