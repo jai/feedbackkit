@@ -52,7 +52,7 @@ jobs:
     # `runner-menu` (FeedbackKitRunner.zip), which runner/MenuBar/install.sh downloads on Jai's Mac. Nothing builds on
     # Jai's Macs (jai/ci RULES.md). The prerelease's tag stays where it was first made; the zip is replaced.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     permissions:
       contents: write
