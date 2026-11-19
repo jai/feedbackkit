@@ -48,7 +48,7 @@ jobs:
         with:
           name: feedback-integration-host
           path: ${{ runner.temp }}/feedback-host.log
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: ignore
       - name: Remove disposable products
         if: always()

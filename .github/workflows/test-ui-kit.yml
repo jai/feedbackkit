@@ -51,7 +51,7 @@ jobs:
           path: |
             tmp/*.xcresult
             ${{ runner.temp }}/feedback-*.log
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: ignore
       - name: Release this job's services, simulator and build products
         if: always()
