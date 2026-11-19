@@ -145,8 +145,8 @@ Workflow lint, release metadata and Worker deployment run on hosted Ubuntu. A fu
 test ownership. Main lint also compiles both Demo platforms and the menu bundle, so every shipped target is built.
 
 Each job prepares its dependencies, then runs its named target. Integration/UI prepares a matching ACP host and
-checks its ready signal; cleanup stops only its recorded PID. UI creates/deletes its own simulator and uploads
-original xcresult bundles, host logs and optional screenshots before cleanup, retained seven days. Jobs remove their
+checks its ready signal; cleanup stops only its recorded PID. UI creates/deletes its own simulator and, on failure, uploads
+original xcresult bundles, host logs and optional screenshots before cleanup, retained three days. Jobs remove their
 builds, generated projects, virtualenv and package dependencies. Host-managed tool/download caches remain reusable;
 this is job-product cleanup rather than deletion of other jobs' shared caches. Ephemeral native runners discard their workspaces afterward; hosted Linux runners are discarded.
 
