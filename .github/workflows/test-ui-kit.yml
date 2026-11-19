@@ -47,14 +47,14 @@ jobs:
           TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS: ${{ runner.temp }}/feedback-screens
         run: make test-ui-kit PLATFORM="$PLATFORM" SIMULATOR="${SIMULATOR:-}"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure()
         with:
           name: feedback-ui-${{ matrix.platform }}
           path: |
             tmp/*.xcresult
             ${{ runner.temp }}/feedback-screens
             ${{ runner.temp }}/feedback-*.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: ignore
       - name: Release this job's services, simulator and build products
         if: always()
