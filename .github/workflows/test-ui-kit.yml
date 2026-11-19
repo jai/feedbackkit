@@ -25,7 +25,6 @@ jobs:
       - name: Prepare the project, destination and local services
         run: |
           mise exec xcodegen@2.46.0 -- xcodegen generate --spec Demo/project.yml --quiet
-          mkdir -p "$RUNNER_TEMP/feedback-screens"
           if [ "$PLATFORM" = ios ]; then
             runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.name | startswith("iOS")))] | last | .identifier')
             simulator=$(xcrun simctl create "feedback-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 'iPhone 17' "$runtime")
@@ -43,8 +42,7 @@ jobs:
           done
           grep -q "^ready " "$RUNNER_TEMP/feedback-host.log"
       - name: Run native UI tests
-        env:
-          TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS: ${{ runner.temp }}/feedback-screens
+        # Screenshots stay in XCTest attachments, inside the result bundle.
         run: make test-ui-kit PLATFORM="$PLATFORM" SIMULATOR="${SIMULATOR:-}"
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -52,7 +50,6 @@ jobs:
           name: feedback-ui-${{ matrix.platform }}
           path: |
             tmp/*.xcresult
-            ${{ runner.temp }}/feedback-screens
             ${{ runner.temp }}/feedback-*.log
           retention-days: 3
           if-no-files-found: ignore
@@ -67,4 +64,4 @@ jobs:
             xcrun simctl shutdown "$SIMULATOR" || true
             xcrun simctl delete "$SIMULATOR"
           fi
-          rm -rf -- .build tmp Demo/*.xcodeproj "$RUNNER_TEMP/feedback-screens"
+          rm -rf -- .build tmp Demo/*.xcodeproj
