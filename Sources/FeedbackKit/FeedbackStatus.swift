@@ -135,6 +135,26 @@ struct FeedbackStatusLabel: View {
     }
 }
 
+/// A row's status. A tidied chat's agent can't take a reply: what it shipped, else Read-only.
+struct FeedbackRowStatus: View {
+    @Environment(\.chatTheme) private var theme
+    let thread: FeedbackThread
+
+    var body: some View {
+        if let status = FeedbackStatus(agent: thread.ended ? nil : thread.agent, shipped: thread.shipped) {
+            FeedbackStatusLabel(status: status)
+        } else if thread.ended {
+            Label("Read-only", systemImage: "lock")
+                .labelStyle(.titleAndIcon)
+                .imageScale(.small)
+                .foregroundStyle(theme.inkQuiet)
+                .chatTextStyle(.meta)
+                .lineLimit(1)
+                .accessibilityIdentifier("feedback-status-read_only")
+        }
+    }
+}
+
 /// The last line of a released feedback chat: which release carries it, linked to its notes. A host that shows its own
 /// conversation puts it at the end (`FeedbackConversation.shipped`).
 public struct FeedbackReleaseNote: View {

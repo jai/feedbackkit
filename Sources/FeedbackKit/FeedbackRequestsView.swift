@@ -228,7 +228,7 @@ private struct FeedbackListView: View {
             row(
                 route: .thread(thread.id), title: thread.title,
                 date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
-                agent: thread.agent, shipped: thread.shipped, custom: customLabel?(thread)
+                thread: thread, custom: customLabel?(thread)
             )
         } header: {
             if !model.list.builderOnline {
@@ -308,18 +308,18 @@ private struct FeedbackListView: View {
 
     @ViewBuilder
     private func row(
-        route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent? = nil,
-        shipped: FeedbackShipped? = nil, custom: AnyView? = nil
+        route: FeedbackRoute, title: String, date: Date?, isSelected: Bool, thread: FeedbackThread? = nil,
+        custom: AnyView? = nil
     ) -> some View {
         if isStacked {
             NavigationLink(value: route) {
-                rowLabel(title: title, date: date, isSelected: false, agent: agent, shipped: shipped, custom: custom)
+                rowLabel(title: title, date: date, isSelected: false, thread: thread, custom: custom)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("feedback-thread")
         } else {
             Button { open(route) } label: {
-                rowLabel(title: title, date: date, isSelected: isSelected, agent: agent, shipped: shipped, custom: custom)
+                rowLabel(title: title, date: date, isSelected: isSelected, thread: thread, custom: custom)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("feedback-thread")
@@ -327,8 +327,7 @@ private struct FeedbackListView: View {
     }
 
     private func rowLabel(
-        title: String, date: Date?, isSelected: Bool, agent: FeedbackThreadAgent?, shipped: FeedbackShipped?,
-        custom: AnyView?
+        title: String, date: Date?, isSelected: Bool, thread: FeedbackThread?, custom: AnyView?
     ) -> some View {
         Group {
             if let custom {
@@ -336,8 +335,8 @@ private struct FeedbackListView: View {
             } else {
                 ChatThreadRow(title: title) {
                     HStack(spacing: ChatSpace.sm) {
-                        if let status = FeedbackStatus(agent: agent, shipped: shipped) {
-                            FeedbackStatusLabel(status: status)
+                        if let thread {
+                            FeedbackRowStatus(thread: thread)
                         }
                         if let date {
                             Text(ThreadTimeFormat().age(date, now: .now))
@@ -347,10 +346,12 @@ private struct FeedbackListView: View {
                         }
                     }
                 } chips: {
-                    if let shipped {
+                    if let shipped = thread?.shipped {
                         FeedbackShippedChips(shipped: shipped)
                     }
                 }
+                // Greyed out: a reply can't reach its agent any more.
+                .environment(\.chatTheme, thread?.ended == true ? theme.readOnly : theme)
             }
         }
         .background(theme.groundCard)
@@ -372,5 +373,14 @@ struct BuilderNote: View {
         .foregroundStyle(theme.toneWaiting)
         .padding(.horizontal, ChatSpace.lg)
         .accessibilityIdentifier("feedback-builder-offline")
+    }
+}
+
+extension ChatTheme {
+    /// A read-only chat's row: its title in the quiet ink.
+    var readOnly: ChatTheme {
+        var theme = self
+        theme.ink = inkQuiet
+        return theme
     }
 }

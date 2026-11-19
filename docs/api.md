@@ -17,7 +17,7 @@ App routes, on the app's backend with the app's own auth:
 | `DELETE /feedback/{id}` | | `{ok}`: the chat is gone; only a [test app](#the-test-app)'s chats, `403` for any other app |
 
 - A chat: `{id, messages: [{id, role: "you" \| "agent", text, anchor: null, images, status?}], isWorking, activity, problem,
-  costCents: null, model: null, effort: null, builderOnline, thread, shipped}`. `shipped`, also on each list row, is
+  costCents: null, model: null, effort: null, builderOnline, thread, shipped, ended}`. `shipped`, also on each list row, is
   [what the chat's feedback shipped](#shipped), or `null` until the runner has looked. `thread` is `{host, id}`, the agent's Agents
   thread, once the runner has found it.
 - A sender's message carries its persisted `status`: `pending`, `delivering`, `delivered` or `failed`. An agent's
@@ -30,9 +30,11 @@ App routes, on the app's backend with the app's own auth:
   Each row's `thread` is the existing coding thread `{host, id}`, or `null` until the runner names it. A host can use it to draw live status and accessories without opening every conversation.
   Each row's `agent` is `{state, activity, queued?}`: `working` (with `activity`) while the agent works, and with
   `queued: true` while a message waits for the runner or the agent's next turn; `needs_you` when it spoke last and
-  stopped; else `idle`.
+  stopped; else `idle`. A failed message waits for nothing, so it never makes a row queued.
+- `ended: true`, on a chat and its row, once the runner tidied its agent's chat away (or it is gone from Orca): a reply
+  can't reach it. FeedbackKit greys the row out and shows a note in place of the reply box. Absent: not ended.
 - **A row's status**, as FeedbackKit shows it (`FeedbackStatus`): Queued, Building (the agent works), then what shipped
-  (Released, Checks failed, On main, PR open), then Needs you or Idle. An agent that stopped after it shipped is done,
+  (Released, Checks failed, On main, PR open), then Needs you or Idle. An ended chat is Read-only unless it shipped. An agent that stopped after it shipped is done,
   not waiting. A released chat ends with the release that carries it (`FeedbackReleaseNote`); a host that shows its own
   conversation gets `shipped` in `FeedbackConversation`.
 
