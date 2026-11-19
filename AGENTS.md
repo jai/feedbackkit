@@ -14,7 +14,7 @@ README.md says what the package, the Worker and the demo are. What it leaves out
   UI targets. Update Feedback-owned screen text and accessibility assertions together; shared chat behavior belongs
   in AgentChatKit's tests.
 - **Releases** use conventional commits and git-cliff through `generate-release-candidate.yml` and `release.yml`.
-  Candidates run all required layers before a `vX.Y.Z` source release. The external clock/runner enablement is a
-  separate operational task. Do not dispatch releases or change live hosts as part of test cleanup.
+  Candidates run all required layers before a `vX.Y.Z` source release. The external clock starts candidate generation
+  every three hours. Native workflows use the existing Zoomies lanes; release validation does not change host cordons.
 - **Test commands and workflows** are documented in `docs/workflow.md`; hooks fix staged files, lint the component
   before commit and run isolated units before push. Integration, UI and deployed E2E remain separate.

@@ -108,13 +108,13 @@ component versioning would require a deliberate updater/release migration and is
 `test-ui-kit` runs from `release`, with complete iOS and macOS test plans. `lint-workflows` runs actionlint when
 workflow files change. There is no mixed `ci.yml`, live-server unit job, scheduled GitHub cron or release-please lane.
 
-`generate-release-candidate` is dispatch-only for the external clock; its registration/enablement remains separate.
+`generate-release-candidate` is dispatch-only for the external clock; the release clock dispatches it every three hours.
 It reads conventional commits with git-cliff, skips an unchanged candidate, and retains `rc-kit-v<version>-<commit>`.
 A queued/running kit release prevents another candidate. `release` runs lint and units first, then integration, then
 UI after cheaper gates. Only after all pass does publishing acquire an App token and tag the tested commit `vX.Y.Z`.
 Existing source-release publication starts `deploy-kit`: deploy the authenticated Worker/migrations and publish the
 menu asset. `deploy-sample` retains the existing explicit manual deploy/teardown interface for the example backend.
-No candidate, release, deploy or host operation is performed by this cleanup.
+Release validation uses the candidate workflow; host capacity and cordons remain governed by the CI service.
 
 ## Test boundaries and ownership
 
@@ -140,15 +140,15 @@ staged files, stage their output, then `make lint-kit` validates formatting, sta
 builds and public API compatibility. Before push `make test-unit-kit` runs isolated units only. `make fix FILES=...`
 is the same native-fix entry point. Hooks do not run UI, integrations, deployment or a full app archive.
 
-Native Swift/AppKit requires macOS; jobs retain GitHub-hosted macOS runners. Workflow lint/release metadata run on
-hosted Ubuntu. A future split of ancillary Node/Python jobs onto Linux is an execution optimization, not a change to
+Native Swift/AppKit checks use the existing Zoomies `mac` lane; native UI uses the dedicated `mac-desktop` lane.
+Workflow lint, release metadata and Worker deployment run on hosted Ubuntu. A future split of ancillary Node/Python jobs onto Linux is an execution optimization, not a change to
 test ownership. Main lint also compiles both Demo platforms and the menu bundle, so every shipped target is built.
 
 Each job prepares its dependencies, then runs its named target. Integration/UI prepares a matching ACP host and
 checks its ready signal; cleanup stops only its recorded PID. UI creates/deletes its own simulator and uploads
 original xcresult bundles, host logs and optional screenshots before cleanup, retained seven days. Jobs remove their
 builds, generated projects, virtualenv and package dependencies. Host-managed tool/download caches remain reusable;
-this is job-product cleanup rather than deletion of other jobs' shared caches. Hosted runners are discarded afterward.
+this is job-product cleanup rather than deletion of other jobs' shared caches. Ephemeral native runners discard their workspaces afterward; hosted Linux runners are discarded.
 
 `make lint` runs all lint targets. `make all-tests` runs the three layers with UI destination/local host explicitly
 prepared. There is no app-update notification workflow because no TestFlight update-notification product ships here.

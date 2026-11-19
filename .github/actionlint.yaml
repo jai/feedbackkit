@@ -1,1 +1,2 @@
-# No suppressed workflow diagnostics.
+self-hosted-runner:
+  labels: [zoomies, mac, mac-desktop]

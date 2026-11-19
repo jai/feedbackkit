@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: macos-latest
+    runs-on: [self-hosted, zoomies, mac]
     timeout-minutes: 40
     env:
       MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
