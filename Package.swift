@@ -32,5 +32,6 @@ let package = Package(
             .product(name: "AgentChatLiveTesting", package: "agentchatkit"),
             .product(name: "DurableNetworking", package: "durable-networking"),
         ], path: "Tests/FeedbackKitTests/Integration"),
+        .testTarget(name: "FeedbackKitRenderingTests", dependencies: ["FeedbackKit"]),
     ]
 )

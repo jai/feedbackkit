@@ -75,8 +75,10 @@ cd Demo && xcodegen && open FeedbackDemo.xcodeproj    # run the FeedbackDemo sch
 ## 🔧 Develop
 
 - **Package units**: `swift test --jobs 2 --filter FeedbackKitTests`.
-- **Package integration**: `swift test --jobs 2 --filter FeedbackKitIntegrationTests`. These use isolated preferences,
-  platform rendering and AgentChatKit's loopback ACP dev host. Set `AGENTCHAT_DEV_HOST` to reuse a prepared local host.
+- **Package integration**: `swift test --jobs 2 --filter FeedbackKitIntegrationTests` runs 14 tests of isolated
+  preferences and AgentChatKit's loopback ACP dev host. Set `AGENTCHAT_DEV_HOST` to reuse a prepared local host.
+- **Package rendering UI**: `swift test --jobs 2 --filter FeedbackKitRenderingTests` runs two macOS pixel-rendering
+  tests. `make test-ui-kit PLATFORM=mac` runs these before the native app UI plan.
 - **Worker**: in `worker/`, run `npm ci`, `npm test` and `npm run typecheck`.
 - **Runner**: `make -C runner test` (Python 3.14, standard library only); `make test-unit-kit` uses pytest with sockets disabled for the 38 isolated cases; `make test-integration-kit` runs the 89 storage/process cases.
 - **Demo UI tests**: generate `Demo/FeedbackDemo.xcodeproj` with XcodeGen, then use `FeedbackDemo` with the full

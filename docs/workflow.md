@@ -119,7 +119,8 @@ No candidate, release, deploy or host operation is performed by this cleanup.
 ## Test boundaries and ownership
 
 - Swift `FeedbackKitTests`: isolated request/delivery/sample logic, scripted HTTP, injected clock/build/preferences.
-  `FeedbackKitIntegrationTests`: real preferences, platform rendering and local ACP/REST interactions. Shared chat
+  `FeedbackKitIntegrationTests`: 14 tests of real preferences and local ACP/REST interactions.
+  `FeedbackKitRenderingTests`: two macOS pixel-rendering UI checks, run in the macOS UI lane before the app plan. Shared chat
   delivery tick rendering, generic controls and screenshot viewer gestures belong to AgentChatKit.
 - Worker: 14 pure units with network disabled and shuffled order; 56 local integration declarations use actual
   SQLite/migrations or server/adapter contracts (one ACP capability skip). SQLite in memory remains integration.

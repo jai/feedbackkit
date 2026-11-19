@@ -137,6 +137,7 @@ UI_PLAN = $(if $(filter mac,$(PLATFORM)),SDK-macOS,SDK-iOS)
 COMMA := ,
 UI_DESTINATION = $(if $(filter mac,$(PLATFORM)),platform=macOS,platform=iOS Simulator$(COMMA)id=$(SIMULATOR))
 test-ui-kit:
+	if [ "$(PLATFORM)" = mac ]; then swift test -j $(JOBS) --filter FeedbackKitRenderingTests; fi
 	xcodebuild test -project Demo/FeedbackDemo.xcodeproj -scheme $(UI_SCHEME) -testPlan $(UI_PLAN) \
 		-destination '$(UI_DESTINATION)' -derivedDataPath tmp/ui-$(PLATFORM) -clonedSourcePackagesDirPath tmp/swift-packages \
 		-resultBundlePath tmp/ui-$(PLATFORM).xcresult -parallel-testing-enabled NO \
