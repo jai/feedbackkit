@@ -220,3 +220,32 @@ test("the list says why the builder is offline: the runner's Mac, or a runner go
   await runnerPoll(store, false, 5_000, "x".repeat(500));
   assert.equal((await feedbackList(store, 5_000)).builderStatus.detail?.length, 200);
 });
+
+test("a tidied chat is read-only, and its failed reply never leaves the row queued", async () => {
+  const store = memoryStore();
+  const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "Bigger clock" })!, 1_000))!;
+  const [work] = await runnerPoll(store, true, 2_000);
+  await runnerClaim(store, chat, work.message, 3_000);
+  await runnerResult(store, chat, work.message, true, null);
+  const done = { messages: [{ id: "a1", text: "Done.", at: new Date(4_000).toISOString() }], isWorking: false };
+  await runnerAgent(store, chat, parseAgentSide({ ...done, activity: null }, 5_000)!);
+
+  await addFeedback(store, chat, parseFeedbackInput({ text: "One more thing" })!, 90_000_000);
+  const [reply] = await runnerPoll(store, true, 90_000_001);
+  await runnerClaim(store, chat, reply.message, 90_000_002);
+  await runnerResult(
+    store,
+    chat,
+    reply.message,
+    false,
+    "This chat was tidied away after a day with nothing left to do.",
+  );
+  const failed = (await feedbackList(store, 90_000_003)).threads[0];
+  assert.equal(failed.agent?.state, "needs_you", "a failed reply is not queued");
+  assert.equal(failed.ended, undefined, "not ended until the runner says so");
+
+  await runnerAgent(store, chat, parseAgentSide({ ...done, activity: null, ended: true }, 90_000_004)!);
+  assert.equal((await feedbackList(store, 90_000_005)).threads[0].ended, true);
+  assert.equal((await feedbackChat(store, chat, 90_000_005))!.ended, true);
+  assert.equal(parseAgentSide({ ...done, activity: null, ended: "yes" }, 0), null, "ended is a boolean");
+});

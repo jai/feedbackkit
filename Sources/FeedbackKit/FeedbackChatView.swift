@@ -36,6 +36,11 @@ struct FeedbackChatView: View {
         chat?.shipped ?? thread.flatMap { id in model.list.threads.first { $0.id == id }?.shipped }
     }
 
+    /// Its agent's chat was tidied away, by the chat or else its row: a reply can't reach it, so there is no box.
+    private var isEnded: Bool {
+        chat?.ended ?? thread.flatMap { id in model.list.threads.first { $0.id == id }?.ended } ?? false
+    }
+
     /// Once the first message created the feedback chat, the host's coding thread receives every follow-up.
     var awaitsAgentThread: Bool { conversation != nil && thread != nil }
 
@@ -197,7 +202,7 @@ struct FeedbackChatView: View {
     @ViewBuilder private var status: some View {
         if showsWorking {
             ChatWorkingLine(activity: activity, identifier: "feedback-working")
-        } else if let problem = handoffProblem {
+        } else if !isEnded, let problem = handoffProblem {
             Text(problem)
                 .font(theme.font(.footnote))
                 .foregroundStyle(theme.toneBad)
@@ -236,7 +241,15 @@ struct FeedbackChatView: View {
         return chat?.builderOnline == false ? "Waiting for the builder Mac" : chat?.activity ?? "Thinking"
     }
 
-    private var composer: some View {
+    @ViewBuilder private var composer: some View {
+        if isEnded {
+            FeedbackReadOnlyNote()
+        } else {
+            replyBox
+        }
+    }
+
+    private var replyBox: some View {
         VStack(alignment: .leading, spacing: theme.spacing.xs) {
             if let controls = model.controls(for: route) {
                 LiveQueuedReplies(controls: controls, draft: model.binding(for: box), identifiers: identifiers.queue)
@@ -276,4 +289,18 @@ struct FeedbackChatView: View {
 extension FeedbackList {
     /// What sending does when the Worker gives no notice: the owner's coding agent.
     static let agentNotice = "Say what to change in the app. An agent makes the change, tests it and ships a build."
+}
+
+/// In place of a tidied chat's box: why it is gone, and what to do instead.
+struct FeedbackReadOnlyNote: View {
+    @Environment(\.chatTheme) private var theme
+
+    var body: some View {
+        Label("This chat was tidied away, so it's read-only. Start new feedback to ask for more.", systemImage: "lock")
+            .font(theme.font(.footnote))
+            .foregroundStyle(theme.inkQuiet)
+            .chatBarWidth()
+            .accessibilityIdentifier("feedback-read-only")
+            .composerBar()
+    }
 }

@@ -107,7 +107,13 @@ export function liveAdapter(deps: LiveDeps): LiveAdapter<LiveWho> {
         agentchatkit: {
           activity: view.activity,
           problem: view.problem,
-          extra: { builderOnline: view.builderOnline, thread: view.thread, shipped: view.shipped },
+          // `ended` only when true, so a chat that never ended keeps the state it had.
+          extra: {
+            builderOnline: view.builderOnline,
+            thread: view.thread,
+            shipped: view.shipped,
+            ...(view.ended ? { ended: true } : {}),
+          },
         },
       },
     };

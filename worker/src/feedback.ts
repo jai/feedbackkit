@@ -57,6 +57,8 @@ export interface FeedbackThread {
   agent?: ThreadAgentState;
   /** What the chat's feedback shipped, for the row's accessories; null until the runner found any. */
   shipped?: Shipped | null;
+  /** The runner tidied the agent's chat away: a reply can't reach it, so the chat is read-only. */
+  ended?: true;
 }
 
 /**
@@ -145,6 +147,8 @@ export interface AgentSide {
   updatedAt: number;
   /** What the chat's feedback shipped (shipped.ts); absent until the runner found any. */
   shipped?: Shipped | null;
+  /** The runner tidied the agent's chat away, or it is gone: a reply can't reach it. */
+  ended?: true;
 }
 
 /**
@@ -166,6 +170,8 @@ export interface FeedbackChat extends Chat {
   thread: AgentSide["thread"];
   /** What the chat's feedback shipped (docs/api.md#shipped); null until the runner found any. */
   shipped: Shipped | null;
+  /** The agent's chat was tidied away: a reply can't reach it, so the chat is read-only. */
+  ended: boolean;
 }
 
 /** What a runner poll answers: Jai's messages it has not taken, oldest first. */
@@ -382,7 +388,9 @@ async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"):
   const { results } = await store.db
     .prepare(
       "SELECT id, title, created_at, thread_host, thread_id, agent," +
-        " (SELECT max(at) FROM messages WHERE chat = chats.id AND (status IS NULL OR status != 'removed')) AS last_sent_at," +
+        // A message that failed waits for nothing: it never makes the row Queued.
+        " (SELECT max(at) FROM messages WHERE chat = chats.id AND (status IS NULL OR status NOT IN ('removed', 'failed')))" +
+        " AS last_sent_at," +
         " (SELECT count(*) FROM messages WHERE chat = chats.id AND status IN ('pending', 'delivering')) AS waiting," +
         " (SELECT max(at) FROM agent_messages WHERE chat = chats.id) AS last_agent_at" +
         " FROM chats WHERE app = ? AND login = ? AND kind = ? ORDER BY created_at DESC",
@@ -393,19 +401,25 @@ async function threads(store: FeedbackStore, kind: "agent" | "issue" = "agent"):
     id: row.id,
     title: row.title,
     createdAt: new Date(row.created_at).toISOString(),
-    ...(kind === "agent"
-      ? {
-          thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
-          shipped: row.agent ? ((JSON.parse(row.agent) as AgentSide).shipped ?? null) : null,
-          agent: threadAgentState(
-            row.agent ? (JSON.parse(row.agent) as AgentSide) : null,
-            row.last_sent_at,
-            row.last_agent_at ? Date.parse(row.last_agent_at) : null,
-            row.waiting > 0,
-          ),
-        }
-      : {}),
+    ...(kind === "agent" ? agentRow(row) : {}),
   }));
+}
+
+function agentRow(
+  row: ChatRow & { last_sent_at: number | null; waiting: number; last_agent_at: string | null },
+): Pick<FeedbackThread, "thread" | "shipped" | "agent" | "ended"> {
+  const side = row.agent ? (JSON.parse(row.agent) as AgentSide) : null;
+  return {
+    thread: row.thread_host && row.thread_id ? { host: row.thread_host, id: row.thread_id } : null,
+    shipped: side?.shipped ?? null,
+    agent: threadAgentState(
+      side,
+      row.last_sent_at,
+      row.last_agent_at ? Date.parse(row.last_agent_at) : null,
+      row.waiting > 0,
+    ),
+    ...(side?.ended ? { ended: true as const } : {}),
+  };
 }
 
 /** An issue sender's chats, newest first. */
@@ -563,6 +577,7 @@ export function chatView(
     builderOnline: online,
     thread: agent?.thread ?? null,
     shipped: agent?.shipped ?? null,
+    ended: agent?.ended === true,
   };
 }
 
@@ -975,7 +990,7 @@ export async function runnerResult(
 
 /** The runner's look at the agent: its messages so far, whether it is working, and where it runs. */
 export function parseAgentSide(body: unknown, now: number): AgentSide | null {
-  const { messages, isWorking, activity, thread, shipped } = (body ?? {}) as Record<string, unknown>;
+  const { messages, isWorking, activity, thread, shipped, ended } = (body ?? {}) as Record<string, unknown>;
   const landed = shipped === undefined || shipped === null ? null : parseShipped(shipped);
   if (landed === undefined) {
     return null;
@@ -984,6 +999,7 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
     !Array.isArray(messages) ||
     messages.length > MAX_AGENT_MESSAGES ||
     typeof isWorking !== "boolean" ||
+    (ended !== undefined && typeof ended !== "boolean") ||
     (activity !== null && (typeof activity !== "string" || activity.length > 80))
   ) {
     return null;
@@ -1019,6 +1035,7 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
     thread: where,
     updatedAt: now,
     ...(landed ? { shipped: landed } : {}),
+    ...(ended === true ? { ended: true as const } : {}),
   };
 }
 

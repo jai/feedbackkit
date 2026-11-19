@@ -137,7 +137,8 @@ which a Mac UI test on the mini can click into System Settings. `make -C runner 
   no commit missing from every branch of origin (`git log HEAD --not --remotes=origin`). Then `orca worktree rm
   --worktree path:<worktree> --delete-branch` (Orca keeps a branch it cannot prove merged) and its first screenshots'
   folder goes. A chat with work left is kept and checked again a day later. A reply to a tidied chat fails with
-  "This chat was tidied away …": Orca stopped its chat with the worktree.
+  "This chat was tidied away …": Orca stopped its chat with the worktree. So the side says `ended: true`, once more
+  after the tidy even when settled, and the app shows the chat read-only. So does a chat whose Orca chat is gone.
 - Chats from before 2026-11-14 (state without `layout`, read as `"clone"`) keep their full clone,
   `~/Developer/<repo name>_fb-<8 hex>`, and its own Orca project; replies still go to them. The runner never removes one
   (the CLI cannot remove an Orca project, so removing the folder left a ghost project): it logs it once a day for Jai to

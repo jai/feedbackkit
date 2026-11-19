@@ -263,5 +263,6 @@ export async function issueChat(context: IssueFeedback, chat: string): Promise<F
     builderOnline: true,
     thread: null,
     shipped: null,
+    ended: false,
   };
 }

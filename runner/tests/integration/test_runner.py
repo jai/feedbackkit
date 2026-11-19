@@ -19,6 +19,7 @@ from feedbackkit_runner.runner import (
     OLD_STATE_FILE,
     STARTING_SECONDS,
     STATE_FILE,
+    THREAD_WAIT_SECONDS,
     TIDIED,
     TIDY_AFTER_SECONDS,
     Builder,
@@ -34,6 +35,7 @@ from feedbackkit_runner.runner import (
     Sender,
     clone_path,
     migrate,
+    unsettled,
 )
 from feedbackkit_runner.util import JsonObject
 from feedbackkit_runner.videos import FRAMES_SCRIPT
@@ -596,6 +598,18 @@ class RunnerTests(RunnerCase):
         }
         return runner
 
+    def test_a_reply_to_a_chat_gone_from_orca_fails_and_the_chat_ends(self) -> None:
+        self.started()
+        self.cube.row = None
+        self.now += THREAD_WAIT_SECONDS + 1
+        self.reply("m_3")
+        self.runner().tick()
+        self.assertEqual(self.api.results[-1][2], "failed")
+        self.assertIn("Start new feedback instead", self.api.results[-1][3])
+        self.now += 61
+        self.runner().tick()
+        self.assertIs(self.api.sides[-1]["ended"], True, "the app shows it read-only")
+
     def test_a_quiet_pushed_worktree_is_removed_through_orca_and_a_late_reply_is_refused(self) -> None:
         self.started()
         self.api.work = []
@@ -610,7 +624,10 @@ class RunnerTests(RunnerCase):
         self.assertEqual(self.cube.clones, [BASE], "never cloned again")
         sides = len(self.api.sides)
         self.runner().tick()
-        self.assertEqual((self.orca.removed, len(self.api.sides)), ([WORKTREE], sides), "no longer watched")
+        self.assertEqual((self.orca.removed, len(self.api.sides)), ([WORKTREE], sides + 1), "sent once more")
+        self.assertIs(self.api.sides[-1]["ended"], True, "the app shows it read-only")
+        self.runner().tick()
+        self.assertEqual(len(self.api.sides), sides + 1, "no longer watched")
         self.reply("m_3")
         self.runner().tick()
         self.assertEqual(self.delivered, [])
@@ -724,6 +741,21 @@ class ShippedTests(RunnerCase):
         self.now += 7200
         runner.tick()
         self.assertEqual(len(self.cube.probes), 2, "released, checks done, no pull request open: settled")
+
+    def test_a_settled_tidied_chat_says_once_that_it_ended(self) -> None:
+        self.cube.found = {"commits": [LANDED], "branch": None}
+        self.github.released = RELEASE
+        runner = self.started()
+        runner.state["chats"][CHAT]["removed"] = True
+        runner.state["chats"][CHAT]["shipped"] = {"commits": [{**LANDED, "release": RELEASE}], "prs": []}
+        self.assertFalse(unsettled(runner.state["chats"][CHAT]))
+        sides = len(self.api.sides)
+        runner.tick()
+        self.assertEqual(len(self.api.sides), sides + 1)
+        self.assertIs(self.api.sides[-1]["ended"], True)
+        self.now += 7200
+        runner.tick()
+        self.assertEqual(len(self.api.sides), sides + 1, "said once")
 
 
 class EchoTests(RunnerCase):

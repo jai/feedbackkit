@@ -12,10 +12,19 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
     public let agent: FeedbackThreadAgent?
     /// What its feedback shipped, for the row's accessories; nil until the runner found any.
     public let shipped: FeedbackShipped?
+    /// The runner tidied its agent's chat away, so a reply can't reach it: the row shows it read-only.
+    public let ended: Bool
 
     public init(
         id: String, title: String, createdAt: String, thread: FeedbackAgentThread? = nil, agent: FeedbackThreadAgent? = nil,
         shipped: FeedbackShipped? = nil
+    ) {
+        self.init(id: id, title: title, createdAt: createdAt, thread: thread, agent: agent, shipped: shipped, ended: false)
+    }
+
+    public init(
+        id: String, title: String, createdAt: String, thread: FeedbackAgentThread?, agent: FeedbackThreadAgent?,
+        shipped: FeedbackShipped?, ended: Bool
     ) {
         self.id = id
         self.title = title
@@ -23,9 +32,10 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
         self.thread = thread
         self.agent = agent
         self.shipped = shipped
+        self.ended = ended
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread, agent, shipped }
+    private enum CodingKeys: String, CodingKey { case id, title, createdAt, thread, agent, shipped, ended }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -35,6 +45,7 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
         thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
         agent = try? container.decodeIfPresent(FeedbackThreadAgent.self, forKey: .agent)
         shipped = FeedbackShipped.decodeLenient(container, forKey: .shipped)
+        ended = (try? container.decodeIfPresent(Bool.self, forKey: .ended)) ?? false
     }
 }
 
@@ -163,6 +174,8 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
     public var delivery: [String: FeedbackMessageDelivery]
     /// What the feedback shipped, for the chat's header; nil until the runner found any.
     public var shipped: FeedbackShipped?
+    /// Its agent's chat was tidied away: a reply can't reach it, so the chat is read-only.
+    public var ended: Bool
 
     public var hasUndeliveredMessages: Bool { delivery.values.contains { $0 != .delivered } }
 
@@ -170,6 +183,18 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         id: String, messages: [Message], isWorking: Bool, activity: String?, problem: String?,
         costCents: Int?, builderOnline: Bool, screenshots: [String: Int] = [:], thread: FeedbackAgentThread? = nil,
         delivery: [String: FeedbackMessageDelivery] = [:], shipped: FeedbackShipped? = nil
+    ) {
+        self.init(
+            id: id, messages: messages, isWorking: isWorking, activity: activity, problem: problem, costCents: costCents,
+            builderOnline: builderOnline, screenshots: screenshots, thread: thread, delivery: delivery, shipped: shipped,
+            ended: false
+        )
+    }
+
+    public init(
+        id: String, messages: [Message], isWorking: Bool, activity: String?, problem: String?,
+        costCents: Int?, builderOnline: Bool, screenshots: [String: Int], thread: FeedbackAgentThread?,
+        delivery: [String: FeedbackMessageDelivery], shipped: FeedbackShipped?, ended: Bool
     ) {
         self.id = id
         self.messages = messages
@@ -182,10 +207,11 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         self.screenshots = screenshots
         self.delivery = delivery
         self.shipped = shipped
+        self.ended = ended
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, messages, isWorking, activity, problem, costCents, builderOnline, thread, shipped
+        case id, messages, isWorking, activity, problem, costCents, builderOnline, thread, shipped, ended
     }
 
     /// The screenshot count and persisted delivery state; a Worker from before either field sends none.
@@ -206,6 +232,7 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
         builderOnline = try container.decode(Bool.self, forKey: .builderOnline)
         thread = try FeedbackAgentThread.decodeNamed(container, forKey: .thread)
         shipped = FeedbackShipped.decodeLenient(container, forKey: .shipped)
+        ended = (try? container.decodeIfPresent(Bool.self, forKey: .ended)) ?? false
         let metadata = try container.decode([MessageMetadata].self, forKey: .messages)
         screenshots = Dictionary(metadata.compactMap { message in
             message.images.flatMap { $0 > 0 ? (message.id, $0) : nil }

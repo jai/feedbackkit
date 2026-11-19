@@ -47,6 +47,17 @@ struct FeedbackStatusTests {
         #expect(status(nil) == nil, "an issue chat has no status")
     }
 
+    @Test func anEndedChatDecodesAndAnOlderWorkerIsNotEnded() throws {
+        func thread(_ extra: String) throws -> FeedbackThread {
+            let row = #"{"id": "fb_1", "title": "Clock", "createdAt": "2026-11-15T00:00:00Z"\#(extra)}"#
+            return try JSONDecoder().decode(FeedbackThread.self, from: Data(row.utf8))
+        }
+        #expect(try thread(#", "ended": true"#).ended)
+        #expect(try !thread("").ended)
+        let chat = #"{"id": "fb_1", "messages": [], "isWorking": false, "builderOnline": true, "ended": true}"#
+        #expect(try JSONDecoder().decode(FeedbackChat.self, from: Data(chat.utf8)).ended)
+    }
+
     @Test func aQueuedStateFromTheWorkerDecodes() throws {
         func agent(_ json: String) throws -> FeedbackThreadAgent? {
             let row = #"{"id": "fb_1", "title": "Clock", "createdAt": "2026-11-15T00:00:00Z", "agent": \#(json)}"#

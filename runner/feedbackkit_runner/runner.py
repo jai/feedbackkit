@@ -215,6 +215,9 @@ class ChatState(_ChatFields, total=False):
     shipped_at: float
     shipped_shas: list[str]
     branch: str
+    # Its agent's chat is gone from Orca, so a reply fails; and whether the Worker was told the chat ended.
+    gone: bool
+    ended_sent: bool
 
 
 class _RunnerFields(TypedDict):
@@ -976,6 +979,7 @@ class Runner:
             return {"status": "failed", "how": None, "detail": TIDIED}
         thread = builder.cube.thread(clone)
         if thread is None:
+            known["gone"] = True
             return {
                 "status": "failed",
                 "how": None,
@@ -1082,16 +1086,23 @@ class Runner:
         """A tidied chat: what it shipped, looked for hourly from its app's project clone while anything is still to
         come (a release, a check, an open pull request), and sent with its last words."""
         builder = self.builders.get(known["host"])
-        if builder is None or agents.get(builder.host) is None or not unsettled(known):
+        if builder is None or agents.get(builder.host) is None:
             return None
-        line = self.refresh_shipped(builder, chat, known)
+        settled = not unsettled(known)
+        # Once settled, sent once more if it ended (the app shows it read-only), then never again.
+        if settled and (known.get("ended_sent") or not has_ended(known)):
+            return None
+        line = None if settled else self.refresh_shipped(builder, chat, known)
         side: JsonObject = {
             "messages": known["messages"],
             "isWorking": False,
             "activity": None,
             "thread": known.get("thread"),
         }
-        return self.post_side(chat, known, with_shipped(side, known), self.clock()) or line
+        dropped = self.post_side(chat, known, with_shipped(side, known), self.clock())
+        if not dropped and has_ended(known):
+            known["ended_sent"] = True
+        return dropped or line
 
     def refresh_shipped(self, builder: Builder, chat: str, known: ChatState) -> str | None:
         """What the chat shipped, when it is time to look again; a log line when the builder could not say, and the
@@ -1260,8 +1271,17 @@ class Runner:
 
 
 def with_shipped(side: JsonObject, known: ChatState) -> JsonObject:
-    """The side with what the chat shipped, once the runner has looked; without it the Worker keeps none."""
-    return {**side, "shipped": known["shipped"]} if "shipped" in known else side
+    """The side with what the chat shipped, once the runner has looked (without it the Worker keeps none), and
+    `ended` once a reply can't reach its agent."""
+    if "shipped" in known:
+        side = {**side, "shipped": known["shipped"]}
+    return {**side, "ended": True} if has_ended(known) else side
+
+
+def has_ended(known: ChatState) -> bool:
+    """A reply can't reach the chat's agent: its worktree was tidied away (Orca stopped its chat with it), or its
+    Orca chat is gone. A tidied full clone is made again for a reply, so it has not ended."""
+    return bool(known.get("removed") and known["layout"] == "worktree") or bool(known.get("gone"))
 
 
 def unsettled(known: ChatState) -> bool:
