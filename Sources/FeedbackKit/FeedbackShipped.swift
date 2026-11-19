@@ -135,68 +135,84 @@ extension FeedbackShipped.Stage {
     }
 }
 
-/// A row's accessories: where the feedback stands (PR open, on main, in a release), its checks, and each pull request.
+/// A row's accessory: one capsule in the tone of where the feedback is, naming the place — the open pull request,
+/// main, or the release — with its checks' mark inside. The row's status already says the stage in words ("On main"),
+/// so the capsule does not say it again (Jai, 2026-11-19: an outlined "On main" with a circled tick and a loose check
+/// dot beside it read as a checkbox).
 struct FeedbackShippedChips: View {
     @Environment(\.chatTheme) private var theme
     let shipped: FeedbackShipped
 
     var body: some View {
         HStack(spacing: ChatSpace.sm) {
-            if let stage = shipped.stage {
-                chip(stage.label, symbol: stageSymbol(stage), tint: stageTint(stage))
-            }
-            if let checks = shipped.checks {
-                FeedbackChecksMark(checks: checks)
-            }
-            ForEach(shipped.prs) { pr in
-                chip("#\(pr.number)", symbol: pr.state == .merged ? "arrow.triangle.merge" : "arrow.triangle.pull",
-                     tint: theme.inkQuiet)
-                    .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
+            switch shipped.stage {
+            case .pullRequestOpen?:
+                let open = shipped.prs.filter { $0.state == .open }
+                ForEach(open.isEmpty ? shipped.prs : open) { pr in
+                    chip("PR #\(pr.number)", symbol: "arrow.trianglehead.pull", tint: tint(theme.toneWaiting),
+                         checks: pr.checks)
+                        .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
+                }
+            case .onMain?:
+                chip("main", symbol: "arrow.trianglehead.merge", tint: tint(theme.inkQuiet), checks: shipped.checks)
+                    .accessibilityLabel("On main")
+            case let .released(release)?:
+                chip(release.name, symbol: "shippingbox.fill", tint: tint(theme.toneGood), checks: shipped.checks)
+                    .accessibilityLabel("In \(release.name)")
+            case nil:
+                EmptyView()
             }
         }
         // Inside a row's button; the button reads these out with the rest of the row.
         .lineLimit(1)
     }
 
-    /// The words in ink, the symbol in the stage's tone: the words stay readable whatever a host's tones are.
-    private func chip(_ text: String, symbol: String, tint: Color) -> some View {
-        Label {
-            Text(text).foregroundStyle(theme.ink)
-        } icon: {
+    /// A failed check turns the capsule red, whatever the stage.
+    private func tint(_ stage: Color) -> Color {
+        shipped.checks == .failure ? theme.toneBad : stage
+    }
+
+    /// The place in ink on a wash of the tone, the symbol in the tone, then the checks' mark.
+    private func chip(_ text: String, symbol: String, tint: Color, checks: FeedbackShipped.Checks?) -> some View {
+        HStack(spacing: ChatSpace.xs) {
             Image(systemName: symbol).foregroundStyle(tint)
+            Text(text).foregroundStyle(theme.ink)
+            if let checks {
+                FeedbackChecksMark(checks: checks, style: .tick)
+            }
         }
+        .fontWeight(.medium)
         .padding(.horizontal, ChatSpace.sm)
-        .padding(.vertical, 2)
-        .overlay(Capsule().strokeBorder(theme.line))
-    }
-
-    private func stageSymbol(_ stage: FeedbackShipped.Stage) -> String {
-        switch stage {
-        case .pullRequestOpen: "arrow.triangle.pull"
-        case .onMain: "checkmark.circle"
-        case .released: "shippingbox"
-        }
-    }
-
-    private func stageTint(_ stage: FeedbackShipped.Stage) -> Color {
-        switch stage {
-        case .pullRequestOpen: theme.toneWaiting
-        case .onMain: theme.ink
-        case .released: theme.toneGood
-        }
+        .padding(.vertical, 3)
+        .background(tint.opacity(0.18), in: .capsule)
     }
 }
 
-/// A check's outcome as a mark: a dot that is green, amber or red, with its words for VoiceOver.
+/// A check's outcome as a mark, green, amber or red, with its words for VoiceOver: a filled circle on the chat's
+/// header, a bare tick, clock or cross inside a row's capsule.
 struct FeedbackChecksMark: View {
+    enum Style { case circle, tick }
     @Environment(\.chatTheme) private var theme
     let checks: FeedbackShipped.Checks
+    var style = Style.circle
 
     var body: some View {
-        Image(systemName: checks == .failure ? "xmark.circle.fill" : checks == .pending ? "clock" : "checkmark.circle.fill")
+        Image(systemName: symbol)
+            .fontWeight(style == .tick ? .bold : nil)
+            .imageScale(style == .tick ? .small : .medium)
             .foregroundStyle(checks == .failure ? theme.toneBad : checks == .pending ? theme.toneWaiting : theme.toneGood)
             .accessibilityLabel(checks == .failure ? "Checks failed" : checks == .pending ? "Checks running" : "Checks passed")
             .accessibilityIdentifier("feedback-shipped-checks-\(checks.rawValue)")
+    }
+
+    private var symbol: String {
+        switch (checks, style) {
+        case (.failure, .circle): "xmark.circle.fill"
+        case (.failure, .tick): "xmark"
+        case (.pending, _): "clock"
+        case (.success, .circle): "checkmark.circle.fill"
+        case (.success, .tick): "checkmark"
+        }
     }
 }
 
