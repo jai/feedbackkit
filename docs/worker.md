@@ -109,8 +109,8 @@ binding or `FEEDBACKKIT_URL` ([jai/prhub `docs/api.md`](https://github.com/jai/p
 
 ## Deploy
 
-Each `vX.Y.Z` GitHub Release deploys the Worker through `.github/workflows/deploy.yml`, which runs
-`deploy/deploy.sh` on the tag (`gh workflow run deploy.yml -f tag=vX.Y.Z` deploys a tag again). Its secrets are
+Each `vX.Y.Z` GitHub Release deploys the Worker through `.github/workflows/deploy-kit.yml`, which runs
+`deploy/deploy.sh` on the tag (`gh workflow run deploy-kit.yml -f tag=vX.Y.Z` deploys a tag again). Its secrets are
 `FEEDBACKKIT_CLOUDFLARE_API_TOKEN` (Workers Scripts and D1, edit) and `FEEDBACKKIT_CLOUDFLARE_ACCOUNT_ID`. By hand, only
 in an emergency: `CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… deploy/deploy.sh` from the repo root, on a committed
 HEAD. It renders

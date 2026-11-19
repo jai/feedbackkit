@@ -1,0 +1,31 @@
+name: test-unit-kit
+on:
+  push:
+    branches: [main]
+    paths: ["Sources/**", "Tests/**", "Demo/**", "worker/**", "sample-worker/**", "runner/**", "deploy/**", "Package.*", "Makefile", "mise.toml", "requirements-test.txt", "pytest.ini", "ruff.toml", ".swift*", ".ox*", "cliff.toml", ".github/**"]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        with:
+          cache: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.13.1
+      - name: Prepare dependencies
+        run: make worker-setup sample-setup runner-setup
+      - name: Run test-unit-kit
+        run: make test-unit-kit
+      - name: Remove disposable products
+        if: always()
+        run: rm -rf -- .build .venv worker/node_modules sample-worker/node_modules runner/MenuBar/.build Demo/*.xcodeproj tmp

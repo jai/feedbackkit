@@ -1,0 +1,20 @@
+extend = "../../../ruff.toml"
+
+[lint]
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"socket".msg = "Unit tests must not use sockets."
+"os".msg = "Use explicit inputs in unit tests."
+"pathlib".msg = "Read files in integration tests."
+"shutil".msg = "Manage files in integration tests."
+"sqlite3".msg = "Use a database in integration tests."
+"subprocess.run".msg = "Run processes in integration tests."
+"subprocess.Popen".msg = "Run processes in integration tests."
+"subprocess.call".msg = "Run processes in integration tests."
+"subprocess.check_call".msg = "Run processes in integration tests."
+"subprocess.check_output".msg = "Run processes in integration tests."
+"subprocess.getoutput".msg = "Run processes in integration tests."
+"subprocess.getstatusoutput".msg = "Run processes in integration tests."
+"tempfile".msg = "Use in-memory fixtures in unit tests."
+"time.sleep".msg = "Use an injected clock in unit tests."

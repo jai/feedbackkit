@@ -1,0 +1,70 @@
+name: test-ui-kit
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  ui:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, mac]
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v5
+        with:
+          cache: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.13.1
+      - name: Prepare the project, destination and local services
+        run: |
+          mise exec xcodegen@2.46.0 -- xcodegen generate --spec Demo/project.yml --quiet
+          mkdir -p "$RUNNER_TEMP/feedback-screens"
+          if [ "$PLATFORM" = ios ]; then
+            runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.name | startswith("iOS")))] | last | .identifier')
+            simulator=$(xcrun simctl create "feedback-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 'iPhone 17' "$runtime")
+            echo "SIMULATOR=$simulator" >> "$GITHUB_ENV"
+            xcrun simctl boot "$simulator"
+            xcrun simctl bootstatus "$simulator" -b
+          fi
+          xcodebuild -resolvePackageDependencies -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo -clonedSourcePackagesDirPath tmp/swift-packages
+          node tmp/swift-packages/checkouts/agentchatkit/server/dev/host.ts --port 8788 > "$RUNNER_TEMP/feedback-host.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/feedback-host.pid"
+          for _ in {1..30}; do
+            kill -0 "$(cat "$RUNNER_TEMP/feedback-host.pid")"
+            if grep -q "^ready " "$RUNNER_TEMP/feedback-host.log"; then break; fi
+            sleep 1
+          done
+          grep -q "^ready " "$RUNNER_TEMP/feedback-host.log"
+      - name: Run native UI tests
+        env:
+          TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS: ${{ runner.temp }}/feedback-screens
+        run: make test-ui-kit PLATFORM="$PLATFORM" SIMULATOR="${SIMULATOR:-}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feedback-ui-${{ matrix.platform }}
+          path: |
+            tmp/*.xcresult
+            ${{ runner.temp }}/feedback-screens
+            ${{ runner.temp }}/feedback-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Release this job's services, simulator and build products
+        if: always()
+        run: |
+          for service in host; do
+            file="$RUNNER_TEMP/feedback-$service.pid"
+            if [ -f "$file" ]; then kill "$(cat "$file")" 2>/dev/null || true; fi
+          done
+          if [ -n "${SIMULATOR:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR" || true
+            xcrun simctl delete "$SIMULATOR"
+          fi
+          rm -rf -- .build tmp Demo/*.xcodeproj "$RUNNER_TEMP/feedback-screens"

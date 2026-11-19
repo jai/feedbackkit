@@ -28,8 +28,7 @@ It downloads the build each release publishes (the GitHub prerelease `runner-men
 `~/Applications/FeedbackKit Runner.app` and starts it at login (LaunchAgent `com.jai.feedbackkit-runner-menu`). Run it
 again to update: a build no different from the installed app changes nothing, a new build restarts the loaded job
 (`launchctl kickstart -k`), and only a new or changed plist registers the job again (macOS posts an "App Background
-Activity" notice each time it does). Nothing is built on Jai's Macs: [ci.yml](../../.github/workflows/ci.yml)'s
-`runner-menu` job tests and builds it on GitHub's Mac runner (`bundle.sh`, ad-hoc signed) for every change on main.
+Activity" notice each time it does). Nothing is built on Jai's Macs: [lint-kit.yml](../../.github/workflows/lint-kit.yml)'s build step tests and builds it on GitHub's Mac runner (`bundle.sh`, ad-hoc signed) for every change on main.
 
 It needs `ssh jais-mac-mini true` to work without a prompt, and Agent Pager on the Mac for Open thread.
 

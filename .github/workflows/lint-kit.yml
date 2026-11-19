@@ -1,0 +1,37 @@
+name: lint-kit
+on:
+  push:
+    branches: [main]
+    paths: ["Sources/**", "Tests/**", "Demo/**", "worker/**", "sample-worker/**", "runner/**", "deploy/**", "Package.*", "Makefile", "mise.toml", "requirements-test.txt", "pytest.ini", "ruff.toml", ".swift*", ".ox*", "cliff.toml", ".github/**"]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        with:
+          cache: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.13.1
+      - name: Prepare dependencies
+        run: make worker-setup sample-setup runner-setup
+      - name: Run lint-kit
+        run: make lint-kit
+      - name: Build the demo consumers and published menu bundle
+        run: |
+          mise exec xcodegen@2.46.0 -- xcodegen generate --spec Demo/project.yml --quiet
+          xcodebuild build -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemo -destination 'generic/platform=iOS Simulator' -derivedDataPath tmp/demo-ios -jobs 4 CODE_SIGNING_ALLOWED=NO
+          xcodebuild build -project Demo/FeedbackDemo.xcodeproj -scheme FeedbackDemoMac -destination 'platform=macOS' -derivedDataPath tmp/demo-mac -jobs 4 CODE_SIGNING_ALLOWED=NO
+          runner/MenuBar/bundle.sh FeedbackKitRunner.zip
+      - name: Remove disposable products
+        if: always()
+        run: rm -rf -- runner/MenuBar/FeedbackKitRunner.zip .build .venv worker/node_modules sample-worker/node_modules runner/MenuBar/.build Demo/*.xcodeproj tmp

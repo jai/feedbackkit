@@ -1,6 +1,1 @@
-# actionlint (make lint). Findings in workflows from before actionlint ran here (2026-11-16): fix one when its
-# workflow is next changed, then drop its line.
-paths:
-  .github/workflows/sample-worker.yml:
-    ignore:
-      - 'SC2034:warning'
+# No suppressed workflow diagnostics.

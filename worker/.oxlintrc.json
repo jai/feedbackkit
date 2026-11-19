@@ -1,12 +1,37 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "unicorn", "oxc", "node"],
-  "categories": { "correctness": "error" },
+  "categories": {
+    "correctness": "error"
+  },
   "ignorePatterns": ["vendor/**", "migrations/**"],
   "overrides": [
     {
       "files": ["test/**"],
-      "rules": { "typescript/unbound-method": "off", "typescript/no-floating-promises": "off" }
+      "rules": {
+        "typescript/unbound-method": "off",
+        "typescript/no-floating-promises": "off"
+      }
+    },
+    {
+      "files": ["test/unit/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              "node:fs",
+              "node:fs/*",
+              "node:sqlite",
+              "node:child_process",
+              "node:net",
+              "node:http",
+              "node:https",
+              "cloudflare:*"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

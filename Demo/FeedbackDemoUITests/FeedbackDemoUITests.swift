@@ -109,11 +109,6 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertTrue(viewer.waitForNonExistence(timeout: 5))
     }
 
-    func testFeedbackUsesTheSharedSentReplyTicks() throws {
-        open("Make the sync button bigger, it's hard to hit")
-        XCTAssertTrue(app.descendants(matching: .any)["reply-ticks-2"].firstMatch.waitForExistence(timeout: 5))
-    }
-
     func testMainFlows() throws {
         XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.

@@ -2,7 +2,7 @@
 
 > In-app feedback where each request is a chat with the coding agent that changes the app.
 
-[![CI](https://github.com/jai/feedbackkit/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jai/feedbackkit/actions/workflows/ci.yml)
+[![CI](https://github.com/jai/feedbackkit/actions/workflows/test-unit-kit.yml/badge.svg?branch=main&event=push)](https://github.com/jai/feedbackkit/actions/workflows/test-unit-kit.yml)
 [![Release](https://img.shields.io/github/v/release/jai/feedbackkit)](https://github.com/jai/feedbackkit/releases)
 ![iOS 26 · macOS 26 · Swift 6](https://img.shields.io/badge/iOS%2026%20%C2%B7%20macOS%2026-Swift%206-orange)
 
@@ -74,25 +74,37 @@ cd Demo && xcodegen && open FeedbackDemo.xcodeproj    # run the FeedbackDemo sch
 
 ## 🔧 Develop
 
-- **Package**: `swift test`.
+- **Package units**: `swift test --jobs 2 --filter FeedbackKitTests`.
+- **Package integration**: `swift test --jobs 2 --filter FeedbackKitIntegrationTests`. These use isolated preferences,
+  platform rendering and AgentChatKit's loopback ACP dev host. Set `AGENTCHAT_DEV_HOST` to reuse a prepared local host.
 - **Worker**: in `worker/`, run `npm ci`, `npm test` and `npm run typecheck`.
-- **Runner**: `make -C runner test` (Python 3.14, standard library only); `make test` at the root runs it with the rest.
-- **Demo UI test**: test the `FeedbackDemo` scheme on an iPhone simulator. `FeedbackDemoUITests` goes through each
-  role's main flows. With `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>` set, it also writes the screenshots above.
+- **Runner**: `make -C runner test` (Python 3.14, standard library only); `make test-unit-kit` uses pytest with sockets disabled for the 38 isolated cases; `make test-integration-kit` runs the 89 storage/process cases.
+- **Demo UI tests**: generate `Demo/FeedbackDemo.xcodeproj` with XcodeGen, then use `FeedbackDemo` with the full
+  `SDK-iOS` plan or `FeedbackDemoMac` with `SDK-macOS`. They exercise FeedbackKit's screens and adapters on controlled
+  data, not the deployed system. Start the matching AgentChatKit ACP dev host locally for live fixtures; its default
+  address is `http://127.0.0.1:8788`, overridden with `TEST_RUNNER_FEEDBACKKIT_LIVE_SERVER`. With
+  `TEST_RUNNER_FEEDBACKDEMO_SCREENSHOTS=<folder>` set, the tests also write the screenshots above.
 
 [docs/end-to-end-walkthrough.md](docs/end-to-end-walkthrough.md) is the whole path by hand: the demo, a
 sample backend deployed and torn down by one workflow, a coding thread that changes the demo, and the rebuilt demo.
 
-CI runs all three on every push to main. Each hour, a release job tags the newest commit on main that passed CI,
-if a `feat` or `fix` commit is waiting. The commit messages pick the version
-([Conventional Commits](https://www.conventionalcommits.org)).
+Run `make worker-setup sample-setup runner-setup` once to prepare pinned Node and Python dependencies.
+`make lint-kit`, `make test-unit-kit` and `make test-integration-kit` match the named workflows. Unit checks include
+Swift SDK and menu logic, Worker/sample logic and the Python runner, with network guards and randomized order.
+For local ACP integration, start `.build/checkouts/agentchatkit/server/dev/host.ts --port 8788` with Node 26 after
+`swift package resolve`, then set `AGENTCHAT_DEV_HOST=http://127.0.0.1:8788` if reusing it. Native UI uses the full
+plans through `make test-ui-kit PLATFORM=ios SIMULATOR=<id>` or `PLATFORM=mac`.
+
+The release workflow validates a `rc-kit-v<version>-<commit>` through the separate lint, unit, integration and UI
+workflows, then publishes the same tested commit as `v<version>`. See [docs/workflow.md](docs/workflow.md) for setup,
+cleanup, triggers and the existing runner update channels. External clock/runner enablement is managed separately.
 
 **Never breaking** (Jai, 2026-11-16: "always latest, never breaking"). Apps take every release automatically, so a
 release must never break one:
 
 - Add to the public API. Never remove or change a public signature.
 - To retire one, deprecate it and keep it working.
-- CI's `test` job runs `swift package diagnose-api-breaking-changes <latest release tag>` and fails on any break,
+- `make lint-kit` runs `swift package diagnose-api-breaking-changes <latest release tag>` and fails on any break,
   which also holds the release.
 - A deliberate break needs Jai's OK and a major version.
 
@@ -177,9 +189,10 @@ The existing dependency floor is intentionally unchanged here; there is no local
 Legacy `FeedbackConnection`, `URLFeedbackConnection`, `FeedbackClient(baseURL:bearer:samples:)`, samples, and
 `Feature*` aliases remain source-compatible. A legacy backend URL is never used to infer an ACP endpoint.
 
-The demo's `FEEDBACKKIT_LIVE_FIXTURE=status|queue|question|screenshots` launch environment selects an in-memory
-ACP fixture through this public direct API. `FEEDBACKKIT_DEMO_APPEARANCE=light|dark|large` controls capture variants.
+The demo's `FEEDBACKKIT_LIVE_FIXTURE=status|queue|question|screenshots` launch environment selects controlled REST
+responses and AgentChatKit's loopback ACP dev host through this public direct API.
+`FEEDBACKKIT_DEMO_APPEARANCE=light|dark|large` controls capture variants.
 The screenshot resource is a copy of the existing captured FeedbackKit demo list, not a synthetic screen. Shared UI
 tests attach real `XCUIScreen` captures and optionally write them under `FEEDBACKDEMO_SCREENSHOTS`.
-`FeedbackDemoMac` adds Mac UI coverage and needs parent CI wiring; no workflow is changed here. All new tests and
-capture cases are authored only until the parent runs them on its authorized CI lane.
+The full-target iPhone and Mac plans cover FeedbackKit's role flows, handoff and adapter wiring. AgentChatKit owns
+shared delivery ticks, appearance matrices and screenshot-viewer behavior, so those checks stay in its own suite.

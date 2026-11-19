@@ -1,26 +1,41 @@
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
-      - id: lint
-        name: make lint
-        entry: make lint
+      - id: fix
+        name: Fix and stage changed files
+        entry: bash -c 'make fix FILES="$*" && git add -- "$@"' --
+        language: system
+      - id: lint-kit
+        name: Lint FeedbackKit
+        entry: make lint-kit
         language: system
         pass_filenames: false
-        stages: [pre-commit]
-      - id: check
-        name: make check
-        entry: make check
+      - id: lint-workflows
+        name: Lint workflows
+        entry: make lint-workflows
+        language: system
+        pass_filenames: false
+        files: '^\.github/workflows/'
+      - id: test-unit-kit
+        name: FeedbackKit isolated units before push
+        entry: make test-unit-kit
         language: system
         pass_filenames: false
         stages: [pre-push]
+        files: '^(Sources|Tests|worker|sample-worker|runner)/|^(Package\.|Makefile|mise.toml|requirements-test.txt|pytest.ini|ruff.toml|\.swiftlint.yml)'
+      - id: secrets
+        name: Check staged secrets
+        entry: mise exec gitleaks@8.30.1 -- gitleaks git --pre-commit --staged --redact --no-banner
+        language: system
+        pass_filenames: false
       - id: author
-        name: author is not a work address
+        name: Author uses personal email
         entry: >-
           sh -c 'case "$(git var GIT_AUTHOR_IDENT)" in
           *"<jai.g@ewa-services.com>"*|*"<jai.g@finn-app.com>"*)
-          echo "This commit is by a work address; this repo takes jai@govindani.com:
-          git config user.email jai@govindani.com" >&2; exit 1;; esac'
+          echo "Use jai@govindani.com in this personal repository" >&2; exit 1;; esac'
         language: system
         always_run: true
         pass_filenames: false
-        stages: [pre-commit]

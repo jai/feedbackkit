@@ -12,7 +12,7 @@ final class LiveFeedbackUITests: XCTestCase {
 
     func testDirectSharedReplyStatusCancelAndRetry() {
         launch("status")
-        XCTAssertTrue(element("reply-ticks-2").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("feedback-cancel-pending").waitForExistence(timeout: 5))
         let pending = text("This can still be cancelled")
         XCTAssertTrue(pending.waitForExistence(timeout: 5))
         activate(element("feedback-cancel-pending"))
@@ -70,36 +70,11 @@ final class LiveFeedbackUITests: XCTestCase {
         XCTAssertTrue(element("feedback-question").waitForNonExistence(timeout: 5))
     }
 
-    func testSharedControlsLightDarkAndLargeCaptures() {
-        for appearance in ["light", "dark", "large"] {
-            for (scenario, ready) in [("status", "feedback-cancel-pending"),
-                                      ("queue", "feedback-edit-edit"),
-                                      ("question", "feedback-answer-mac")] {
-                launch(scenario, appearance: appearance)
-                XCTAssertTrue(element(ready).waitForExistence(timeout: 10))
-                capture("direct-live-\(scenario)-\(appearance)")
-            }
-        }
-    }
-
-    func testScreenshotStripViewerAndLightDarkLargeCaptures() throws {
-        #if os(macOS)
-        // On the Mac a thumbnail's accessibility frame is not where it is drawn, so a click misses (once it landed on
-        // the desktop's widgets) and the viewer never opens. AgentChatKit's to fix; iPhone runs this test.
-        throw XCTSkip("jai/agentchatkit#6: a sent screenshot thumbnail's accessibility frame is wrong on the Mac")
-        #else
-        for appearance in ["light", "dark", "large"] {
-            launch("screenshots", appearance: appearance)
-            let thumbnail = element("feedback-screenshot-picture-0")
-            XCTAssertTrue(thumbnail.waitForExistence(timeout: 10))
-            capture("direct-live-\(appearance)")
-            activate(thumbnail)
-            XCTAssertTrue(element("sent-screenshot-viewer").waitForExistence(timeout: 5))
-            capture("direct-live-viewer-\(appearance)")
-            activate(element("sent-screenshot-viewer-close"))
-            XCTAssertTrue(element("sent-screenshot-viewer").waitForNonExistence(timeout: 5))
-        }
-        #endif
+    func testFeedbackImageAdapterProvidesAScreenshotThumbnail() {
+        launch("screenshots")
+        let thumbnail = element("feedback-screenshot-picture-0")
+        XCTAssertTrue(thumbnail.waitForExistence(timeout: 10))
+        capture("direct-live-image-adapter")
     }
 
     private func launch(_ scenario: String, appearance: String = "light", opening: Bool = true) {

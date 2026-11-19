@@ -1,0 +1,55 @@
+name: test-integration-kit
+on:
+  push:
+    branches: [main]
+    paths: ["Sources/**", "Tests/**", "Demo/**", "worker/**", "sample-worker/**", "runner/**", "deploy/**", "Package.*", "Makefile", "mise.toml", "requirements-test.txt", "pytest.ini", "ruff.toml", ".swift*", ".ox*", "cliff.toml", ".github/**"]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      AGENTCHAT_DEV_HOST: http://127.0.0.1:8788
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        with:
+          cache: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.13.1
+      - name: Prepare dependencies
+        run: make worker-setup sample-setup runner-setup
+      - name: Start matching local ACP host
+        run: |
+          swift package resolve
+          mise exec node@26.13.1 -- node .build/checkouts/agentchatkit/server/dev/host.ts --port 8788 > "$RUNNER_TEMP/feedback-host.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/feedback-host.pid"
+          for _ in {1..30}; do
+            kill -0 "$(cat "$RUNNER_TEMP/feedback-host.pid")"
+            if grep -q "^ready " "$RUNNER_TEMP/feedback-host.log"; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Run test-integration-kit
+        run: make test-integration-kit
+      - name: Stop this job's ACP host
+        if: always()
+        run: |
+          file="$RUNNER_TEMP/feedback-host.pid"
+          if [ -f "$file" ]; then kill "$(cat "$file")" 2>/dev/null || true; fi
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: feedback-integration-host
+          path: ${{ runner.temp }}/feedback-host.log
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Remove disposable products
+        if: always()
+        run: rm -rf -- .build .venv worker/node_modules sample-worker/node_modules runner/MenuBar/.build Demo/*.xcodeproj tmp

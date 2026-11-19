@@ -75,12 +75,14 @@ schemes:
       targets:
         FeedbackDemo: all
     test:
-      targets:
-        - FeedbackDemoMacUITests
+      testPlans:
+        - path: SDK-macOS.xctestplan
+          defaultPlan: true
   FeedbackDemo:
     build:
       targets:
         FeedbackDemo: all
     test:
-      targets:
-        - FeedbackDemoUITests
+      testPlans:
+        - path: SDK-iOS.xctestplan
+          defaultPlan: true

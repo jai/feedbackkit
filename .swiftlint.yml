@@ -54,3 +54,12 @@ disabled_rules:
   - optional_data_string_conversion
   # `var x: T? = nil` in a SwiftUI view keeps the memberwise initializer's parameter optional with a default.
   - implicit_optional_initialization
+
+custom_rules:
+  unit_outside_resources:
+    included: "Tests/FeedbackKitTests/Unit/.*\\.swift|Tests/FeedbackKitTestSupport/.*\\.swift|runner/MenuBar/Tests/RunnerMenuCoreTests/.*\\.swift"
+    name: Unit tests use controlled inputs
+    regex: '\b(FileManager|UserDefaults|URLSession|Process|ProcessInfo|ContinuousClock|NSApplication|UIApplication|NotificationCenter|ImageRenderer|NSImage|UIImage|NSWindow|UIWindow|NSHostingView|NSHostingController|UIHostingController)\b|Task\.sleep|Thread\.sleep|DispatchQueue|Data\(contentsOf:|Bundle\.main|Date\(\)|Date\.now'
+    excluded_match_kinds: [comment, doccomment, string]
+    message: Move storage, network, platform and elapsed-time checks to integration; inject dependencies for unit logic.
+    severity: error

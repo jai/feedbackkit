@@ -1,0 +1,39 @@
+name: generate-release-candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: generate-release-candidate
+  cancel-in-progress: false
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: 5757830
+          private-key: ${{ secrets.JAI_AGENTS_PRIVATE_KEY }}
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Generate the next candidate from conventional commits
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          busy=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?per_page=100" --jq '[.workflow_runs[] | select(.status != "completed" and (.head_branch | startswith("rc-kit-")))] | length')
+          if [ "$busy" != 0 ]; then echo "An FeedbackKit candidate is already queued or running"; exit 0; fi
+          last=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          next=$(npx --yes git-cliff@2.14.2 --bumped-version)
+          if [ "$next" = "$last" ]; then echo "No release changes"; exit 0; fi
+          rc="rc-kit-${next}-$(git rev-parse --short HEAD)"
+          if git rev-parse -q --verify "refs/tags/$rc" > /dev/null; then echo "Candidate already tested"; exit 0; fi
+          git tag "$rc"
+          git push origin "refs/tags/$rc"

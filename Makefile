@@ -1,42 +1,15 @@
-# >>> repo header
-# jai/feedbackkit: the root Makefile (new). Built from jai/ci makefile.template; regenerate with jai/ci makefiles/sync.py.
-#
-# Languages: Swift (Sources/, Tests/, Demo/, runner/MenuBar/), TypeScript (worker/, sample-worker/), Python (runner/),
-# shell (deploy/, runner/MenuBar/).
-#
-# runner/ runs on Homebrew's Python 3.14 (runner/install.py): mise.toml pins python 3.14, and uv for Pyrefly.
-# runner/Makefile stays; its LaunchAgent drift check is `install-check`, so the root `check` is only the code check.
-# The worker type checks read src/ only, as tsc -p tsconfig.json did: the tests run on node --test.
-# SWIFT_TEST_ARGS: CI skips the Live suites (`--skip ...`), which die with SIGBUS on GitHub's macOS 26 runner.
-# The demo app's builds and UI tests, the API break check and the menu bar bundle stay in CI (ci.yml).
-# <<< repo header
-#
-# Standard targets (jai/ci docs/make-targets.md):
-#   make setup       tools, dependencies and git hooks; safe to run again
-#   make fmt         format every file in place
-#   make lint        format check and fast linters on all files; changes nothing (git pre-commit hook, CI Lint)
-#   make typecheck   type checks and type-aware lint rules (CI Lint)
-#   make test        unit tests: no network, no outside services (CI Unit Tests)
-#   make check       lint, then typecheck and test for the parts that changed against origin/main (git pre-push hook)
-#   make             same as make check
-#
-# Keep to GNU Make 3.81, the version macOS ships: no .ONESHELL, no .SHELLFLAGS, no $(file ...).
-# A recipe line that fails stops the target. Put `set -o pipefail;` in front of any line with a pipe.
-# Everything outside the two "repo" blocks comes from jai/ci makefile.template; change it there.
-
+# FeedbackKit ships the SDK, Worker and runner together from one tested vX.Y.Z source release.
+# Named targets separate the test layers. Preparation is explicit; hooks run units only.
 SHELL := /bin/bash
-.DEFAULT_GOAL := check
-.PHONY: setup fmt lint typecheck test check
+.DEFAULT_GOAL := test-unit-kit
+.PHONY: setup
 
 # Tools. mise (https://mise.jdx.dev) installs each pinned tool on first use, so a target works in a fresh clone, a new
 # worktree and a CI job alike. Runtimes (node, go, python) come from the repo's mise.toml or .tool-versions.
 X := mise exec
 RUN := $(X) --
-# At most 4 parallel jobs on Jai's Macs (RULES.md): an uncapped hook held Cube 03 at 0% idle on 2026-11-16. Go tools
-# (go test, go vet, golangci-lint) take GOMAXPROCS. Give a part's other runners $(JOBS): vitest and jest
-# --maxWorkers=$(JOBS), xcodebuild -jobs $(JOBS), Gradle --max-workers=$(JOBS), golangci-lint --concurrency=$(JOBS).
-JOBS := 4
-export GOMAXPROCS := $(JOBS)
+# Bound local build parallelism.
+JOBS ?= 4
 PREK        := $(X) prek@0.5.10 -- prek
 ACTIONLINT  := $(X) actionlint@1.7.12 -- actionlint
 GITLEAKS    := $(X) gitleaks@8.30.1 -- gitleaks
@@ -52,38 +25,17 @@ OXLINT_NPX  := npx --yes oxlint@1.93.0 --threads=$(JOBS)
 RUFF        := $(X) ruff@0.17.5 -- ruff
 # pipx: tools need uv on the machine: pin it in the repo's mise.toml or .tool-versions (uv 0.9 or later).
 PYREFLY     := $(X) pipx:pyrefly@1.4.1 -- pyrefly
-# Go. golangci-lint v2 also formats (`golangci-lint fmt`, formatters set in .golangci.yml).
-GOLANGCI    := $(X) golangci-lint@2.15.0 -- golangci-lint
-# Swift
 SWIFTFORMAT := $(X) swiftformat@0.64.7 -- swiftformat
-SWIFTLINT   := $(X) swiftlint@0.65.1 -- swiftlint
-# PHP. Mago formats, lints and analyses in one binary.
-MAGO        := $(X) mago@1.60.1 -- mago
-# Terraform
-TERRAFORM   := $(X) terraform@1.17.2 -- terraform
-TFLINT      := $(X) tflint@0.66.0 -- tflint
-# Security scanners, for the optional `security` target.
-TRIVY       := $(X) trivy@0.76.2 -- trivy
-OSV         := $(X) osv-scanner@2.3.8 -- osv-scanner
-SEMGREP     := $(X) pipx:semgrep@1.151.0 -- semgrep
-
-# Changed files, for `check`: committed since origin/main, uncommitted, and untracked.
-# The default branch's tip, from origin/HEAD (master in ramen-beast-web); origin/main when origin/HEAD is not set.
-BASE ?= $(or $(shell git rev-parse --abbrev-ref origin/HEAD 2>/dev/null),origin/main)
-CHANGED := $(shell git diff --name-only $(BASE)...HEAD 2>/dev/null; git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null)
-# A change to one of these runs every part.
-EVERYTHING := Makefile mise.toml .tool-versions .pre-commit-config.yaml
-# $(strip): Make 3.81 counts a blank $(if) condition as true, so with no part changed `make check` would loop.
-changed_parts = $(strip $(if $(filter $(EVERYTHING),$(CHANGED)),$(PARTS),$(foreach p,$(PARTS),$(if $(filter $($(p)_PATHS),$(CHANGED)),$(p)))))
+SWIFTLINT := $(X) swiftlint@0.65.1 -- swiftlint
+PYTHON := .venv/bin/python -I
+unexport $(shell git rev-parse --local-env-vars 2>/dev/null)
 
 # Shell scripts by shebang. ShellCheck and shfmt read bash and sh; zsh scripts get `zsh -n`.
 SH_FILES = $(shell git ls-files '*.sh' | xargs grep -l -E '^\#!.*(bash|/sh)' 2>/dev/null)
 ZSH_FILES = $(shell git ls-files '*.sh' '*.zsh' | xargs grep -l -E '^\#!.*zsh' 2>/dev/null)
 
-# >>> repo parts
 PARTS := kit menubar worker sample runner
 
-SWIFT_TEST_ARGS ?=
 kit_PATHS := Sources/% Tests/% Demo/% Package.swift Package.resolved .swiftformat .swiftlint.yml
 .PHONY: kit-setup kit-fmt kit-lint kit-typecheck kit-test
 kit-setup:
@@ -96,7 +48,7 @@ kit-lint:
 kit-typecheck:
 	swift build -j $(JOBS)
 kit-test:
-	swift test -j $(JOBS) $(SWIFT_TEST_ARGS)
+	swift test -j $(JOBS) --filter FeedbackKitTests
 
 # The runner's menu bar app: its own Swift package. kit-fmt and kit-lint cover its files.
 menubar_PATHS := runner/MenuBar/%
@@ -120,7 +72,7 @@ worker-lint:
 worker-typecheck:
 	cd worker && $(OXLINT) --type-aware --type-check --deny-warnings src
 worker-test:
-	npm --prefix worker test
+	npm --prefix worker run test:unit
 
 # sample-worker/ type-checks worker/src/token.ts too (its tsconfig.json).
 sample_PATHS := sample-worker/% worker/src/token.ts .oxfmtrc.json
@@ -135,13 +87,14 @@ sample-lint:
 sample-typecheck:
 	cd sample-worker && $(OXLINT) --type-aware --type-check --deny-warnings src
 sample-test:
-	npm --prefix sample-worker test
+	npm --prefix sample-worker run test:unit
 
 runner_PATHS := runner/feedbackkit_runner/% runner/tests/% runner/prompts/% runner/install.py runner/Makefile \
 	runner/pyrefly.toml ruff.toml
 .PHONY: runner-setup runner-fmt runner-lint runner-typecheck runner-test
 runner-setup:
-	@:
+	$(X) uv@0.13.8 -- uv venv --python 3.14 .venv
+	$(X) uv@0.13.8 -- uv pip install --python .venv/bin/python -r requirements-test.txt
 runner-fmt:
 	$(RUFF) format runner
 runner-lint:
@@ -150,31 +103,52 @@ runner-lint:
 runner-typecheck:
 	cd runner && $(PYREFLY) check
 runner-test:
-	$(RUN) $(MAKE) -C runner test
-# <<< repo parts
+	$(PYTHON) -m pytest -q -p no:cacheprovider --disable-socket runner/tests/unit
 
 # Repo-wide: GitHub workflows, shell scripts, and secrets in the staged changes.
 .PHONY: repo-fmt repo-lint
 repo-fmt:
 	$(if $(SH_FILES),$(SHFMT) -w $(SH_FILES),@:)
 repo-lint:
-	$(ACTIONLINT)
 	$(if $(SH_FILES),$(SHFMT) -d $(SH_FILES),@:)
 	$(if $(SH_FILES),$(SHELLCHECK) $(SH_FILES),@:)
 	$(foreach f,$(ZSH_FILES),zsh -n $(f) &&) :
-	$(GITLEAKS) git --pre-commit --staged --redact --no-banner
 
-# mise reads the repo's mise.toml or .tool-versions only once the clone trusts it. CI sets
-# MISE_TRUSTED_CONFIG_PATHS to the workspace instead.
-.PHONY: mise-trust
-mise-trust:
-	mise trust --quiet
-# The standard targets.
-setup: mise-trust $(addsuffix -setup,$(PARTS))
+.PHONY: setup lint-kit lint-workflows lint all-tests test-unit-kit test-integration-kit test-ui-kit fix
+setup: $(addsuffix -setup,$(PARTS))
 	$(PREK) install --hook-type pre-commit --hook-type pre-push
-fmt: repo-fmt $(addsuffix -fmt,$(PARTS))
-lint: repo-lint $(addsuffix -lint,$(PARTS))
-typecheck: $(addsuffix -typecheck,$(PARTS))
-test: $(addsuffix -test,$(PARTS))
-check: lint
-	$(if $(changed_parts),$(MAKE) -f $(firstword $(MAKEFILE_LIST)) $(addsuffix -typecheck,$(changed_parts)) $(addsuffix -test,$(changed_parts)),@echo "check: no part changed against $(BASE)")
+lint-workflows:
+	$(ACTIONLINT)
+lint-kit: repo-lint kit-lint worker-lint sample-lint runner-lint kit-typecheck menubar-typecheck worker-typecheck sample-typecheck runner-typecheck
+	base=$$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1); test -n "$$base"; swift package -j $(JOBS) diagnose-api-breaking-changes "$$base" --products FeedbackKit
+lint: lint-kit lint-workflows
+
+test-unit-kit: kit-test menubar-test worker-test sample-test runner-test
+
+test-integration-kit:
+	swift test -j $(JOBS) --filter FeedbackKitIntegrationTests
+	npm --prefix worker run test:integration
+	$(PYTHON) -m pytest -q -p no:cacheprovider runner/tests/integration
+
+PLATFORM ?= ios
+SIMULATOR ?=
+UI_SCHEME = $(if $(filter mac,$(PLATFORM)),FeedbackDemoMac,FeedbackDemo)
+UI_PLAN = $(if $(filter mac,$(PLATFORM)),SDK-macOS,SDK-iOS)
+COMMA := ,
+UI_DESTINATION = $(if $(filter mac,$(PLATFORM)),platform=macOS,platform=iOS Simulator$(COMMA)id=$(SIMULATOR))
+test-ui-kit:
+	xcodebuild test -project Demo/FeedbackDemo.xcodeproj -scheme $(UI_SCHEME) -testPlan $(UI_PLAN) \
+		-destination '$(UI_DESTINATION)' -derivedDataPath tmp/ui-$(PLATFORM) -clonedSourcePackagesDirPath tmp/swift-packages \
+		-resultBundlePath tmp/ui-$(PLATFORM).xcresult -parallel-testing-enabled NO \
+		-retry-tests-on-failure -test-iterations 2 -jobs $(JOBS)
+all-tests: test-unit-kit test-integration-kit test-ui-kit
+
+# Use formatter/linter native fixes only on the requested files. The hook adds their changes to the index.
+fix:
+	$(if $(filter %.swift,$(FILES)),$(SWIFTFORMAT) $(filter %.swift,$(FILES)),@:)
+	$(if $(filter %.py,$(FILES)),$(RUFF) check --fix $(filter %.py,$(FILES)),@:)
+	$(if $(filter %.py,$(FILES)),$(RUFF) format $(filter %.py,$(FILES)),@:)
+	$(if $(filter worker/%.ts worker/%.mjs,$(FILES)),cd worker && $(OXLINT) --fix --deny-warnings $(patsubst worker/%,%,$(filter worker/%.ts worker/%.mjs,$(FILES))),@:)
+	$(if $(filter sample-worker/%.ts sample-worker/%.mjs,$(FILES)),cd sample-worker && $(OXLINT) --fix --deny-warnings $(patsubst sample-worker/%,%,$(filter sample-worker/%.ts sample-worker/%.mjs,$(FILES))),@:)
+	$(if $(filter %.ts %.js %.mjs %.json,$(FILES)),$(OXFMT) $(filter %.ts %.js %.mjs %.json,$(FILES)),@:)
+	$(if $(filter %.sh,$(FILES)),$(SHFMT) -w $(filter %.sh,$(FILES)),@:)

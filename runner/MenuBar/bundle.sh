@@ -1,13 +1,13 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Builds "FeedbackKit Runner.app" (arm64 and x86_64, ad-hoc signed) and zips it to $1 (default
-# FeedbackKitRunner.zip). CI runs it (.github/workflows/ci.yml, job runner-menu); never on Jai's Macs (jai/ci RULES.md).
+# FeedbackKitRunner.zip). CI runs it (.github/workflows/lint-kit.yml and deploy-kit.yml); never on Jai's Macs (jai/ci RULES.md).
 set -eu
 cd "$(dirname "$0")"
 out=${1:-FeedbackKitRunner.zip}
 build=${GITHUB_RUN_NUMBER:-0}
 version="1.0.$build"
-swift build -c release --arch arm64 --arch x86_64 --product FeedbackKitRunnerMenu
-bin=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
+swift build -j "${JOBS:-4}" -c release --arch arm64 --arch x86_64 --product FeedbackKitRunnerMenu
+bin=$(swift build -j "${JOBS:-4}" -c release --arch arm64 --arch x86_64 --show-bin-path)
 stage=$(mktemp -d)
 app="$stage/FeedbackKit Runner.app"
 mkdir -p "$app/Contents/MacOS"

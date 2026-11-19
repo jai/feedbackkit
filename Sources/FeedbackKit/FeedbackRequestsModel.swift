@@ -90,19 +90,28 @@ public final class FeedbackRequestsModel {
 
     /// The chats archived on this device (#14): out of the list until unarchived. Nothing changes on the Worker.
     private(set) var archived: Set<String>
-    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let defaults: UserDefaults?
+    @ObservationIgnored private let build: String?
+    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored private let wait: @Sendable (Duration) async throws -> Void
     static let archivedKey = "FeedbackKit.archivedThreads"
 
-    public init(client: FeedbackClient) {
-        self.client = client
-        defaults = .standard
-        archived = Set(defaults.stringArray(forKey: Self.archivedKey) ?? [])
+    public convenience init(client: FeedbackClient) {
+        self.init(client: client, defaults: .standard,
+                  build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
     }
 
-    init(client: FeedbackClient, defaults: UserDefaults) {
+    init(
+        client: FeedbackClient, defaults: UserDefaults?, build: String? = nil,
+        now: @escaping @Sendable () -> Date = Date.init,
+        wait: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
         self.client = client
         self.defaults = defaults
-        archived = Set(defaults.stringArray(forKey: Self.archivedKey) ?? [])
+        self.build = build
+        self.now = now
+        self.wait = wait
+        archived = Set(defaults?.stringArray(forKey: Self.archivedKey) ?? [])
     }
 
     func draft(for box: String) -> String { drafts[box] ?? "" }
@@ -152,11 +161,6 @@ public final class FeedbackRequestsModel {
 
     func binding(for box: String) -> Binding<String> {
         Binding(get: { self.drafts[box] ?? "" }, set: { self.drafts[box] = $0.isEmpty ? nil : $0 })
-    }
-
-    /// The host app's build, sent with each message so the agent knows what the sender is looking at.
-    private var build: String? {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     }
 
     func refresh() async {
@@ -230,38 +234,6 @@ public final class FeedbackRequestsModel {
         }
     }
 
-    /// `FeedbackSamples`: a send the agent answers a moment later, so a test and a recording see the whole round.
-    private func sendSample(_ message: FeedbackMessage, thread: String?, route: FeedbackRoute, answer: String)
-        async throws {
-        try await Task.sleep(for: .milliseconds(600))
-        let id = thread ?? "sesn_new_\(list.threads.count)"
-        var chat = chats[id] ?? FeedbackChat(
-            id: id, messages: [], isWorking: false, activity: nil, problem: nil, costCents: 0, builderOnline: true
-        )
-        let sent = "\(chat.messages.count + 1)"
-        chat.messages.append(.init(id: sent, role: "you", text: message.text, anchor: nil))
-        if !message.images.isEmpty {
-            chat.screenshots[sent] = message.images.count
-        }
-        chat.isWorking = true
-        chat.activity = "Reading the app"
-        chats[id] = chat
-        if case .new(let started) = route, thread == nil {
-            self.started[started] = id
-            list.threads.insert(FeedbackThread(id: id, title: message.text, createdAt: Date.now.ISO8601Format()), at: 0)
-        }
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            guard var chat = chats[id] else {
-                return
-            }
-            chat.messages.append(.init(id: "\(chat.messages.count + 1)", role: "agent", text: answer, anchor: nil))
-            chat.isWorking = false
-            chat.activity = nil
-            chats[id] = chat
-        }
-    }
-
     /// Direct/v2 follows ACP while visible, including idle; legacy connections keep their original read behavior.
     func follow(
         _ route: FeedbackRoute, mode: FeedbackFollowMode = .whileWorking,
@@ -291,7 +263,7 @@ public final class FeedbackRequestsModel {
             guard mode.keepsReading(chats[thread]) || sending.contains(route.box) else {
                 return
             }
-            try? await Task.sleep(for: Self.pollDelay(
+            try? await wait(Self.pollDelay(
                 working: chats[thread]?.isWorking == true || sending.contains(route.box)
             ))
         }
@@ -347,6 +319,40 @@ public final class FeedbackRequestsModel {
     }
 }
 
+extension FeedbackRequestsModel {
+    /// `FeedbackSamples`: a send the agent answers a moment later, so a test and a recording see the whole round.
+    private func sendSample(_ message: FeedbackMessage, thread: String?, route: FeedbackRoute, answer: String)
+        async throws {
+        try await wait(.milliseconds(600))
+        let id = thread ?? "sesn_new_\(list.threads.count)"
+        var chat = chats[id] ?? FeedbackChat(
+            id: id, messages: [], isWorking: false, activity: nil, problem: nil, costCents: 0, builderOnline: true
+        )
+        let sent = "\(chat.messages.count + 1)"
+        chat.messages.append(.init(id: sent, role: "you", text: message.text, anchor: nil))
+        if !message.images.isEmpty {
+            chat.screenshots[sent] = message.images.count
+        }
+        chat.isWorking = true
+        chat.activity = "Reading the app"
+        chats[id] = chat
+        if case .new(let started) = route, thread == nil {
+            self.started[started] = id
+            list.threads.insert(FeedbackThread(id: id, title: message.text, createdAt: now().ISO8601Format()), at: 0)
+        }
+        Task {
+            try? await wait(.seconds(3))
+            guard var chat = chats[id] else {
+                return
+            }
+            chat.messages.append(.init(id: "\(chat.messages.count + 1)", role: "agent", text: answer, anchor: nil))
+            chat.isWorking = false
+            chat.activity = nil
+            chats[id] = chat
+        }
+    }
+}
+
 /// Archive on this device (#14).
 extension FeedbackRequestsModel {
     /// The list's chats less the archived ones, newest first.
@@ -360,6 +366,6 @@ extension FeedbackRequestsModel {
 
     private func setArchived(_ threads: Set<String>) {
         archived = threads
-        defaults.set(threads.sorted(), forKey: Self.archivedKey)
+        defaults?.set(threads.sorted(), forKey: Self.archivedKey)
     }
 }

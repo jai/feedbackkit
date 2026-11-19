@@ -18,11 +18,19 @@ let package = Package(
             .product(name: "AgentChatLive", package: "agentchatkit"),
             .product(name: "DurableNetworking", package: "durable-networking"),
         ]),
+        .target(name: "FeedbackKitTestSupport", dependencies: [
+            "FeedbackKit", .product(name: "DurableNetworking", package: "durable-networking"),
+        ], path: "Tests/FeedbackKitTestSupport"),
         .testTarget(name: "FeedbackKitTests", dependencies: [
-            "FeedbackKit",
+            "FeedbackKit", "FeedbackKitTestSupport",
+            .product(name: "AgentChatLive", package: "agentchatkit"),
+            .product(name: "DurableNetworking", package: "durable-networking"),
+        ], path: "Tests/FeedbackKitTests/Unit"),
+        .testTarget(name: "FeedbackKitIntegrationTests", dependencies: [
+            "FeedbackKit", "FeedbackKitTestSupport",
             .product(name: "AgentChatLive", package: "agentchatkit"),
             .product(name: "AgentChatLiveTesting", package: "agentchatkit"),
             .product(name: "DurableNetworking", package: "durable-networking"),
-        ]),
+        ], path: "Tests/FeedbackKitTests/Integration"),
     ]
 )

@@ -16,6 +16,6 @@ final class FeedbackMacSelectionUITests: XCTestCase {
         // A text field on the Mac.
         XCTAssertTrue(app.descendants(matching: .any)["sessionReplyField"].firstMatch.waitForExistence(timeout: 5))
         row.click()
-        XCTAssertTrue(app.descendants(matching: .any)["reply-ticks-2"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-cancel-pending"].firstMatch.waitForExistence(timeout: 5))
     }
 }

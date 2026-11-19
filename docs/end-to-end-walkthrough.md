@@ -15,8 +15,8 @@ Rerun this walk-through with both once G5 lands.
 
 ## 1. Click deploy
 
-Run the workflow [sample-worker](../.github/workflows/sample-worker.yml) with `action: deploy` (Actions → sample-worker
-→ Run workflow, or `gh workflow run sample-worker.yml -R jai/feedbackkit -f action=deploy`). It tests the sample
+Run the workflow [deploy-sample](../.github/workflows/deploy-sample.yml) with `action: deploy` (Actions → deploy-sample
+→ Run workflow, or `gh workflow run deploy-sample.yml -R jai/feedbackkit -f action=deploy`). It tests the sample
 backend ([sample-worker/](../sample-worker)), deploys it as `feedbackkit-sample`, sets its two secrets and writes its
 URL in the run summary: `https://feedbackkit-sample.jai-f89.workers.dev`.
 
@@ -108,7 +108,7 @@ What broke, and what was done about it:
 
 ## 5. Click teardown
 
-Run the workflow with `action: teardown` (`gh workflow run sample-worker.yml -R jai/feedbackkit -f
+Run the workflow with `action: teardown` (`gh workflow run deploy-sample.yml -R jai/feedbackkit -f
 action=teardown`). It deletes `feedbackkit-sample` through Cloudflare's API and says so in the run summary. On
 2026-11-15: deploy 18 s; teardown 16 s, "deleted"; teardown again, "already gone"; the URL then answers `404`.
 
