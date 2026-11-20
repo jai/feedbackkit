@@ -125,9 +125,9 @@ Release validation uses the candidate workflow; host capacity and cordons remain
 - Worker: 14 pure units with network disabled and shuffled order; 56 local integration declarations use actual
   SQLite/migrations or server/adapter contracts (one ACP capability skip). SQLite in memory remains integration.
 - Sample Worker: 2 isolated authentication/config units, network disabled and shuffled.
-- Python runner: 38 isolated units with sockets disabled and shuffled; 89 filesystem/Git/process integrations.
-  The installed updater's standard-library `unittest discover` still discovers all 127 and needs no pytest install.
-- Menu core: 8 isolated policy/decoding cases. Bundle compilation belongs to lint/build, not a unit test.
+- Python runner: 45 isolated units with sockets disabled and shuffled; 98 filesystem/Git/process integrations.
+  The installed updater's standard-library `unittest discover` still discovers all 143 and needs no pytest install.
+- Menu core: 18 isolated policy/decoding cases. Bundle compilation belongs to lint/build, not a unit test.
 - Demo UI: full `SDK-iOS` and `SDK-macOS` targets against mock data or the matching local ACP dev host; only
   Feedback-owned screen flows and adapters remain. These are controlled UI checks. The existing deployed manual
   walkthrough and deploy smoke are documented as E2E; cleanup adds no deployed-system suite.
