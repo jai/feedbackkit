@@ -9,19 +9,24 @@ over SSH as `jais-mac-mini`, with Jai's own SSH config and keys: no tokens, no W
   off, no builder taking new chats with its Orca answering, a message failed in the last day.
 - **Window.** The header names the problem (hover for the whole text; it can be selected and copied). Under it, "Update
   available" when a newer menu app is published. Then the runner's process, last full tick, last wake, the Worker's
-  last answer, the versions (`Menu 0.12.0 · Runner v0.12.0`, with the runner updater's error in orange) and each
-  builder: green when its Orca answers, orange when not, a grey pause sign when it takes no new chats, in the order a
-  new chat tries them. Then the feedback chats by app: sender, title, coding thread host and id, the newest message's
-  state (`pending`, `delivering`, `queued`, `delivered`, `failed`) and what the agent is doing. The list grows with its
-  rows up to 260 pt, then scrolls. Then the last 50 log lines.
+  last answer, the versions (`Menu 0.12.0 · Runner v0.12.0`, with the runner updater's error in orange). Then the
+  builders, one row each in the order a new chat tries them: a dot and a word (green "Up" when its Orca answers,
+  orange "Not answering" when not, grey "Off" when it takes no new chats; hover for why its Orca does not answer),
+  "First choice" on the first that takes new chats, and its "New chats" switch. The rows show builders.json as saved,
+  else what status.json says; while the runner has yet to apply the file (from its next full tick, within 15 s) a line
+  says "Saving… the runner applies it within 15 s". A line under them says how a new chat picks its builder. Then the
+  feedback chats by app: sender, title, coding thread host and id, the newest message's state (`pending`,
+  `delivering`, `queued`, `delivered`, `failed`) and what the agent is doing. The list grows with its rows up to
+  260 pt, then scrolls. Then the last 50 log lines.
 - **Actions.** Dismiss a failed message: the header lets it go and the icon stops showing it (its chat stays in the
-  list; dismissals are kept for 2 days). A builder's label is a menu: Stop new chats or Take new chats, Try first,
-  and why its Orca does not answer. It writes the whole of builders.json on the mini
-  ([../README.md](../README.md)) over SSH, to a mode 600 file moved into place; the runner works by it from its next
-  full tick, and a chat stays on the builder it started on. Open a chat's coding thread in Agent Pager
-  (`agentpager://thread/<host>/<id>`; Orca has no link to a remote worktree). Restart the runner (`launchctl kickstart
-  -k`: it finishes the delivery in progress first). Open the last 2,000 log lines in Console. Refresh. Quit.
-- It checks every 10 s, over one SSH connection kept open for 2 minutes. `defaults write
+  list; dismissals are kept for 2 days). A builder's "New chats" switch turns it on or off for new chats, and "Make
+  first choice" (on the others that take new chats) puts it first. Either shows at once and writes the whole of
+  builders.json on the mini ([../README.md](../README.md)) over SSH, to a mode 600 file moved into place, then looks
+  again; the runner works by it from its next full tick, and a chat stays on the builder it started on. Open a chat's
+  coding thread in Agent Pager (`agentpager://thread/<host>/<id>`; Orca has no link to a remote worktree). Restart the
+  runner (`launchctl kickstart -k`: it finishes the delivery in progress first). Open the last 2,000 log lines in Console. Refresh. Quit.
+- It checks every 10 s (the LaunchAgent, status.json, builders.json and the log, in one command), over one SSH
+  connection kept open for 2 minutes. `defaults write
   com.jai.feedbackkit-runner-menu host <alias>` points it at another host.
 
 ## Install
@@ -54,5 +59,5 @@ build without a tag (lint, a local build) says 0.0.0 and never offers an update.
 ## Develop
 
 `swift test` here, on CI or a Mac that may build (not the builders or Jai's laptop). `RunnerMenuCore` holds what can
-be tested: status.json, the SSH output, the icon's state and dismissed failures, the thread link, builders.json and
-its write, the published version and the version compare.
+be tested: status.json, the SSH output, the icon's state and dismissed failures, the thread link, builders.json, its
+write and the builders rows it shows, the published version and the version compare.

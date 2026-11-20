@@ -11,6 +11,27 @@ public struct BuildersConfig: Codable, Sendable, Equatable {
         self.off = off
     }
 
+    enum CodingKeys: String, CodingKey {
+        case order, off
+    }
+
+    /// As the runner reads it: both lists optional, but one that is there must be a list of hosts (null is not).
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func list(_ key: CodingKeys) throws -> [String] {
+            container.contains(key) ? try container.decode([String].self, forKey: key) : []
+        }
+        order = try list(.order)
+        off = try list(.off)
+    }
+
+    /// builders.json's text read back; nil when it is empty or not of the shape the runner works by.
+    public static func decode(_ text: String) -> BuildersConfig? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return try? JSONDecoder().decode(BuildersConfig.self, from: Data(text.utf8))
+    }
+
     /// The config the runner works by now: status.json lists the builders in its order, each with `on`.
     public init(_ status: RunnerStatus) {
         order = status.builders.map(\.host)
@@ -27,8 +48,8 @@ public struct BuildersConfig: Codable, Sendable, Equatable {
         return config
     }
 
-    /// With `host` the first a new chat tries.
-    public func tryingFirst(_ host: String) -> BuildersConfig {
+    /// With `host` the first choice: the first a new chat tries.
+    public func makingFirst(_ host: String) -> BuildersConfig {
         var config = self
         config.order.removeAll { $0 == host }
         config.order.insert(host, at: 0)

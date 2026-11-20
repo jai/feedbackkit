@@ -19,6 +19,8 @@ final class RunnerModel {
     private(set) var busy: String?
     private(set) var actionError: String?
     private(set) var dismissed: Dismissed
+    /// The builders config being written: shown at once, before SSH answers.
+    private(set) var savingBuilders: BuildersConfig?
     /// This app's version and commit, from its Info.plist (bundle.sh stamps them); 0.0.0 for a build without a tag.
     let version: String
     let commit: String?
@@ -40,6 +42,11 @@ final class RunnerModel {
 
     var health: Health {
         Health.of(snapshot, unreachable: unreachable, dismissed: dismissed.keys, now: Date().timeIntervalSince1970)
+    }
+
+    /// The builders block: the config being written, else builders.json as last read, else status.json's.
+    var builders: BuildersDisplay? {
+        snapshot?.status.map { BuildersDisplay(status: $0, saved: savingBuilders ?? snapshot?.builders) }
     }
 
     func start() {
@@ -107,12 +114,18 @@ final class RunnerModel {
         actionError = failure.map { "Install failed (\($0)); see \(Self.installLog.path)" }
     }
 
-    /// Writes builders.json on the Mac mini, then looks again.
+    /// Writes builders.json on the Mac mini, then looks again. The menu shows `config` from the start; a failed write
+    /// goes back to the file as it was.
     func setBuilders(_ config: BuildersConfig) async {
+        savingBuilders = config
         busy = "Saving the builders…"
         actionError = await host.write(config).map { "Could not save the builders: \($0)" }
         busy = nil
         await refresh()
+        // A later change, made while this one refreshed, stays shown until its own write is done.
+        if savingBuilders == config {
+            savingBuilders = nil
+        }
     }
 
     func restart() async {

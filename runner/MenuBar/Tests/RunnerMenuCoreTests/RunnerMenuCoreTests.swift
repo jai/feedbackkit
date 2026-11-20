@@ -22,9 +22,10 @@ func statusJSON(writtenAt: Double = 1_000, pollOK: Bool = true, builderUp: Bool 
     """
 }
 
-func snapshot(_ json: String, loaded: Bool = true, log: [String] = ["a", "b"]) -> String {
+/// The snapshot script's output; `builders` is builders.json's text (empty: no file).
+func snapshot(_ json: String, loaded: Bool = true, builders: String = "", log: [String] = ["a", "b"]) -> String {
     ["noise from the login shell", Snapshot.loadedMark, loaded ? "yes" : "no", Snapshot.statusMark, json, "",
-     Snapshot.logMark, log.joined(separator: "\n")].joined(separator: "\n")
+     Snapshot.buildersMark, builders, "", Snapshot.logMark, log.joined(separator: "\n")].joined(separator: "\n")
 }
 
 @Test func theScriptsOutputReadsBackAsASnapshot() throws {
@@ -87,6 +88,7 @@ func snapshot(_ json: String, loaded: Bool = true, log: [String] = ["a", "b"]) -
     let script = Snapshot.script(logLines: 60)
     #expect(script.contains("gui/$(id -u)/com.jai.feedbackkit-runner"))
     #expect(script.contains("feedbackkit-runner/\"/status.json") || script.contains("feedbackkit-runner\"/status.json"))
+    #expect(script.contains("feedbackkit-runner\"/builders.json"))
     #expect(script.contains("tail -n 60"))
 }
 
@@ -197,8 +199,8 @@ func status(_ json: String) throws -> RunnerStatus {
     #expect(config.turning("borg-cube-04", on: true) == .init(order: ["borg-cube-03", "borg-cube-04"], off: []))
     #expect(config.turning("borg-cube-03", on: false) == .init(order: ["borg-cube-03", "borg-cube-04"], off: ["borg-cube-04", "borg-cube-03"]))
     #expect(config.turning("borg-cube-04", on: false) == config)
-    #expect(config.tryingFirst("borg-cube-04") == .init(order: ["borg-cube-04", "borg-cube-03"], off: ["borg-cube-04"]))
-    #expect(config.tryingFirst("borg-cube-03") == config)
+    #expect(config.makingFirst("borg-cube-04") == .init(order: ["borg-cube-04", "borg-cube-03"], off: ["borg-cube-04"]))
+    #expect(config.makingFirst("borg-cube-03") == config)
     let older = try status(statusJSON())
     #expect(BuildersConfig(older) == .init(order: ["borg-cube-03"], off: []))
 }
@@ -212,4 +214,67 @@ func status(_ json: String) throws -> RunnerStatus {
     #expect(script.contains("cat > builders.json.tmp <<'FEEDBACKKIT_BUILDERS_JSON'"))
     #expect(script.contains("chmod 600 builders.json.tmp && mv builders.json.tmp builders.json"))
     #expect(script.hasSuffix("\n" + config.json() + "\nFEEDBACKKIT_BUILDERS_JSON"))
+}
+
+@Test func theSnapshotReadsBuildersJSONAsTheRunnerWould() throws {
+    let json = statusJSON(builders: twoBuilders())
+    let saved = #"{"off":["borg-cube-04"],"order":["borg-cube-04","borg-cube-03"]}"#
+    let read = Snapshot.parse(snapshot(json, builders: saved))
+    #expect(read.builders == .init(order: ["borg-cube-04", "borg-cube-03"], off: ["borg-cube-04"]))
+    #expect(read.log == ["a", "b"])
+    #expect(try #require(read.status).builders.count == 2)
+    #expect(Snapshot.parse(snapshot(json)).builders == nil)
+    #expect(Snapshot.parse(snapshot(json, builders: #"{"off":["borg-cube-04"]}"#)).builders == .init(order: [], off: ["borg-cube-04"]))
+    #expect(Snapshot.parse(snapshot(json, builders: "{}")).builders == .init(order: [], off: []))
+    // Of another shape the runner ignores it whole, so the menu does too.
+    #expect(Snapshot.parse(snapshot(json, builders: "{")).builders == nil)
+    #expect(Snapshot.parse(snapshot(json, builders: "[]")).builders == nil)
+    #expect(Snapshot.parse(snapshot(json, builders: #"{"order":null}"#)).builders == nil)
+    #expect(Snapshot.parse(snapshot(json, builders: #"{"off":"borg-cube-04"}"#)).builders == nil)
+    #expect(Snapshot.parse(snapshot(json, builders: #"{"order":[3]}"#)).builders == nil)
+}
+
+@Test func withoutBuildersJSONTheBlockShowsTheRunnersOwn() throws {
+    let read = try status(statusJSON(builders: twoBuilders(off: ["borg-cube-03"])))
+    let shown = BuildersDisplay(status: read, saved: nil)
+    #expect(shown.builders == read.builders)
+    #expect(shown.firstChoice == "borg-cube-04")
+    #expect(!shown.applying)
+    #expect(shown.config == BuildersConfig(read))
+    #expect(shown.builders.map(\.state.word) == ["Off", "Not answering"])
+    #expect(RunnerStatus.Builder(host: "a", name: "A", up: true).state.word == "Up")
+}
+
+@Test func aSavedChangeShowsAtOnceAndIsApplyingUntilTheRunnerAgrees() throws {
+    let before = try status(statusJSON(builders: twoBuilders()))
+    // Cube 04 turned off: shown off at once, and the runner has yet to apply it.
+    let off = BuildersDisplay(status: before, saved: BuildersConfig(before).turning("borg-cube-04", on: false))
+    #expect(off.builders.map(\.on) == [true, false])
+    #expect(off.builders.map(\.up) == [true, false])
+    #expect(off.firstChoice == "borg-cube-03")
+    #expect(off.applying)
+    #expect(off.config == .init(order: ["borg-cube-03", "borg-cube-04"], off: ["borg-cube-04"]))
+    // The runner's next full tick agrees.
+    let after = try status(statusJSON(builders: twoBuilders(off: ["borg-cube-04"])))
+    #expect(!BuildersDisplay(status: after, saved: off.config).applying)
+    #expect(BuildersDisplay(status: after, saved: off.config).builders == after.builders)
+    // Cube 04 made first choice.
+    let first = BuildersDisplay(status: before, saved: BuildersConfig(before).makingFirst("borg-cube-04"))
+    #expect(first.builders.map(\.host) == ["borg-cube-04", "borg-cube-03"])
+    #expect(first.firstChoice == "borg-cube-04")
+    #expect(first.applying)
+    // The file says what the runner already works by.
+    #expect(!BuildersDisplay(status: before, saved: BuildersConfig(before)).applying)
+    #expect(!BuildersDisplay(status: before, saved: .init(order: [], off: [])).applying)
+}
+
+@Test func theSavedOrderDropsUnknownHostsAndTheRestFollow() throws {
+    let read = try status(statusJSON(builders: twoBuilders()))
+    let shown = BuildersDisplay(status: read, saved: .init(order: ["borg-cube-09", "borg-cube-04", "borg-cube-04"], off: ["borg-cube-09"]))
+    #expect(shown.builders.map(\.host) == ["borg-cube-04", "borg-cube-03"])
+    #expect(shown.builders.map(\.on) == [true, true])
+    #expect(shown.config == .init(order: ["borg-cube-04", "borg-cube-03"], off: []))
+    let none = BuildersDisplay(status: read, saved: .init(order: [], off: ["borg-cube-03", "borg-cube-04"]))
+    #expect(none.firstChoice == nil)
+    #expect(none.applying)
 }

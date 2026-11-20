@@ -121,21 +121,10 @@ struct RunnerSection: View {
                 poll.ok ? "answered \(ago(poll.at, now: now))" : "unreachable: \(poll.error ?? "no answer")"
             } ?? "not polled yet")
             versions
-            HStack(spacing: 10) {
-                Text("Builders").foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
-                ForEach(status.builders) { builder in
-                    BuilderMenu(builder: builder, first: builder.id == status.builders.first?.id, config: BuildersConfig(status)) { config in
-                        Task { await model.setBuilders(config) }
-                    }
-                    .disabled(model.busy != nil)
+            if let builders = model.builders {
+                BuildersBlock(builders: builders, error: status.buildersConfigError, busy: model.busy != nil) { config in
+                    Task { await model.setBuilders(config) }
                 }
-            }
-            .font(.caption)
-            if let error = status.buildersConfigError {
-                Text("builders.json ignored: \(error)")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.leading, 138)
             }
         }
     }
@@ -165,44 +154,68 @@ struct RunnerSection: View {
     }
 }
 
-/// A builder's label, as a menu: take new chats or not, try it first, and why its Orca does not answer.
-struct BuilderMenu: View {
+/// The builders, one row each, in the order a new chat tries them: its state, whether it takes new chats, and which
+/// one is the first choice.
+struct BuildersBlock: View {
+    let builders: BuildersDisplay
+    let error: String?
+    /// A write or another action is under way: the controls wait for it.
+    let busy: Bool
+    let save: (BuildersConfig) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Builders").foregroundStyle(.secondary)
+            ForEach(builders.builders) { builder in
+                BuilderRow(builder: builder, first: builder.host == builders.firstChoice, config: builders.config, save: save)
+                    .disabled(busy)
+            }
+            if builders.applying {
+                Text("Saving… the runner applies it within 15 s").foregroundStyle(.secondary)
+            }
+            Text("New chats start on the first choice; the next one takes over when it is off or not answering. "
+                + "Started chats stay where they are.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error {
+                Text("builders.json ignored: \(error)").foregroundStyle(.orange)
+            }
+        }
+        .font(.caption)
+    }
+}
+
+/// One builder: a dot in its colour, its name and state, first choice or a button to make it so, and a switch for new
+/// chats. Plain views, not a Menu: a Menu's label is drawn by AppKit as a menu button, which keeps the symbol but not
+/// its colour.
+struct BuilderRow: View {
     let builder: RunnerStatus.Builder
     let first: Bool
     let config: BuildersConfig
     let save: (BuildersConfig) -> Void
 
     var body: some View {
-        Menu {
-            if builder.on {
-                Button("Stop new chats") { save(config.turning(builder.host, on: false)) }
-            } else {
-                Button("Take new chats") { save(config.turning(builder.host, on: true)) }
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(builder.name)
+            Text(builder.state.word).foregroundStyle(.secondary)
+            Spacer()
+            Group {
+                if first {
+                    Text("First choice").foregroundStyle(.secondary)
+                } else if builder.on {
+                    Button("Make first choice") { save(config.makingFirst(builder.host)) }
+                        .controlSize(.mini)
+                }
             }
-            if !first {
-                Button("Try first") { save(config.tryingFirst(builder.host)) }
-            }
-            if !builder.up, let detail = builder.detail {
-                Divider()
-                Text(detail)
-            }
-        } label: {
-            Label(builder.name, systemImage: symbol)
-                .foregroundStyle(color)
+            .frame(width: 110, alignment: .trailing)
+            Toggle("New chats", isOn: Binding(get: { builder.on }, set: { save(config.turning(builder.host, on: $0)) }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
         }
-        .menuStyle(.button)
-        .buttonStyle(.borderless)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .help(help)
-    }
-
-    private var symbol: String {
-        switch builder.state {
-        case .off: "pause.circle.fill"
-        case .up: "checkmark.circle.fill"
-        case .down: "xmark.circle.fill"
-        }
     }
 
     private var color: Color {
@@ -216,8 +229,8 @@ struct BuilderMenu: View {
     private var help: String {
         switch builder.state {
         case .off: "Takes no new chats; its chats stay on it"
-        case .up: "Orca answers"
-        case let .down(detail): detail ?? "Orca does not answer"
+        case .up: "Its Orca answers"
+        case let .down(detail): detail ?? "Its Orca does not answer"
         }
     }
 }
