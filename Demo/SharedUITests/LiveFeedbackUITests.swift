@@ -29,7 +29,7 @@ final class LiveFeedbackUITests: XCTestCase {
     func testANewDirectChatGoesLiveAndShowsTheAgentsAnswer() {
         launch("status", opening: false)
         activate(app.buttons["feedback-new"].firstMatch)
-        let field = element("sessionReplyField")
+        let field = replyField
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         activate(field)
         field.typeText("Make the clock bigger")
@@ -47,7 +47,7 @@ final class LiveFeedbackUITests: XCTestCase {
         )).count, 1)
         activate(element("feedback-edit-edit"))
         // A text view on iPhone, a text field on the Mac.
-        let field = element("sessionReplyField")
+        let field = replyField
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let draft = NSPredicate(format: "value CONTAINS %@", "Edit these queued words")
         let filled = XCTNSPredicateExpectation(predicate: draft, object: field)
@@ -100,6 +100,14 @@ final class LiveFeedbackUITests: XCTestCase {
     }
 
     private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
+    /// The reply box. On iOS its placeholder carries the same identifier, and a placeholder can't take typing.
+    private var replyField: XCUIElement {
+        #if os(iOS)
+        app.textViews["sessionReplyField"].firstMatch
+        #else
+        element("sessionReplyField")
+        #endif
+    }
     private func text(_ value: String) -> XCUIElement {
         // A Mac StaticText holds its words in value, not label. On the Mac, reading every element's value timed out
         // ("Timed out while evaluating UI query"), so only static texts are read there.
