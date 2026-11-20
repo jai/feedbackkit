@@ -150,15 +150,14 @@ struct FeedbackShippedChips: View {
                 let open = shipped.prs.filter { $0.state == .open }
                 ForEach(open.isEmpty ? shipped.prs : open) { pr in
                     chip("PR #\(pr.number)", symbol: "arrow.trianglehead.pull", tint: tint(theme.toneWaiting),
-                         checks: pr.checks)
-                        .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
+                         checks: pr.checks, label: "Pull request \(pr.number), \(pr.state.rawValue)")
                 }
             case .onMain?:
-                chip("main", symbol: "arrow.trianglehead.merge", tint: tint(theme.inkQuiet), checks: shipped.checks)
-                    .accessibilityLabel("On main")
+                chip("main", symbol: "arrow.trianglehead.merge", tint: tint(theme.inkQuiet), checks: shipped.checks,
+                     label: "On main")
             case let .released(release)?:
-                chip(release.name, symbol: "shippingbox.fill", tint: tint(theme.toneGood), checks: shipped.checks)
-                    .accessibilityLabel("In \(release.name)")
+                chip(release.name, symbol: "shippingbox.fill", tint: tint(theme.toneGood), checks: shipped.checks,
+                     label: "In \(release.name)")
             case nil:
                 EmptyView()
             }
@@ -172,8 +171,11 @@ struct FeedbackShippedChips: View {
         shipped.checks == .failure ? theme.toneBad : stage
     }
 
-    /// The place in ink on a wash of the tone, the symbol in the tone, then the checks' mark.
-    private func chip(_ text: String, symbol: String, tint: Color, checks: FeedbackShipped.Checks?) -> some View {
+    /// The place in ink on a wash of the tone, the symbol in the tone, then the checks' mark. VoiceOver reads `label`
+    /// and the checks' words: a label on the whole capsule would also replace the mark's own.
+    private func chip(
+        _ text: String, symbol: String, tint: Color, checks: FeedbackShipped.Checks?, label: String
+    ) -> some View {
         HStack(spacing: ChatSpace.xs) {
             Image(systemName: symbol).foregroundStyle(tint)
             Text(text).foregroundStyle(theme.ink)
@@ -185,6 +187,8 @@ struct FeedbackShippedChips: View {
         .padding(.horizontal, ChatSpace.sm)
         .padding(.vertical, 3)
         .background(tint.opacity(0.18), in: .capsule)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([label, checks.map(FeedbackChecksMark.words)].compactMap(\.self).joined(separator: ", "))
     }
 }
 
@@ -201,8 +205,12 @@ struct FeedbackChecksMark: View {
             .fontWeight(style == .tick ? .bold : nil)
             .imageScale(style == .tick ? .small : .medium)
             .foregroundStyle(checks == .failure ? theme.toneBad : checks == .pending ? theme.toneWaiting : theme.toneGood)
-            .accessibilityLabel(checks == .failure ? "Checks failed" : checks == .pending ? "Checks running" : "Checks passed")
+            .accessibilityLabel(Self.words(checks))
             .accessibilityIdentifier("feedback-shipped-checks-\(checks.rawValue)")
+    }
+
+    static func words(_ checks: FeedbackShipped.Checks) -> String {
+        checks == .failure ? "Checks failed" : checks == .pending ? "Checks running" : "Checks passed"
     }
 
     private var symbol: String {
