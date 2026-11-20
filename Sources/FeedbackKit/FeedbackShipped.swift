@@ -156,7 +156,9 @@ struct FeedbackShippedChips: View {
                 chip("main", symbol: "arrow.trianglehead.merge", tint: tint(theme.inkQuiet), checks: shipped.checks,
                      label: "On main")
             case let .released(release)?:
-                chip(release.name, symbol: "shippingbox.fill", tint: tint(theme.toneGood), checks: shipped.checks,
+                // The checks are the commits' own runs on main; the release ran its tests again and passed them, so
+                // a check that failed before the release says nothing about it now.
+                chip(release.name, symbol: "shippingbox.fill", tint: theme.toneGood, checks: nil,
                      label: "In \(release.name)")
             case nil:
                 EmptyView()
@@ -166,7 +168,7 @@ struct FeedbackShippedChips: View {
         .lineLimit(1)
     }
 
-    /// A failed check turns the capsule red, whatever the stage.
+    /// A failed check turns the capsule red, until a release carries the commits.
     private func tint(_ stage: Color) -> Color {
         shipped.checks == .failure ? theme.toneBad : stage
     }
