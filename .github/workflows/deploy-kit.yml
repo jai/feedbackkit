@@ -50,7 +50,8 @@ jobs:
   runner-menu:
     # The FeedbackKit Runner menu bar app (runner/MenuBar), built from the tag and published as the GitHub prerelease
     # `runner-menu` (FeedbackKitRunner.zip), which runner/MenuBar/install.sh downloads on Jai's Mac. Nothing builds on
-    # Jai's Macs (jai/ci RULES.md). The prerelease's tag stays where it was first made; the zip is replaced.
+    # Jai's Macs (jai/ci RULES.md). The prerelease's tag stays where it was first made; the zip is replaced, and with it
+    # FeedbackKitRunner.json, the version the menu app compares its own with to offer an update.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: xcode-27
     timeout-minutes: 20
@@ -65,7 +66,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ env.TAG }}
+      # bundle.sh reads TAG from the job's env: the app's version is the tag without the `v`.
       - run: ./bundle.sh FeedbackKitRunner.zip
+      - name: Write FeedbackKitRunner.json
+        run: |
+          printf '{"version":"%s","commit":"%s","tag":"%s"}\n' "${TAG#v}" "$(git rev-parse --short HEAD)" "$TAG" >FeedbackKitRunner.json
+          cat FeedbackKitRunner.json
       - name: Publish the runner-menu prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,4 +83,4 @@ jobs:
             gh release create runner-menu --target "$(git rev-parse HEAD)" --title "FeedbackKit Runner (menu bar)" \
               --notes "$notes" --prerelease --latest=false
           fi
-          gh release upload runner-menu FeedbackKitRunner.zip --clobber
+          gh release upload runner-menu FeedbackKitRunner.zip FeedbackKitRunner.json --clobber

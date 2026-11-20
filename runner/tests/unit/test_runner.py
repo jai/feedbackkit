@@ -9,6 +9,7 @@ from unittest import mock
 
 from feedbackkit_runner.brief import ROLE_ACTIONS, TEMPLATE, fields, first_prompt, later_prefix
 from feedbackkit_runner.runner import (
+    BuildersConfig,
     FeedbackApi,
     FeedbackApiError,
     Orca,
@@ -16,6 +17,7 @@ from feedbackkit_runner.runner import (
     Sender,
     clone_path,
     in_clone,
+    resolve_builders,
 )
 from feedbackkit_runner.util import JsonObject, JsonResponse, json_object
 from feedbackkit_runner.videos import duration_text, video_note
@@ -133,6 +135,62 @@ class CubeThreadTests(unittest.TestCase):
         self.assertTrue(in_clone(CLONE_PATH + "/ios/AgentPager", CLONE_PATH))
         self.assertFalse(in_clone(CLONE_PATH + "-2", CLONE_PATH))
         self.assertFalse(in_clone(None, CLONE_PATH))
+
+
+HOSTS = ["borg-cube-03", "borg-cube-04", "borg-cube-05"]
+
+
+class BuildersConfigTests(unittest.TestCase):
+    """builders.json against BUILDERS: the order a new chat tries the builders in, and those that take none."""
+
+    def resolved(self, raw: str | None) -> tuple[BuildersConfig, str | None]:
+        return resolve_builders(HOSTS, raw)
+
+    def test_no_file_is_every_builder_on_in_builders_order(self) -> None:
+        self.assertEqual(self.resolved(None), (BuildersConfig(tuple(HOSTS), frozenset()), None))
+        self.assertEqual(self.resolved(None)[0].on(), HOSTS)
+
+    def test_order_puts_the_listed_first_and_the_rest_after_in_builders_order(self) -> None:
+        config, error = self.resolved('{"order": ["borg-cube-05", "borg-cube-03"], "off": []}')
+        self.assertIsNone(error)
+        self.assertEqual(config.order, ("borg-cube-05", "borg-cube-03", "borg-cube-04"))
+
+    def test_hosts_it_does_not_know_and_repeats_are_left_out(self) -> None:
+        config, error = self.resolved(
+            '{"order": ["borg-cube-09", "borg-cube-04", "borg-cube-04"], "off": ["borg-cube-09", "borg-cube-03"]}'
+        )
+        self.assertIsNone(error)
+        self.assertEqual(config.order, ("borg-cube-04", "borg-cube-03", "borg-cube-05"))
+        self.assertEqual(config.off, frozenset({"borg-cube-03"}))
+
+    def test_off_builders_keep_their_place_but_take_no_new_chat(self) -> None:
+        config, error = self.resolved('{"order": ["borg-cube-04"], "off": ["borg-cube-04"]}')
+        self.assertIsNone(error)
+        self.assertEqual(config.order, ("borg-cube-04", "borg-cube-03", "borg-cube-05"))
+        self.assertEqual(config.on(), ["borg-cube-03", "borg-cube-05"])
+
+    def test_either_list_may_be_left_out(self) -> None:
+        self.assertEqual(self.resolved('{"off": ["borg-cube-05"]}')[0].order, tuple(HOSTS))
+        self.assertEqual(self.resolved('{"order": ["borg-cube-04"]}')[0].off, frozenset())
+
+    def test_every_builder_off_takes_no_new_chat(self) -> None:
+        config, error = self.resolved(json.dumps({"off": HOSTS}))
+        self.assertIsNone(error)
+        self.assertEqual((config.order, config.on()), (tuple(HOSTS), []))
+
+    def test_a_file_of_another_shape_is_ignored_whole_and_says_why(self) -> None:
+        default = BuildersConfig(tuple(HOSTS), frozenset())
+        for raw, reason in [
+            ("", "not JSON"),
+            ('{"order": ["borg-cube-04"', "not JSON"),
+            ('["borg-cube-04"]', "not a JSON object"),
+            ('{"order": "borg-cube-04"}', "order is not a list of hosts"),
+            ('{"order": ["borg-cube-04"], "off": [4]}', "off is not a list of hosts"),
+        ]:
+            with self.subTest(raw=raw):
+                config, error = self.resolved(raw)
+                self.assertEqual(config, default)
+                self.assertRegex(error or "", f"^{reason}")
 
 
 class FeedbackApiRouteTests(unittest.TestCase):

@@ -46,12 +46,26 @@ menu bar app on Jai's Mac reads over SSH ([MenuBar/](MenuBar/README.md)). Times 
   the last update failed (null when it did not).
 - `long_poll`: `{on, last_wake, error}`. `on` is false when the Worker has no `/runner/wait`.
 - `poll`: the last `/runner/poll`, `{at, ok, error}`: whether the Worker answered.
-- `builders`: `[{host, name, up, detail}]`, from the last full tick's `orca worktree ps`.
+- `builders`: `[{host, name, on, up, detail}]` in the order a new chat tries them ([Builders](#builders)). `on` is
+  false for a builder turned off; `up` and `detail` are from the last full tick's `orca worktree ps`, off or not.
+- `builders_config_error`: why `builders.json` was ignored (unreadable, not JSON, a list that is not one), else null.
 - `chats`, most recent first: `{chat, app, login, title, host, thread: {host, id} | null, worktree, removed, working,
   activity, last_activity, messages}`. `messages` are the newest 10 the runner knows: `{id, state, detail, at,
-  posted}`, `state` one of `pending` (in the last poll's work), `delivering` (claimed, no outcome yet), `queued` (Orca
-  holds it), `delivered`, `failed`; `posted` says whether the Worker has the outcome. A chat started before titles
-  were kept has none until its next message.
+  posted}`, `state` one of `pending` (in the last poll's work; a new chat's `detail` says why it cannot start, as the
+  poll does), `delivering` (claimed, no outcome yet), `queued` (Orca holds it), `delivered`, `failed`; `posted` says
+  whether the Worker has the outcome. A chat started before titles were kept has none until its next message.
+
+## Builders
+
+`BUILDERS` in `feedbackkit_runner/runner.py` lists the builder Macs. `builders.json` beside `status.json`, written by
+the menu bar app, orders them and turns some off:
+`{"order": ["borg-cube-04", "borg-cube-03"], "off": ["borg-cube-04"]}`. Both lists are optional. A new chat starts on the first builder in `order` that is not `off` and whose Orca answers;
+builders `order` leaves out follow, in `BUILDERS` order, and hosts not in `BUILDERS` are ignored. An off builder takes
+no new chat, but its chats stay on it and keep getting their messages, and it is still checked each full tick. With no
+file every builder is on, in `BUILDERS` order. Each full tick reads the file again when it changed. One that cannot be
+read or is not that shape is ignored whole (every builder on, in `BUILDERS` order): the runner logs
+`FEEDBACK_BUILDERS_CONFIG_BAD reason=…` once per change and `status.json` says why in `builders_config_error`. The file
+never moves a chat: a chat without a recorded builder is still `BUILDERS`' first.
 
 ## Install
 
@@ -76,10 +90,11 @@ which a Mac UI test on the mini can click into System Settings. `make -C runner 
 
 - Builders, in order (`BUILDERS` in `feedbackkit_runner/runner.py`): Borg Cube 03 (Orca environment
   `34629f5a-b830-4ee8-a3b8-a731a92bd021`), then Borg Cube 04 (`564e1156-4425-493e-812a-2da638992675`). A new chat
-  starts on the first builder whose `orca worktree ps` answers, and stays there: the runner state records its `host`
-  (entries without one are Cube 03's). While a chat's builder is down, its replies stay pending (not claimed), the
-  runner sends the agent's side as working with the activity `Waiting for Borg Cube 0N to come back`, and nothing is
-  read from that builder; the replies go in when it answers again. The Worker (`worker/src/feedback.ts`) shows
+  starts on the first builder that takes new chats ([Builders](#builders)) whose `orca worktree ps` answers, and stays
+  there: the runner state records its `host` (entries without one are Cube 03's). While a chat's builder is down, its
+  replies stay pending (not claimed), the runner sends the agent's side as working with the activity
+  `Waiting for Borg Cube 0N to come back`, and nothing is read from that builder; the replies go in when it answers
+  again. The Worker (`worker/src/feedback.ts`) shows
   `Starting` in place of that activity while a message is pending.
 - A test app's message (work item `echo: true`, [docs/api.md](../docs/api.md#the-test-app)) is answered by the runner
   itself, with no builder: claim, the agent message `echo: <text>` (with the chat's earlier echoes, kept in the state's
@@ -129,8 +144,9 @@ which a Mac UI test on the mini can click into System Settings. `make -C runner 
   so after the worktree is tidied it goes on asking about them in the app's project clone. Every 5 minutes while the
   worktree lives, then hourly until settled (each commit released with its checks done, no pull request open). A failed
   look keeps the last answer and logs `FEEDBACK_SHIPPED_FAILED`. Sent as the side's `shipped`.
-- Builder online: the runner polled in the last 90 s and `orca worktree ps` answered for at least one builder.
-  When none did, the poll carries why (`detail`).
+- Builder online: the runner polled in the last 90 s and a new chat can start: `orca worktree ps` answered for at
+  least one builder that is on. When none did, the poll carries why (`detail`): `every builder is turned off`, or each
+  builder that is on and why it did not answer. A builder that is off but answers still takes its own chats' messages.
 - Clean-up, by the runner (the agent never removes its own worktree: the runner reads its transcript, and a later
   reply would have nowhere to go): a chat whose agent is not working, with no message pending at FeedbackKit or
   unreported in the journal, and quiet for 24 h (`TIDY_AFTER_SECONDS`), is checked over SSH: nothing uncommitted and
@@ -153,7 +169,7 @@ two differ, when a field is left unfilled, or when anything but the fields is ad
 ## Logs
 
 `~/Library/Logs/feedbackkit-runner.log`: `FEEDBACK chat=… message=… outcome=…` per message, `FEEDBACK_ORCA_DOWN
-host=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_SHIPPED_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT` / `FEEDBACK_CLONE_GONE` (a clone from before worktrees, deleted by hand), and as
+host=…`, `FEEDBACK_BUILDERS_CONFIG_BAD reason=…`, `FEEDBACK_READ_FAILED`, `FEEDBACK_SHIPPED_FAILED`, `FEEDBACK_WORKTREE_REMOVED` / `FEEDBACK_WORKTREE_GONE` (deleted outside the runner) / `FEEDBACK_WORKTREE_KEPT`, `FEEDBACK_CLONE_KEPT` / `FEEDBACK_CLONE_GONE` (a clone from before worktrees, deleted by hand), and as
 JSON `FEEDBACK_RUNNER_STARTED`, `FEEDBACK_STATE_MIGRATED`, `FEEDBACK_OLD_RUNNER`, `FEEDBACK_FAST_TICK`, `FEEDBACK_SLOW_TICK`,
 `FEEDBACK_POLL_FAILED`, `FEEDBACK_WAIT_FAILED`, `FEEDBACK_NO_LONG_POLL`, `FEEDBACK_RUNNER_UPDATING` / `FEEDBACK_RUNNER_UPDATED` (`from`, `to`) /
 `FEEDBACK_RUNNER_UPDATE_FAILED` (`to`, `reason`), `FEEDBACK_RUNNER_RELOADED`, `FEEDBACK_RUNNER_STOPPED`,

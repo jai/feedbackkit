@@ -4,9 +4,10 @@ one repo's.
 
 A long-running process on Jais-Mac-mini as jai (service.py), started and kept alive by launchd. It only reaches out: it
 polls FeedbackKit, runs `orca` against each builder's paired Orca and reaches the builders over SSH. A chat starts on the
-first builder in BUILDERS whose Orca answers and stays there. Each app has one Orca project on each builder, a clone at
-~/Developer/feedback-<app> added on the app's first chat; a chat's first message makes a worktree of it (fb-<id>, off
-origin/main) with Claude launched in it, in one `orca worktree create`. Each later message goes into the same Orca chat,
+first builder that takes new chats (BUILDERS, ordered and turned off by builders.json) whose Orca answers, and stays
+there. Each app has one Orca project on each builder, a clone at ~/Developer/feedback-<app> added on the app's first
+chat; a chat's first message makes a worktree of it (fb-<id>, off origin/main) with Claude launched in it, in one
+`orca worktree create`. Each later message goes into the same Orca chat,
 as an Agent Pager thread reply does, and waits while that builder is down. The agent's words come from its transcript,
 read with Agent Pager's scanner as its Agents tab reads it, and go back to the Worker. A message is journalled the
 moment its claim succeeds and is never delivered twice. A chat quiet for a day, with every message delivered and its
@@ -22,7 +23,7 @@ import logging
 import re
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, Protocol, TypedDict
 
@@ -46,12 +47,15 @@ STATE_FILE = "state.json"
 SCAN_DIR = Path.home() / "Library" / "Application Support" / "agent-pager-threads" / "state"
 # The runner's state from when it was Agent Pager's hub.feedback_runner, in SCAN_DIR: moved into STATE_FILE once.
 OLD_STATE_FILE = "feedback-runner-featurekit.json"
-# The builder Macs in the order a new chat tries them: (fleet id, name the agent and Jai read, Orca environment paired on
-# the Mac mini).
+# The builder Macs: (fleet id, name the agent and Jai read, Orca environment paired on the Mac mini). A new chat tries
+# them in this order unless BUILDERS_FILE orders them or turns some off; a chat with no host recorded is the first's.
 BUILDERS = (
     ("borg-cube-03", "Borg Cube 03", "34629f5a-b830-4ee8-a3b8-a731a92bd021"),
     ("borg-cube-04", "Borg Cube 04", "564e1156-4425-493e-812a-2da638992675"),
 )
+# Beside STATE_FILE, written by the menu bar app: {"order": [host, ...], "off": [host, ...]} (runner/README.md#builders).
+BUILDERS_FILE = "builders.json"
+ALL_OFF = "every builder is turned off"
 ORCA = "/Applications/Orca.app/Contents/Resources/bin/orca"
 CLONES = "/Users/jai/Developer"
 AGENT = "claude"
@@ -644,6 +648,41 @@ class Builder(NamedTuple):
     cube: Cube
 
 
+class BuildersConfig(NamedTuple):
+    """builders.json against the builders: every host in the order a new chat tries them, and those that take none."""
+
+    order: tuple[str, ...]
+    off: frozenset[str]
+
+    def on(self) -> list[str]:
+        """The hosts that take new chats, in order."""
+        return [host for host in self.order if host not in self.off]
+
+
+def resolve_builders(hosts: Sequence[str], raw: str | None) -> tuple[BuildersConfig, str | None]:
+    """builders.json's text (None: there is none) against the hosts in BUILDERS order: the config, and why the file was
+    ignored. Hosts it does not know are left out; hosts missing from its `order` follow the listed ones, in BUILDERS
+    order. A file of another shape is ignored whole: every builder on, in BUILDERS order."""
+    default = BuildersConfig(tuple(hosts), frozenset())
+    if raw is None:
+        return default, None
+    try:
+        config = json.loads(raw)
+    except (ValueError, RecursionError) as failure:
+        return default, f"not JSON: {failure}"[:DETAIL_MAX]
+    if not isinstance(config, dict):
+        return default, "not a JSON object"
+    lists: dict[str, list[str]] = {}
+    for key in ("order", "off"):
+        value = config.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(host, str) for host in value):
+            return default, f"{key} is not a list of hosts"
+        lists[key] = value
+    listed = [host for host in dict.fromkeys(lists["order"]) if host in hosts]
+    order = tuple(listed + [host for host in hosts if host not in listed])
+    return BuildersConfig(order, frozenset(lists["off"]) & frozenset(hosts)), None
+
+
 class Runner:
     def __init__(
         self,
@@ -661,7 +700,12 @@ class Runner:
         scan_kick.kickstart_scan (agent_pager.py); a test's stand-ins otherwise."""
         self.api = api
         self.builders = {builder.host: builder for builder in builders}
+        # A chat with no host recorded is the first builder's whatever builders.json says: config never moves a chat.
         self.first_host = builders[0].host
+        self.builders_path = state_path.with_name(BUILDERS_FILE)
+        # builders.json as last read (its stat, None while there is none), what it says and why it was ignored.
+        self.builders_seen: object = None
+        self.config, self.config_error = resolve_builders(list(self.builders), None)
         self.reader = reader
         self.state_path = state_path
         self.deliver = deliver
@@ -682,7 +726,9 @@ class Runner:
         self.owed: set[str] = set()
         # Each builder's agents at the last full tick, and why each down one did not answer: what a fast tick uses.
         self.last_agents: dict[str, dict[str, JsonObject] | None] | None = None
-        self.last_down: list[str] = []
+        self.last_down: dict[str, str] = {}
+        # Why the last poll could start no new chat, None when it could: a new chat's pending message says so.
+        self.no_new_chat: str | None = None
         # The last poll (when, whether the Worker answered, why not) and its work: for status().
         self.last_poll: JsonObject | None = None
         self.last_work: list[JsonObject] = []
@@ -691,8 +737,8 @@ class Runner:
         write_private_json(self.state_path, self.state)
 
     def tick(self, fast: bool = False, between: Callable[[], None] | None = None) -> list[str]:
-        """One poll: report what is owed, take what is pending, look at each chat's agent, tidy what is done. The
-        builder is online while any builder's Orca answers; None in `agents` is a builder whose Orca did not.
+        """One poll: report what is owed, take what is pending, look at each chat's agent, tidy what is done. A full
+        tick reads builders.json first when it changed. None in `agents` is a builder whose Orca did not answer.
 
         A fast tick, run as the Worker wakes the runner for a new message, only polls and takes, with the builders'
         agents from the last full tick: the message reaches its thread in about a second. The full tick still runs
@@ -701,13 +747,16 @@ class Runner:
         lines: list[str] = []
         if fast and self.last_agents is not None:
             return self.take_pending(self.last_agents, self.last_down, lines)
+        bad = self.read_builders()
+        if bad:
+            lines.append(bad)
         agents: dict[str, dict[str, JsonObject] | None] = {}
-        down: list[str] = []
+        down: dict[str, str] = {}
         for builder in self.builders.values():
             found = _agents_or_failure(builder.orca)
             if isinstance(found, RuntimeError):
                 agents[builder.host] = None
-                down.append(f"{builder.name}: {found}")
+                down[builder.host] = f"{builder.name}: {found}"
                 lines.append(f"FEEDBACK_ORCA_DOWN host={builder.host} {found}")
             else:
                 agents[builder.host] = found
@@ -728,14 +777,53 @@ class Runner:
         self.save()
         return lines
 
+    def read_builders(self) -> str | None:
+        """builders.json again when it changed since the last full tick; the line to log when it is ignored. A file
+        that cannot be read or is of another shape leaves every builder on, in BUILDERS order."""
+        seen: object = None
+        raw: str | None = None
+        error: str | None = None
+        try:
+            found = self.builders_path.stat()
+            seen = (found.st_mtime_ns, found.st_size, found.st_ino)
+            if seen == self.builders_seen:
+                return None
+            raw = self.builders_path.read_text("utf-8")
+        except FileNotFoundError:
+            seen = None
+        except (OSError, ValueError) as failure:
+            error = f"unreadable: {failure}"[:DETAIL_MAX]
+            seen = seen or error
+        if seen == self.builders_seen:
+            return None
+        self.builders_seen = seen
+        self.config, bad = resolve_builders(list(self.builders), raw)
+        self.config_error = error or bad
+        return f"FEEDBACK_BUILDERS_CONFIG_BAD reason={self.config_error}" if self.config_error else None
+
+    def first_on(self, agents: dict[str, dict[str, JsonObject] | None]) -> str | None:
+        """Where a new chat starts: the first builder in the configured order that takes new chats and answers."""
+        return next((host for host in self.config.on() if agents.get(host) is not None), None)
+
+    def why_no_new_chat(self, agents: dict[str, dict[str, JsonObject] | None], down: dict[str, str]) -> str | None:
+        """Why a new chat cannot start now, None when it can: every builder is off, or each one that is on is down."""
+        on = self.config.on()
+        if not on:
+            return ALL_OFF
+        if self.first_on(agents) is not None:
+            return None
+        return "; ".join(down[host] for host in on if host in down) or "no builder that takes new chats answered"
+
     def take_pending(
-        self, agents: dict[str, dict[str, JsonObject] | None], down: list[str], lines: list[str]
+        self, agents: dict[str, dict[str, JsonObject] | None], down: dict[str, str], lines: list[str]
     ) -> list[str]:
         """Poll and take: a full tick's first half, and all of a fast one. It adds to what is waiting and owed, so a fast
-        tick in the middle of a full one leaves the full one's view whole."""
-        online = any(found is not None for found in agents.values())
+        tick in the middle of a full one leaves the full one's view whole. The builder is online while a new chat can
+        start; while it cannot, a builder that is off but answers still takes its own chats' messages."""
+        answering = any(found is not None for found in agents.values())
+        self.no_new_chat = self.why_no_new_chat(agents, down)
         try:
-            work = self.api.poll(online, None if online else "; ".join(down))
+            work = self.api.poll(self.no_new_chat is None, self.no_new_chat)
         except FeedbackApiError as failure:
             self.last_poll = {"at": self.clock(), "ok": False, "error": str(failure)[:DETAIL_MAX]}
             raise
@@ -744,10 +832,10 @@ class Runner:
         self.owed |= {str(item.get("chat")) for item in work}
         # A test app's messages need no builder: they are answered while every builder is down too.
         for item in sorted(work, key=_arrival):
-            line = self.echo(item) if item.get("echo") else self.take(item, agents) if online else None
+            line = self.echo(item) if item.get("echo") else self.take(item, agents) if answering else None
             if line:
                 lines.append(line)
-        if online:
+        if answering:
             self.owed |= {key.split("/", 1)[0] for key, entry in self.state["journal"].items() if not entry["posted"]}
         self.save()
         return lines
@@ -809,14 +897,17 @@ class Runner:
         known = self.state["chats"].get(chat)
         return known.get("sender") if known else None
 
-    def host_of(self, chat: str, clone: str, first: bool, agents: dict[str, dict[str, JsonObject] | None]) -> str:
-        """Where the chat runs: where it started; a new chat on the first builder that answers; a chat this runner has
-        no record of where the last scan found its clone, else the first builder."""
+    def host_of(
+        self, chat: str, clone: str, first: bool, agents: dict[str, dict[str, JsonObject] | None]
+    ) -> str | None:
+        """Where the chat runs: where it started; a new chat on the first builder that takes new chats and answers (None
+        while there is none); a chat this runner has no record of where the last scan found its clone, else the first
+        builder in BUILDERS."""
         known = self.state["chats"].get(chat)
         if known:
             return known["host"]
         if first:
-            return next(host for host in self.builders if agents[host] is not None)
+            return self.first_on(agents)
         return next((host for host, builder in self.builders.items() if builder.cube.thread(clone)), self.first_host)
 
     def take(self, item: JsonObject, agents: dict[str, dict[str, JsonObject] | None]) -> str | None:
@@ -830,7 +921,7 @@ class Runner:
             return f"FEEDBACK chat={chat} message={message} outcome=skipped reason=no-sender"
         clone = known["clone"] if known else clone_path(sender["repo"], chat)
         host = self.host_of(chat, clone, bool(item.get("first")), agents)
-        if agents.get(host) is None:
+        if host is None or agents.get(host) is None:
             self.waiting.add(chat)
             return None
         builder = self.builders[host]
@@ -1209,18 +1300,20 @@ class Runner:
             }
 
     def status(self) -> JsonObject:
-        """What the runner knows, for status.json (docs: runner/README.md#statusjson): the last poll, each builder, and
-        each chat with its thread and its messages' states. A message's state is the runner's view: `pending` (in the
-        last poll's work), `delivering` (claimed, no outcome yet), `queued` (Orca holds it), `delivered` or `failed`,
-        and `posted` says whether the Worker has the outcome."""
+        """What the runner knows, for status.json (docs: runner/README.md#statusjson): the last poll, each builder in
+        the configured order, why builders.json was ignored, and each chat with its thread and its messages' states. A
+        message's state is the runner's view: `pending` (in the last poll's work; a new chat's says why it cannot start),
+        `delivering` (claimed, no outcome yet), `queued` (Orca holds it), `delivered` or `failed`, and `posted` says
+        whether the Worker has the outcome."""
         builders = [
             {
                 "host": host,
-                "name": builder.name,
+                "name": self.builders[host].name,
+                "on": host not in self.config.off,
                 "up": self.last_agents is not None and self.last_agents.get(host) is not None,
-                "detail": next((down for down in self.last_down if down.startswith(builder.name + ":")), None),
+                "detail": self.last_down.get(host),
             }
-            for host, builder in self.builders.items()
+            for host in self.config.order
         ]
         messages: dict[str, list[JsonObject]] = {}
         for key, entry in self.state["journal"].items():
@@ -1240,8 +1333,9 @@ class Runner:
             chat, message = str(item.get("chat")), str(item.get("message"))
             if f"{chat}/{message}" not in journalled:
                 at = _arrival(item) / 1000 or None
+                detail = self.no_new_chat if item.get("first") and chat not in self.state["chats"] else None
                 messages.setdefault(chat, []).append(
-                    {"id": message, "state": "pending", "detail": None, "at": at, "posted": False}
+                    {"id": message, "state": "pending", "detail": detail, "at": at, "posted": False}
                 )
         chats: list[JsonObject] = []
         for chat in set(self.state["chats"]) | set(messages):
@@ -1267,7 +1361,12 @@ class Runner:
                 }
             )
         chats.sort(key=lambda one: -max([float(str(one.get("last_activity") or 0))] + _ats(one)))
-        return {"poll": self.last_poll, "builders": builders, "chats": chats}
+        return {
+            "poll": self.last_poll,
+            "builders": builders,
+            "builders_config_error": self.config_error,
+            "chats": chats,
+        }
 
 
 def with_shipped(side: JsonObject, known: ChatState) -> JsonObject:

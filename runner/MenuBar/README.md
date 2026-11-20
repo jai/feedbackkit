@@ -5,14 +5,22 @@ over SSH as `jais-mac-mini`, with Jai's own SSH config and keys: no tokens, no W
 
 - **Icon.** A plain bubble when all is well, a bubble with dots while a message is on its way or an agent works, and
   a bubble with `!` for a problem. The problems, in the order it checks them: the mini unreachable, the runner not
-  loaded, no status yet, the runner silent for 2 minutes, the FeedbackKit Worker unreachable, no builder's Orca
-  answering, a message failed in the last day.
-- **Window.** The runner's process, last full tick, last wake, the Worker's last answer and each builder. Then the
-  feedback chats by app: sender, title, coding thread host and id, the newest message's state (`pending`,
-  `delivering`, `queued`, `delivered`, `failed`) and what the agent is doing. Then the last 50 log lines.
-- **Actions.** Open a chat's coding thread in Agent Pager (`agentpager://thread/<host>/<id>`; Orca has no link to a
-  remote worktree). Restart the runner (`launchctl kickstart -k`: it finishes the delivery in progress first). Open
-  the last 2,000 log lines in Console. Refresh. Quit.
+  loaded, no status yet, the runner silent for 2 minutes, the FeedbackKit Worker unreachable, every builder turned
+  off, no builder taking new chats with its Orca answering, a message failed in the last day.
+- **Window.** The header names the problem (hover for the whole text; it can be selected and copied). Under it, "Update
+  available" when a newer menu app is published. Then the runner's process, last full tick, last wake, the Worker's
+  last answer, the versions (`Menu 0.12.0 · Runner v0.12.0`, with the runner updater's error in orange) and each
+  builder: green when its Orca answers, orange when not, a grey pause sign when it takes no new chats, in the order a
+  new chat tries them. Then the feedback chats by app: sender, title, coding thread host and id, the newest message's
+  state (`pending`, `delivering`, `queued`, `delivered`, `failed`) and what the agent is doing. The list grows with its
+  rows up to 260 pt, then scrolls. Then the last 50 log lines.
+- **Actions.** Dismiss a failed message: the header lets it go and the icon stops showing it (its chat stays in the
+  list; dismissals are kept for 2 days). A builder's label is a menu: Stop new chats or Take new chats, Try first,
+  and why its Orca does not answer. It writes the whole of builders.json on the mini
+  ([../README.md](../README.md)) over SSH, to a mode 600 file moved into place; the runner works by it from its next
+  full tick, and a chat stays on the builder it started on. Open a chat's coding thread in Agent Pager
+  (`agentpager://thread/<host>/<id>`; Orca has no link to a remote worktree). Restart the runner (`launchctl kickstart
+  -k`: it finishes the delivery in progress first). Open the last 2,000 log lines in Console. Refresh. Quit.
 - It checks every 10 s, over one SSH connection kept open for 2 minutes. `defaults write
   com.jai.feedbackkit-runner-menu host <alias>` points it at another host.
 
@@ -32,7 +40,19 @@ Activity" notice each time it does). Nothing is built on Jai's Macs: [lint-kit.y
 
 It needs `ssh jais-mac-mini true` to work without a prompt, and Agent Pager on the Mac for Open thread.
 
+## Version and updates
+
+Each release builds the app from its `vX.Y.Z` tag ([deploy-kit.yml](../../.github/workflows/deploy-kit.yml)): its
+version is `X.Y.Z`, its build number the workflow run, and the Info.plist key `FKCommit` the commit. Beside the zip the
+prerelease holds `FeedbackKitRunner.json` (`{"version", "commit", "tag"}`). The app reads it at launch, each hour, and
+on Refresh when it last looked over 5 minutes ago, from the release's download link (no API, no token). A newer
+version shows "Update available" and an "Install update" button, which runs the install line above in a session of
+its own (install.sh restarts the app, and launchd stops the app's whole process group with it); its output goes to
+`~/Library/Logs/feedbackkit-runner-menu-install.log`. A failed look shows only as the versions row's hover text. A
+build without a tag (lint, a local build) says 0.0.0 and never offers an update.
+
 ## Develop
 
 `swift test` here, on CI or a Mac that may build (not the builders or Jai's laptop). `RunnerMenuCore` holds what can
-be tested: status.json, the SSH output, the icon's state, the thread link.
+be tested: status.json, the SSH output, the icon's state and dismissed failures, the thread link, builders.json and
+its write, the published version and the version compare.

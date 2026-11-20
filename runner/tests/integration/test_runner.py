@@ -16,6 +16,8 @@ from pathlib import Path
 from feedbackkit_runner import brief as feedback_brief
 from feedbackkit_runner.github import GitHub
 from feedbackkit_runner.runner import (
+    ALL_OFF,
+    BUILDERS_FILE,
     OLD_STATE_FILE,
     STARTING_SECONDS,
     STATE_FILE,
@@ -686,6 +688,115 @@ RELEASE: JsonObject = {
     "url": "https://github.com/jai/agent-pager/releases/tag/mac-557",
     "prerelease": False,
 }
+
+
+class BuildersFileTests(RunnerCase):
+    """builders.json orders the builders a new chat tries and turns some off; it never moves a chat."""
+
+    def write_builders(self, raw: object) -> None:
+        text = raw if isinstance(raw, str) else json.dumps(raw)
+        (Path(self.folder.name) / BUILDERS_FILE).write_text(text, "utf-8")
+
+    def test_a_new_chat_starts_on_the_builder_it_puts_first(self) -> None:
+        self.write_builders({"order": [CUBE_04, CUBE_03], "off": []})
+        self.first_message()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual((len(self.orca.launches), len(self.orca_04.launches)), (0, 1))
+        self.assertEqual(runner.state["chats"][CHAT]["host"], CUBE_04)
+        status = runner.status()
+        self.assertEqual(
+            [(one["host"], one["on"], one["up"]) for one in status["builders"]],
+            [(CUBE_04, True, True), (CUBE_03, True, True)],
+        )
+        self.assertIsNone(status["builders_config_error"])
+
+    def test_a_chat_on_a_builder_turned_off_still_gets_its_messages(self) -> None:
+        self.first_message()
+        self.runner().tick()
+        self.cube.row = {
+            "id": "orca-claude:s1",
+            "app": "orca-claude",
+            "session_id": "s1",
+            "cwd": WORKTREE,
+            "_transcript": "/t/s1.jsonl",
+        }
+        self.now += STARTING_SECONDS
+        self.write_builders({"order": [CUBE_04], "off": [CUBE_03]})
+        self.reply()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual([job["session_id"] for job in self.delivered], ["s1"], "it stays on Cube 03")
+        self.assertEqual(self.api.results[-1][1:3], ("m_2", "delivered"))
+        self.assertEqual(self.orca_04.launches, [])
+        self.assertEqual(
+            [(one["host"], one["on"], one["up"]) for one in runner.status()["builders"]],
+            [(CUBE_04, True, True), (CUBE_03, False, True)],
+            "an off builder is still checked",
+        )
+
+    def test_a_reply_to_a_chat_with_no_record_stays_with_the_first_builder_in_builders(self) -> None:
+        self.write_builders({"order": [CUBE_04], "off": [CUBE_03]})
+        self.reply()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual(runner.state["chats"][CHAT]["host"], CUBE_03)
+
+    def test_with_every_builder_off_a_new_chat_waits_and_says_why(self) -> None:
+        self.write_builders({"off": [CUBE_03, CUBE_04]})
+        self.first_message()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual(self.orca.launches + self.orca_04.launches, [])
+        self.assertEqual(self.api.claims.keys(), {"m_1"}, "the message stays pending")
+        self.assertEqual((self.api.polled, self.api.details), ([False], [ALL_OFF]))
+        [chat] = runner.status()["chats"]
+        self.assertEqual(
+            [(one["state"], one["detail"]) for one in chat["messages"]],
+            [("pending", ALL_OFF)],
+        )
+
+    def test_while_the_builder_that_is_on_is_down_the_off_one_takes_no_new_chat(self) -> None:
+        self.write_builders({"off": [CUBE_04]})
+        self.orca.down = True
+        self.first_message()
+        self.runner().tick()
+        self.assertEqual(self.orca.launches + self.orca_04.launches, [])
+        self.assertEqual(self.api.polled, [False])
+        self.assertRegex(self.api.details[0] or "", r"^Borg Cube 03: [^;]+$", "only the builder that is on")
+        self.orca.down = False
+        self.runner().tick()
+        self.assertEqual((len(self.orca.launches), len(self.orca_04.launches)), (1, 0))
+
+    def test_a_bad_file_is_logged_once_per_change_and_every_builder_stays_on(self) -> None:
+        self.write_builders("{")
+        runner = self.runner()
+        lines = runner.tick()
+        self.assertEqual(
+            [line for line in lines if line.startswith("FEEDBACK_BUILDERS_CONFIG_BAD")],
+            [f"FEEDBACK_BUILDERS_CONFIG_BAD reason={runner.config_error}"],
+        )
+        self.assertRegex(text(runner.status()["builders_config_error"]), "^not JSON")
+        self.assertFalse(any(line.startswith("FEEDBACK_BUILDERS_CONFIG_BAD") for line in runner.tick()))
+        self.write_builders({"order": CUBE_04})
+        self.assertIn("FEEDBACK_BUILDERS_CONFIG_BAD reason=order is not a list of hosts", runner.tick())
+        self.first_message()
+        runner.tick()
+        self.assertEqual(runner.state["chats"][CHAT]["host"], CUBE_03, "the default: BUILDERS order")
+        (Path(self.folder.name) / BUILDERS_FILE).unlink()
+        self.assertFalse(any(line.startswith("FEEDBACK_BUILDERS_CONFIG_BAD") for line in runner.tick()))
+        self.assertIsNone(runner.status()["builders_config_error"])
+
+    def test_a_file_it_cannot_read_leaves_every_builder_on(self) -> None:
+        self.write_builders({"off": [CUBE_03, CUBE_04]})
+        path = Path(self.folder.name) / BUILDERS_FILE
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o600)
+        self.first_message()
+        runner = self.runner()
+        lines = runner.tick()
+        self.assertTrue(any(line.startswith("FEEDBACK_BUILDERS_CONFIG_BAD reason=unreadable: ") for line in lines))
+        self.assertEqual(runner.state["chats"][CHAT]["host"], CUBE_03)
 
 
 class ShippedTests(RunnerCase):

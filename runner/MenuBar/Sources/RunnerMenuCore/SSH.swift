@@ -81,7 +81,7 @@ public struct SSH: Sendable {
     }
 }
 
-/// The runner on the Mac mini, through SSH: look at it, restart it, fetch its whole log.
+/// The runner on the Mac mini, through SSH: look at it, restart it, fetch its whole log, set its builders.
 public struct RunnerHost: Sendable {
     public static let label = "com.jai.feedbackkit-runner"
     public var ssh: SSH
@@ -104,6 +104,13 @@ public struct RunnerHost: Sendable {
     public func restart() async -> String? {
         let result = await ssh.run("launchctl kickstart -k \"gui/$(id -u)/\(Self.label)\"", timeout: 360)
         return result.status == 0 ? nil : lastLine(result.error) ?? "exit \(result.status)"
+    }
+
+    /// Replaces builders.json with `config`. Nil when it was written; else why not.
+    public func write(_ config: BuildersConfig) async -> String? {
+        let result = await ssh.run(config.writeScript())
+        if result.status == 0 { return nil }
+        return lastLine(result.error) ?? "exit \(result.status)"
     }
 
     /// The log's last `lines` lines.

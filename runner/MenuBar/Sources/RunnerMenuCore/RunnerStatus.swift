@@ -20,11 +20,53 @@ public struct RunnerStatus: Decodable, Sendable, Equatable {
     }
 
     public struct Builder: Decodable, Sendable, Equatable, Identifiable {
+        /// What the menu shows for a builder: turned off (it takes no new chat), or on with its Orca answering or not.
+        public enum State: Sendable, Equatable {
+            case off
+            case up
+            case down(String?)
+        }
+
         public var host: String
         public var name: String
         public var up: Bool
         public var detail: String?
+        /// Whether it takes new chats (builders.json). A runner from before builders.json leaves it out: on.
+        public var on: Bool
         public var id: String { host }
+
+        public var state: State {
+            if !on { return .off }
+            return up ? .up : .down(detail)
+        }
+
+        public init(host: String, name: String, up: Bool, detail: String? = nil, on: Bool = true) {
+            self.host = host
+            self.name = name
+            self.up = up
+            self.detail = detail
+            self.on = on
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case host, name, up, detail, on
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            host = try container.decode(String.self, forKey: .host)
+            name = try container.decode(String.self, forKey: .name)
+            up = try container.decode(Bool.self, forKey: .up)
+            detail = try container.decodeIfPresent(String.self, forKey: .detail)
+            on = try container.decodeIfPresent(Bool.self, forKey: .on) ?? true
+        }
+    }
+
+    /// The runner's own updater: the release it runs, when it last looked for a newer one, and why that failed.
+    public struct Update: Decodable, Sendable, Equatable {
+        public var installed: String?
+        public var lastCheck: Double?
+        public var error: String?
     }
 
     public struct Thread: Decodable, Sendable, Equatable {
@@ -63,6 +105,11 @@ public struct RunnerStatus: Decodable, Sendable, Equatable {
 
         /// The newest message's state, which the list shows.
         public var state: String? { messages.last?.state }
+
+        /// `<chat>/<message>`: a message's id across chats, as a dismissed failure is kept.
+        public func key(_ message: Message) -> String {
+            "\(chat)/\(message.id)"
+        }
     }
 
     public var version: Int
@@ -74,7 +121,11 @@ public struct RunnerStatus: Decodable, Sendable, Equatable {
     public var lastFastTick: Tick?
     public var longPoll: LongPoll?
     public var poll: Poll?
+    /// In the order a new chat tries them.
     public var builders: [Builder]
+    /// Why the runner ignored builders.json, when it did.
+    public var buildersConfigError: String?
+    public var update: Update?
     public var chats: [Chat]
 
     public static func decode(_ data: Data) throws -> RunnerStatus {
