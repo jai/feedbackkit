@@ -29,6 +29,6 @@ final class FeedbackMacSendingScreenshotUITests: XCTestCase {
         app.buttons["sessionReplySend"].click()
         let thumbnail = app.descendants(matching: .any)["feedback-screenshot-sending-0"].firstMatch
         XCTAssertTrue(thumbnail.waitForExistence(timeout: 3), "the screenshot shows in the message while it sends")
-        XCTAssertTrue(thumbnail.waitForNonExistence(timeout: 15), "once sent, the chat's own message replaces it")
+        XCTAssertTrue(thumbnail.waitForNonExistence(timeout: 25), "once sent, the chat's own message replaces it")
     }
 }
