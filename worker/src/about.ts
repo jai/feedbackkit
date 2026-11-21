@@ -379,7 +379,7 @@ const ABOUT_HTML = `<!doctype html>
   .subtitle { margin: 0; font-size: 13.5px; color: var(--text-dim); max-width: 72ch; }
 
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-  button.btn {
+  button.btn, a.btn {
     font-family: var(--mono);
     font-size: 11.5px;
     padding: 6px 11px;
@@ -387,10 +387,12 @@ const ABOUT_HTML = `<!doctype html>
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
+    text-decoration: none;
     cursor: pointer;
     transition: border-color 140ms ease, background 140ms ease;
   }
-  button.btn:hover { border-color: var(--border-strong); }
+  button.btn:hover, a.btn:hover { border-color: var(--border-strong); }
+  a.btn.worldview { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   button.btn[aria-pressed="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
@@ -590,6 +592,7 @@ const ABOUT_HTML = `<!doctype html>
       <p class="subtitle">Real telemetry from Worker D1 and <code>rex-runner</code>. Built components light up live; unbuilt pieces stay greyed out and hatched until wired.</p>
     </div>
     <div class="controls">
+      <a class="btn worldview" href="/about/worldview">Mental Model (30s) →</a>
       <button class="btn mode-btn" data-mode="flow" aria-pressed="true">1 · Request Flow</button>
       <button class="btn mode-btn" data-mode="recovery" aria-pressed="false">2 · Failure &amp; Reboot</button>
       <button class="btn mode-btn" data-mode="lanes" aria-pressed="false">3 · Orca vs Rex</button>

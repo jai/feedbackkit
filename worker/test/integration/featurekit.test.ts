@@ -180,4 +180,11 @@ test("GET /about serves the live architecture dashboard HTML and sanitized statu
   assert.equal(status.rex.runs.length, 1);
   assert.equal(status.components.menubar_about, "unbuilt");
   assert.equal(status.components.go_runner, "live");
+
+  const wv = await serveFeatureKit(new Request("https://kit.example/about/worldview"), e);
+  assert.equal(wv.status, 200);
+  assert.match(wv.headers.get("Content-Type") ?? "", /^text\/html/);
+  const wvHtml = await wv.text();
+  assert.match(wvHtml, /30-Second Mental Model/);
+  assert.match(wvHtml, /Copy Resume Prompt/);
 });

@@ -5,6 +5,7 @@
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
 import { aboutResponse, aboutStatusResponse, putRexStatus } from "./about.ts";
+import { worldviewResponse } from "./worldview.ts";
 import {
   addFeedback,
   chatOfRef,
@@ -499,6 +500,9 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
   const { pathname } = new URL(request.url);
   if (pathname === "/about" && request.method === "GET") {
     return aboutResponse();
+  }
+  if (pathname === "/about/worldview" && request.method === "GET") {
+    return worldviewResponse();
   }
   if (pathname === "/about/status.json" && request.method === "GET") {
     return aboutStatusResponse(env, parseApps(env.APPS), Date.now());
