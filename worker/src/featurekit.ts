@@ -4,7 +4,7 @@
  * Per app, the config names who builds: an owner's feedback goes to a coding agent that ships, a builder's to one that
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
-import { aboutResponse } from "./about.ts";
+import { aboutResponse, aboutStatusResponse, putRexStatus } from "./about.ts";
 import {
   addFeedback,
   chatOfRef,
@@ -496,6 +496,14 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
   const { pathname } = new URL(request.url);
   if (pathname === "/about" && request.method === "GET") {
     return aboutResponse();
+  }
+  if (pathname === "/about/status.json" && request.method === "GET") {
+    return aboutStatusResponse(env, parseApps(env.APPS), Date.now());
+  }
+  if (pathname === "/runner/rex-status" && request.method === "POST") {
+    return hasBearer(request, env.RUNNER_TOKEN)
+      ? putRexStatus(request, env, Date.now())
+      : new Response("unauthorized\n", { status: 401 });
   }
   const image = IMAGE_PATH.exec(pathname);
   if (image && request.method === "GET") {

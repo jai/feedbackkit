@@ -39,6 +39,8 @@ func main() {
 	switch os.Args[1] {
 	case "status":
 		err = cmdStatus(ctx, cfg, os.Args[2:])
+	case "push-status":
+		err = cmdPushStatus(ctx, cfg, os.Args[2:])
 	case "boot":
 		err = cmdBoot(ctx, cfg, os.Args[2:])
 	case "spawn":
@@ -72,8 +74,9 @@ Usage:
   rex-runner <command> [flags]
 
 Commands:
-  status   Show Rex session, Fable coordinator, inbox depth, and builder runs
-  boot     Ensure feedback-loop session, Fable Tab 1, and resume unfinished runs
+  status       Show Rex session, Fable coordinator, inbox depth, and builder runs
+  push-status  Publish sanitized Rex status snapshot to Worker (/about live dashboard)
+  boot         Ensure feedback-loop session, Fable Tab 1, and resume unfinished runs
   spawn    Create an isolated run folder + run.json, open a Rex tab, enqueue inbox
   report   Record builder progress/completion and append to Fable's FIFO inbox
   drain    Deliver queued inbox.jsonl events to Fable's Rex block and ack cursor
@@ -122,6 +125,50 @@ func buildStatus(ctx context.Context, cfg config.Config, rc *rex.Client) (status
 		snap.ClaimApps = append(snap.ClaimApps, app)
 	}
 	return snap, nil
+}
+
+func pushLiveStatus(ctx context.Context, cfg config.Config, rc *rex.Client, coordState string) error {
+	if cfg.WorkerURL == "" || cfg.RunnerToken == "" {
+		return errors.New("FEEDBACKKIT_URL and FEEDBACKKIT_RUNNER_TOKEN are required")
+	}
+	snap, err := buildStatus(ctx, cfg, rc)
+	if err != nil {
+		return err
+	}
+	runs := make([]worker.RexRunSummary, 0, len(snap.Runs))
+	for _, r := range snap.Runs {
+		runs = append(runs, worker.RexRunSummary{
+			ChatID:      r.ChatID,
+			App:         r.App,
+			Agent:       r.Agent,
+			Status:      string(r.Status),
+			UpdatedAtMs: r.UpdatedAt.UnixMilli(),
+		})
+	}
+	if coordState == "" {
+		coordState = "idle"
+	}
+	return worker.NewClient(cfg.WorkerURL, cfg.RunnerToken).PushRexStatus(ctx, worker.RexStatusPayload{
+		SessionName:       snap.SessionName,
+		SessionActive:     snap.SessionID != "",
+		CoordinatorActive: snap.CoordBlockID != "",
+		CoordinatorState:  coordState,
+		InboxPending:      snap.InboxPending,
+		ClaimApps:         snap.ClaimApps,
+		Runs:              runs,
+	})
+}
+
+func cmdPushStatus(ctx context.Context, cfg config.Config, args []string) error {
+	fs := flag.NewFlagSet("push-status", flag.ExitOnError)
+	coordState := fs.String("coord-state", "idle", "current coordinator OSC 7501 state")
+	_ = fs.Parse(args)
+
+	if err := pushLiveStatus(ctx, cfg, rex.NewClient(cfg.RexBinary), *coordState); err != nil {
+		return err
+	}
+	fmt.Printf("pushed Rex status to %s/runner/rex-status\n", strings.TrimRight(cfg.WorkerURL, "/"))
+	return nil
 }
 
 func cmdStatus(ctx context.Context, cfg config.Config, args []string) error {
@@ -603,8 +650,14 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 
 	drainTicker := time.NewTicker(5 * time.Second)
 	defer drainTicker.Stop()
+	statusTicker := time.NewTicker(15 * time.Second)
+	defer statusTicker.Stop()
 	reapTicker := time.NewTicker(*reapEvery)
 	defer reapTicker.Stop()
+
+	if cfg.WorkerURL != "" && cfg.RunnerToken != "" {
+		_ = pushLiveStatus(ctx, cfg, rc, "idle")
+	}
 
 	for {
 		select {
@@ -613,6 +666,15 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 			return nil
 		case <-drainTicker.C:
 			tryDrain()
+		case <-statusTicker.C:
+			if cfg.WorkerURL != "" && cfg.RunnerToken != "" {
+				mu.Lock()
+				st := coordState
+				mu.Unlock()
+				if err := pushLiveStatus(ctx, cfg, rc, st); err != nil {
+					log.Printf("push-status error: %v", err)
+				}
+			}
 		case <-reapTicker.C:
 			decisions, err := reaper.Sweep(ctx, reaper.Options{
 				RunsDir:     cfg.RunsDir,

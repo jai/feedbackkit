@@ -134,6 +134,32 @@ func (c *Client) Claim(ctx context.Context, item WorkItem) (*ClaimResponse, erro
 	return &resp, nil
 }
 
+// RexRunSummary is the sanitized run payload pushed to the `/about` live dashboard.
+type RexRunSummary struct {
+	ChatID      string `json:"chat_id"`
+	App         string `json:"app"`
+	Agent       string `json:"agent"`
+	Status      string `json:"status"`
+	UpdatedAtMs int64  `json:"updated_at_ms"`
+}
+
+// RexStatusPayload is pushed to `POST /runner/rex-status` for the live `/about` dashboard.
+type RexStatusPayload struct {
+	SessionName       string          `json:"session_name"`
+	SessionActive     bool            `json:"session_active"`
+	CoordinatorActive bool            `json:"coordinator_active"`
+	CoordinatorState  string          `json:"coordinator_state"`
+	InboxPending      int             `json:"inbox_pending"`
+	ClaimApps         []string        `json:"claim_apps"`
+	Runs              []RexRunSummary `json:"runs"`
+}
+
+// PushRexStatus publishes sanitized Rex runner telemetry to `POST /runner/rex-status`.
+func (c *Client) PushRexStatus(ctx context.Context, payload RexStatusPayload) error {
+	_, err := c.postJSON(ctx, "rex-status", payload, nil)
+	return err
+}
+
 // Result reports delivered/failed back to `POST /runner/result`.
 func (c *Client) Result(ctx context.Context, item WorkItem, status, detail string) error {
 	var d *string

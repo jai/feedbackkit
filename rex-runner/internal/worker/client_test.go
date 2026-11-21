@@ -30,6 +30,8 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 			})
 		case "/runner/result":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/runner/rex-status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
@@ -51,5 +53,13 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 	}
 	if err := c.Result(context.Background(), work[0], "delivered", ""); err != nil {
 		t.Fatalf("result: %v", err)
+	}
+	if err := c.PushRexStatus(context.Background(), RexStatusPayload{
+		SessionName:       "feedback-loop",
+		SessionActive:     true,
+		CoordinatorActive: true,
+		CoordinatorState:  "idle",
+	}); err != nil {
+		t.Fatalf("push rex status: %v", err)
 	}
 }

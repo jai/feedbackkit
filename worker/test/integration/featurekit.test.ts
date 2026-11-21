@@ -130,11 +130,54 @@ test("the app may name its sender; the runner's work carries the name, and the l
   );
 });
 
-test("GET /about serves the static architecture blueprint HTML without auth", async () => {
-  const res = await serveFeatureKit(new Request("https://kit.example/about"), env());
+test("GET /about serves the live architecture dashboard HTML and sanitized status API", async () => {
+  const e = env();
+  const res = await serveFeatureKit(new Request("https://kit.example/about"), e);
   assert.equal(res.status, 200);
   assert.match(res.headers.get("Content-Type") ?? "", /^text\/html/);
   const html = await res.text();
   assert.match(html, /Feedback Loop — Mathematical Tree/);
-  assert.match(html, /rex-runner/);
+  assert.match(html, /\/about\/status\.json/);
+
+  await fromApp(e, "/feedback", "octocat", { text: "Secret user message should never leak" });
+  await fromRunner(e, "poll", { orca: true });
+
+  const unauthPush = await serveFeatureKit(
+    new Request("https://kit.example/runner/rex-status", { method: "POST", body: "{}" }),
+    e,
+  );
+  assert.equal(unauthPush.status, 401);
+
+  const pushRes = await serveFeatureKit(
+    new Request("https://kit.example/runner/rex-status", {
+      method: "POST",
+      headers: { Authorization: "Bearer runner", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_name: "feedback-loop",
+        session_active: true,
+        coordinator_active: true,
+        coordinator_state: "idle",
+        inbox_pending: 2,
+        claim_apps: [],
+        runs: [{ chat_id: "fb-1a2b", app: "prhub", agent: "claude", status: "active" }],
+      }),
+    }),
+    e,
+  );
+  assert.equal(pushRes.status, 200);
+
+  const statusRes = await serveFeatureKit(new Request("https://kit.example/about/status.json"), e);
+  assert.equal(statusRes.status, 200);
+  const rawText = await statusRes.text();
+  assert.doesNotMatch(rawText, /Secret user message/);
+  const status = JSON.parse(rawText);
+  assert.equal(status.worker.total_chats, 1);
+  assert.equal(status.worker.pending_messages, 1);
+  assert.equal(status.orca.online, true);
+  assert.equal(status.rex.connected, true);
+  assert.equal(status.rex.coordinator_active, true);
+  assert.equal(status.rex.inbox_pending, 2);
+  assert.equal(status.rex.runs.length, 1);
+  assert.equal(status.components.menubar_about, "unbuilt");
+  assert.equal(status.components.go_runner, "live");
 });

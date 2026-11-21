@@ -1,15 +1,245 @@
 /**
- * Static interactive architecture & flow preview (`GET /about`) for FeedbackKit's
- * Menu Bar About link. Renders a mathematical-tree view of the dual-lane setup
- * (existing Python/Orca runner untouched + parallel Go/Rex coordinator loop).
+ * Live visual-first architecture dashboard (`GET /about`), sanitized status API
+ * (`GET /about/status.json`), and Rex runner heartbeat ingest (`POST /runner/rex-status`).
+ *
+ * Strictly public-safe: exposes operational counts, component build states, and sanitized
+ * slugs only — never chat text, emails, local paths, hostnames, or tokens.
  */
+
+import type { AppConfig, FeatureKitEnv } from "./featurekit.ts";
+
+const REX_STATUS_KEY = "rex/status.json";
+const ORCA_FRESH_MS = 90_000;
+const REX_FRESH_MS = 120_000;
+const SLUG_RE = /^[a-zA-Z0-9._-]{1,48}$/;
+const STATE_RE = /^[a-z_]{1,24}$/;
+
+export interface RexRunSnapshot {
+  chat_id: string;
+  app: string;
+  agent: string;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface StoredRexStatus {
+  reported_at_ms: number;
+  session_name: string;
+  session_active: boolean;
+  coordinator_active: boolean;
+  coordinator_state: string;
+  inbox_pending: number;
+  claim_apps: string[];
+  runs: RexRunSnapshot[];
+}
+
+export type ComponentBuildState = "live" | "standby" | "offline" | "unbuilt";
+
+function safeSlug(v: unknown, fallback = ""): string {
+  return typeof v === "string" && SLUG_RE.test(v) ? v : fallback;
+}
+
+function safeState(v: unknown, fallback: string): string {
+  return typeof v === "string" && STATE_RE.test(v) ? v : fallback;
+}
+
+function safeInt(v: unknown, min = 0, max = 100_000): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.trunc(v))) : min;
+}
+
+/** Validates and stores a sanitized snapshot pushed by `rex-runner` into R2. */
+export async function putRexStatus(request: Request, env: FeatureKitEnv, now: number): Promise<Response> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return Response.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return Response.json({ error: "Expected JSON object." }, { status: 400 });
+  }
+  const obj = raw as Record<string, unknown>;
+  const claimAppsRaw = Array.isArray(obj.claim_apps) ? obj.claim_apps : [];
+  const claimApps = claimAppsRaw
+    .map((item) => safeSlug(item))
+    .filter((slug) => slug !== "")
+    .slice(0, 20);
+
+  const runsRaw = Array.isArray(obj.runs) ? obj.runs : [];
+  const runs: RexRunSnapshot[] = [];
+  for (const item of runsRaw.slice(0, 24)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const r = item as Record<string, unknown>;
+    const chatId = safeSlug(r.chat_id);
+    if (!chatId) {
+      continue;
+    }
+    runs.push({
+      chat_id: chatId,
+      app: safeSlug(r.app, "unknown"),
+      agent: safeSlug(r.agent, "claude"),
+      status: safeState(r.status, "active"),
+      updated_at_ms: typeof r.updated_at_ms === "number" && Number.isFinite(r.updated_at_ms) ? r.updated_at_ms : now,
+    });
+  }
+
+  const snapshot: StoredRexStatus = {
+    reported_at_ms: now,
+    session_name: safeSlug(obj.session_name, "feedback-loop"),
+    session_active: obj.session_active === true,
+    coordinator_active: obj.coordinator_active === true,
+    coordinator_state: safeState(obj.coordinator_state, "idle"),
+    inbox_pending: safeInt(obj.inbox_pending, 0, 10_000),
+    claim_apps: claimApps,
+    runs,
+  };
+
+  await env.FEEDBACK.put(REX_STATUS_KEY, JSON.stringify(snapshot), {
+    httpMetadata: { contentType: "application/json" },
+  });
+  return Response.json({ ok: true, reported_at_ms: now });
+}
+
+interface AppCountRow {
+  app: string;
+  chats: number;
+}
+
+interface StatusCountRow {
+  status: string;
+  cnt: number;
+}
+
+interface BeatRow {
+  at: number;
+  orca: number;
+  detail: string | null;
+}
+
+/** Serves real live Worker D1 + Rex R2 operational telemetry for the `/about` dashboard. */
+export async function aboutStatusResponse(
+  env: FeatureKitEnv,
+  apps: Record<string, AppConfig>,
+  now: number,
+): Promise<Response> {
+  const [appRows, msgRows, beatRow, rexObj] = await Promise.all([
+    env.DB.prepare("SELECT app, COUNT(*) AS chats FROM chats WHERE kind = 'agent' GROUP BY app").all<AppCountRow>(),
+    env.DB.prepare(
+      "SELECT status, COUNT(*) AS cnt FROM messages WHERE status IN ('pending', 'delivering', 'failed') GROUP BY status",
+    ).all<StatusCountRow>(),
+    env.DB.prepare("SELECT at, orca, detail FROM runner_beat WHERE id = 1").first<BeatRow>(),
+    env.FEEDBACK.get(REX_STATUS_KEY),
+  ]);
+
+  const countsByApp = new Map<string, number>();
+  for (const row of appRows.results ?? []) {
+    countsByApp.set(row.app, Number(row.chats) || 0);
+  }
+  const appSummary = Object.entries(apps)
+    .filter(([, cfg]) => !cfg.echo)
+    .map(([slug]) => ({ app: slug, chats: countsByApp.get(slug) ?? 0 }));
+  const totalChats = appSummary.reduce((sum, item) => sum + item.chats, 0);
+
+  let pendingMessages = 0;
+  let deliveringMessages = 0;
+  let failedMessages = 0;
+  for (const row of msgRows.results ?? []) {
+    const n = Number(row.cnt) || 0;
+    if (row.status === "pending") {
+      pendingMessages = n;
+    } else if (row.status === "delivering") {
+      deliveringMessages = n;
+    } else if (row.status === "failed") {
+      failedMessages = n;
+    }
+  }
+
+  const orcaBeatMs = beatRow?.at ? Number(beatRow.at) : null;
+  const orcaAgeSec = orcaBeatMs !== null ? Math.max(0, Math.floor((now - orcaBeatMs) / 1000)) : null;
+  const orcaOnline = orcaBeatMs !== null && now - orcaBeatMs <= ORCA_FRESH_MS && beatRow?.orca === 1;
+
+  let rex: StoredRexStatus | null = null;
+  if (rexObj) {
+    try {
+      rex = (await rexObj.json()) as StoredRexStatus;
+    } catch {
+      rex = null;
+    }
+  }
+  const rexAgeSec = rex ? Math.max(0, Math.floor((now - rex.reported_at_ms) / 1000)) : null;
+  const rexFresh = rex !== null && now - rex.reported_at_ms <= REX_FRESH_MS;
+  const activeRexRuns = rex ? rex.runs.filter((r) => r.status === "active" || r.status === "blocked") : [];
+
+  const components: Record<string, ComponentBuildState> = {
+    apps: "live",
+    menubar_about: "unbuilt",
+    worker: "live",
+    orca_runner: orcaOnline ? "live" : orcaBeatMs !== null ? "offline" : "standby",
+    orca_worktrees: orcaOnline ? "live" : "standby",
+    go_runner: rexFresh ? "live" : rex ? "standby" : "standby",
+    worker_rex_claim: rex && rex.claim_apps.length > 0 ? "live" : "unbuilt",
+    launchd_boot: "unbuilt",
+    inbox: rexFresh ? "live" : "standby",
+    fable: rex?.coordinator_active ? (rexFresh ? "live" : "standby") : "standby",
+    reaper: "standby",
+    builder_tabs: activeRexRuns.length > 0 ? "live" : "unbuilt",
+    builder_auto_report: "unbuilt",
+  };
+
+  return Response.json(
+    {
+      now_ms: now,
+      worker: {
+        apps: appSummary,
+        total_chats: totalChats,
+        pending_messages: pendingMessages,
+        delivering_messages: deliveringMessages,
+        failed_messages: failedMessages,
+      },
+      orca: {
+        online: orcaOnline,
+        last_beat_ms: orcaBeatMs,
+        age_seconds: orcaAgeSec,
+      },
+      rex: rex
+        ? {
+            connected: rexFresh,
+            reported_at_ms: rex.reported_at_ms,
+            age_seconds: rexAgeSec,
+            session_name: rex.session_name,
+            session_active: rex.session_active,
+            coordinator_active: rex.coordinator_active,
+            coordinator_state: rex.coordinator_state,
+            inbox_pending: rex.inbox_pending,
+            claim_apps: rex.claim_apps,
+            runs: rex.runs,
+          }
+        : {
+            connected: false,
+            reported_at_ms: null,
+            age_seconds: null,
+            session_name: "feedback-loop",
+            session_active: false,
+            coordinator_active: false,
+            coordinator_state: "unknown",
+            inbox_pending: 0,
+            claim_apps: [],
+            runs: [],
+          },
+      components,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
 
 const ABOUT_HTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FeedbackKit — Architecture &amp; Request Flow</title>
+<title>FeedbackKit — Live System Dashboard</title>
 <style>
   :root {
     --bg: #f6f8fb;
@@ -22,15 +252,18 @@ const ABOUT_HTML = `<!doctype html>
     --text-dim: #475569;
     --accent: #1d4ed8;
     --accent-soft: rgba(29, 78, 216, 0.10);
-    --ret: #047857;
-    --ret-soft: rgba(4, 120, 87, 0.10);
-    --warn: #b45309;
-    --warn-soft: rgba(180, 83, 9, 0.12);
-    --muted: #64748b;
-    --muted-soft: rgba(100, 116, 139, 0.10);
+    --live: #059669;
+    --live-soft: rgba(5, 150, 105, 0.12);
+    --standby: #b45309;
+    --standby-soft: rgba(180, 83, 9, 0.12);
+    --unbuilt: #94a3b8;
+    --unbuilt-bg: #f1f5f9;
+    --unbuilt-hatch: rgba(100, 116, 139, 0.14);
+    --offline: #dc2626;
+    --offline-soft: rgba(220, 38, 38, 0.12);
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    --shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -44,13 +277,16 @@ const ABOUT_HTML = `<!doctype html>
       --text-dim: #94a3b8;
       --accent: #60a5fa;
       --accent-soft: rgba(96, 165, 250, 0.14);
-      --ret: #34d399;
-      --ret-soft: rgba(52, 211, 153, 0.14);
-      --warn: #fbbf24;
-      --warn-soft: rgba(251, 191, 36, 0.14);
-      --muted: #94a3b8;
-      --muted-soft: rgba(148, 163, 184, 0.12);
-      --shadow: 0 10px 28px rgba(0, 0, 0, 0.40);
+      --live: #34d399;
+      --live-soft: rgba(52, 211, 153, 0.14);
+      --standby: #fbbf24;
+      --standby-soft: rgba(251, 191, 36, 0.14);
+      --unbuilt: #64748b;
+      --unbuilt-bg: #0f172a;
+      --unbuilt-hatch: rgba(148, 163, 184, 0.12);
+      --offline: #f87171;
+      --offline-soft: rgba(248, 113, 113, 0.15);
+      --shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
     }
   }
   :root[data-theme="dark"] {
@@ -64,13 +300,16 @@ const ABOUT_HTML = `<!doctype html>
     --text-dim: #94a3b8;
     --accent: #60a5fa;
     --accent-soft: rgba(96, 165, 250, 0.14);
-    --ret: #34d399;
-    --ret-soft: rgba(52, 211, 153, 0.14);
-    --warn: #fbbf24;
-    --warn-soft: rgba(251, 191, 36, 0.14);
-    --muted: #94a3b8;
-    --muted-soft: rgba(148, 163, 184, 0.12);
-    --shadow: 0 10px 28px rgba(0, 0, 0, 0.40);
+    --live: #34d399;
+    --live-soft: rgba(52, 211, 153, 0.14);
+    --standby: #fbbf24;
+    --standby-soft: rgba(251, 191, 36, 0.14);
+    --unbuilt: #64748b;
+    --unbuilt-bg: #0f172a;
+    --unbuilt-hatch: rgba(148, 163, 184, 0.12);
+    --offline: #f87171;
+    --offline-soft: rgba(248, 113, 113, 0.15);
+    --shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
   }
   * { box-sizing: border-box; }
   body {
@@ -84,18 +323,15 @@ const ABOUT_HTML = `<!doctype html>
     background-size: 24px 24px;
     line-height: 1.45;
   }
-  .shell {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 20px 24px 48px;
-  }
+  .shell { max-width: 1320px; margin: 0 auto; padding: 18px 22px 48px; }
+
   header {
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 16px;
-    padding-bottom: 16px;
+    gap: 14px;
+    padding-bottom: 14px;
     border-bottom: 1px solid var(--border);
   }
   .eyebrow {
@@ -108,77 +344,117 @@ const ABOUT_HTML = `<!doctype html>
     align-items: center;
     gap: 8px;
   }
-  .badge {
+  .pill {
     font-family: var(--mono);
     font-size: 10px;
     padding: 2px 7px;
     border-radius: 4px;
     border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text-dim);
-  }
-  .badge.live-next { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-  h1 {
-    margin: 6px 0 4px;
-    font-size: 24px;
-    font-weight: 650;
-    letter-spacing: -0.02em;
-  }
-  .subtitle {
-    margin: 0;
-    font-size: 14px;
-    color: var(--text-dim);
-    max-width: 68ch;
-  }
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 5px;
   }
-  button.mode-btn, button.theme-btn {
+  .pill.live { border-color: var(--live); color: var(--live); background: var(--live-soft); }
+  .pill.standby { border-color: var(--standby); color: var(--standby); background: var(--standby-soft); }
+  .pill.unbuilt { border-color: var(--unbuilt); color: var(--unbuilt); background: var(--unbuilt-bg); border-style: dashed; }
+  .pill.offline { border-color: var(--offline); color: var(--offline); background: var(--offline-soft); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: currentColor; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: no-preference) { .dot.pulsing { animation: pulse 2s ease-in-out infinite; } }
+
+  h1 { margin: 5px 0 3px; font-size: 23px; font-weight: 650; letter-spacing: -0.02em; }
+  .subtitle { margin: 0; font-size: 13.5px; color: var(--text-dim); max-width: 72ch; }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+  button.btn {
     font-family: var(--mono);
-    font-size: 12px;
-    padding: 7px 12px;
+    font-size: 11.5px;
+    padding: 6px 11px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
     cursor: pointer;
-    transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+    transition: border-color 140ms ease, background 140ms ease;
   }
-  button.mode-btn:hover, button.theme-btn:hover { border-color: var(--border-strong); }
-  button.mode-btn[aria-pressed="true"] {
+  button.btn:hover { border-color: var(--border-strong); }
+  button.btn[aria-pressed="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 600;
   }
+
+  /* Instrument KPI strip */
+  .kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 14px 0;
+    overflow: hidden;
+  }
+  @media (max-width: 960px) { .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpi {
+    padding: 12px 14px;
+    border-right: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi:last-child { border-right: none; }
+  .kpi-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .kpi-val {
+    font-size: 19px;
+    font-weight: 650;
+    margin: 4px 0 2px;
+    letter-spacing: -0.02em;
+  }
+  .kpi-sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .progress-bar {
+    height: 5px;
+    background: var(--surface-2);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .progress-fill { height: 100%; background: var(--live); transition: width 250ms ease; }
+
   .legend {
     display: flex;
     flex-wrap: wrap;
     gap: 16px;
-    margin: 14px 0 12px;
+    margin: 0 0 12px;
     font-family: var(--mono);
     font-size: 11px;
     color: var(--text-dim);
   }
   .legend-item { display: inline-flex; align-items: center; gap: 6px; }
-  .swatch { width: 18px; height: 2px; display: inline-block; }
-  .swatch.fwd { background: var(--accent); }
-  .swatch.ret { background: repeating-linear-gradient(90deg, var(--ret) 0 5px, transparent 5px 8px); }
-  .swatch.rec { background: repeating-linear-gradient(90deg, var(--warn) 0 3px, transparent 3px 6px); }
-  .swatch.orca { background: var(--muted); opacity: 0.65; }
+  .swatch-box { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+  .swatch-box.live { border: 1.5px solid var(--live); background: var(--live-soft); }
+  .swatch-box.standby { border: 1.5px solid var(--standby); background: var(--standby-soft); }
+  .swatch-box.unbuilt {
+    border: 1.5px dashed var(--unbuilt);
+    background: repeating-linear-gradient(-45deg, var(--unbuilt-bg), var(--unbuilt-bg) 3px, var(--unbuilt-hatch) 3px, var(--unbuilt-hatch) 6px);
+  }
 
   .workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 330px;
-    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 16px;
     align-items: start;
   }
-  @media (max-width: 980px) {
-    .workspace { grid-template-columns: 1fr; }
-  }
+  @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } }
+
   .canvas-frame {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -187,49 +463,22 @@ const ABOUT_HTML = `<!doctype html>
     overflow-x: auto;
     padding: 12px;
   }
-  svg#tree {
-    display: block;
-    width: 100%;
-    min-width: 780px;
-    height: auto;
-    user-select: none;
-  }
+  svg#tree { display: block; width: 100%; min-width: 780px; height: auto; user-select: none; }
 
-  /* SVG blueprint styling */
-  .rank-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    fill: var(--text-dim);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  .rank-rule { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.55; }
-  .boundary {
-    fill: none;
-    stroke: var(--border-strong);
-    stroke-width: 1.25;
-    stroke-dasharray: 6 4;
-    rx: 8;
-  }
-  .boundary-tag {
-    font-family: var(--mono);
-    font-size: 10px;
-    fill: var(--text-dim);
-  }
-  .edge {
-    fill: none;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: opacity 180ms ease, stroke-width 180ms ease;
-  }
+  .rank-label { font-family: var(--mono); font-size: 10px; fill: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+  .rank-rule { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.5; }
+  .boundary { fill: none; stroke: var(--border-strong); stroke-width: 1.25; stroke-dasharray: 6 4; rx: 8; }
+  .boundary-tag { font-family: var(--mono); font-size: 10px; fill: var(--text-dim); }
+
+  .edge { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: opacity 180ms ease; }
   .edge-fwd { stroke: var(--accent); }
-  .edge-ret { stroke: var(--ret); stroke-dasharray: 6 4; }
-  .edge-rec { stroke: var(--warn); stroke-dasharray: 3 4; }
-  .edge-orca { stroke: var(--muted); opacity: 0.55; }
+  .edge-ret { stroke: var(--live); stroke-dasharray: 6 4; }
+  .edge-rec { stroke: var(--standby); stroke-dasharray: 3 4; }
+  .edge-orca { stroke: var(--live); opacity: 0.75; }
+  .edge-unbuilt { stroke: var(--unbuilt); stroke-dasharray: 3 4; opacity: 0.55; }
   .edge-label {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 9.5px;
     fill: var(--text-dim);
     paint-order: stroke;
     stroke: var(--surface);
@@ -237,63 +486,46 @@ const ABOUT_HTML = `<!doctype html>
     stroke-linejoin: round;
   }
   .edge-label.fwd { fill: var(--accent); }
-  .edge-label.ret { fill: var(--ret); }
-  .edge-label.rec { fill: var(--warn); }
+  .edge-label.ret { fill: var(--live); }
+  .edge-label.rec { fill: var(--standby); }
+  .edge-label.unbuilt { fill: var(--unbuilt); }
 
-  @keyframes flowDash {
-    from { stroke-dashoffset: 24; }
-    to { stroke-dashoffset: 0; }
-  }
+  @keyframes flowDash { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
   @media (prefers-reduced-motion: no-preference) {
-    .mode-flow .edge-fwd.anim { stroke-dasharray: 8 4; animation: flowDash 1.4s linear infinite; }
-    .mode-flow .edge-ret.anim { animation: flowDash 1.8s linear infinite; }
-    .mode-recovery .edge-rec.anim { animation: flowDash 1.2s linear infinite; }
+    .mode-flow .edge-live-flow { stroke-dasharray: 8 4; animation: flowDash 1.5s linear infinite; }
+    .mode-recovery .edge-rec { animation: flowDash 1.3s linear infinite; }
   }
 
+  /* Node visual states: LIVE vs STANDBY vs UNBUILT (greyed out + hatched) vs OFFLINE */
   .node { cursor: pointer; transition: opacity 180ms ease; }
-  .node rect.box {
-    fill: var(--surface);
-    stroke: var(--border-strong);
-    stroke-width: 1.5;
-    rx: 6;
-    transition: stroke 140ms ease, fill 140ms ease, stroke-width 140ms ease;
+  .node rect.box { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.6; rx: 6; }
+  .node:hover rect.box { stroke: var(--accent); stroke-width: 2.2; }
+  .node.is-selected rect.box { stroke: var(--accent); stroke-width: 2.6; }
+
+  .node.state-live rect.box { stroke: var(--live); stroke-width: 2; }
+  .node.state-standby rect.box { stroke: var(--standby); stroke-width: 1.7; }
+  .node.state-offline rect.box { stroke: var(--offline); stroke-width: 1.8; }
+  .node.state-unbuilt rect.box {
+    fill: url(#unbuilt-hatch);
+    stroke: var(--unbuilt);
+    stroke-width: 1.4;
+    stroke-dasharray: 5 3;
   }
-  .node:hover rect.box { stroke: var(--accent); stroke-width: 2; }
-  .node.is-selected rect.box { stroke: var(--accent); stroke-width: 2.5; fill: var(--accent-soft); }
-  .node.kind-root rect.box { stroke: var(--accent); stroke-width: 2; }
-  .node.kind-coord rect.box { stroke: var(--accent); stroke-width: 2.2; }
-  .node.kind-orca rect.box { stroke: var(--muted); stroke-dasharray: 4 3; }
-  .node.kind-reaper rect.box { stroke: var(--warn); }
-  .node .n-kicker {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    fill: var(--text-dim);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-  .node .n-title {
-    font-family: var(--sans);
-    font-size: 13px;
-    font-weight: 650;
-    fill: var(--text);
-  }
-  .node .n-sub {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    fill: var(--text-dim);
-  }
+  .node.state-unbuilt .n-title,
+  .node.state-unbuilt .n-sub,
+  .node.state-unbuilt .n-metric { fill: var(--unbuilt); }
+
+  .node .n-kicker { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); letter-spacing: 0.05em; text-transform: uppercase; }
+  .node .n-title { font-family: var(--sans); font-size: 13px; font-weight: 650; fill: var(--text); }
+  .node .n-sub { font-family: var(--mono); font-size: 10px; fill: var(--text-dim); }
+  .node .n-metric { font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--text); }
   .node .chip-bg { rx: 3; }
-  .node .chip-txt { font-family: var(--mono); font-size: 9px; font-weight: 600; }
+  .node .chip-txt { font-family: var(--mono); font-size: 8.5px; font-weight: 650; }
 
-  /* Mode dimming */
-  .mode-flow .only-recovery { opacity: 0.15; }
-  .mode-flow .lane-orca { opacity: 0.45; }
+  .mode-flow .only-recovery { opacity: 0.16; }
   .mode-recovery .only-flow { opacity: 0.22; }
-  .mode-recovery .lane-orca { opacity: 0.28; }
   .mode-lanes .only-recovery { opacity: 0.18; }
-  .mode-lanes .lane-orca { opacity: 1; }
 
-  /* Inspector panel */
   aside.inspector {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -301,91 +533,20 @@ const ABOUT_HTML = `<!doctype html>
     padding: 16px;
     box-shadow: var(--shadow);
   }
-  .ins-kicker {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--accent);
-    margin: 0 0 4px;
-  }
-  .ins-title {
-    margin: 0 0 8px;
-    font-size: 17px;
-    font-weight: 650;
-  }
-  .ins-summary {
-    margin: 0 0 14px;
-    font-size: 13px;
-    color: var(--text-dim);
-  }
-  .kv {
-    border-top: 1px solid var(--border);
-    padding: 10px 0;
-  }
-  .kv-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-dim);
-    margin-bottom: 3px;
-  }
-  .kv-val {
-    font-size: 12.5px;
-    color: var(--text);
-    overflow-wrap: anywhere;
-  }
-  .kv-val code {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    background: var(--surface-2);
-    padding: 1px 5px;
-    border-radius: 4px;
-  }
-  .live-preview-box {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border: 1px dashed var(--accent);
-    border-radius: 6px;
-    background: var(--accent-soft);
-    font-size: 12px;
-  }
-  .live-preview-box strong {
-    display: block;
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--accent);
-    margin-bottom: 3px;
-  }
-
-  .strip {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 18px;
-  }
-  @media (max-width: 820px) {
-    .strip { grid-template-columns: 1fr; }
-  }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
-  }
-  .card h2 {
-    margin: 0 0 6px;
-    font-family: var(--mono);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-dim);
-  }
-  .card p { margin: 0; font-size: 13px; color: var(--text); }
-  .card code { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
+  .ins-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .ins-kicker { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); margin: 0; }
+  .ins-title { margin: 2px 0 6px; font-size: 17px; font-weight: 650; }
+  .ins-summary { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); }
+  .kv { border-top: 1px solid var(--border); padding: 9px 0; }
+  .kv-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 3px; }
+  .kv-val { font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .kv-val code { font-family: var(--mono); font-size: 11px; background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
+  ul.checklist { list-style: none; padding: 0; margin: 4px 0 0; font-size: 12.5px; }
+  ul.checklist li { display: flex; gap: 7px; padding: 2px 0; }
+  ul.checklist li.done { color: var(--text); }
+  ul.checklist li.todo { color: var(--unbuilt); }
+  ul.checklist .mark { font-family: var(--mono); font-weight: 700; width: 12px; flex-shrink: 0; }
+  ul.checklist li.done .mark { color: var(--live); }
 </style>
 </head>
 <body>
@@ -393,401 +554,669 @@ const ABOUT_HTML = `<!doctype html>
   <header>
     <div>
       <div class="eyebrow">
-        <span>FeedbackKit · System Blueprint</span>
-        <span class="badge live-next">STATIC PREVIEW</span>
-        <span class="badge">LIVE TELEMETRY NEXT</span>
+        <span>FeedbackKit · Live System Dashboard</span>
+        <span class="pill live" id="liveBadge"><span class="dot pulsing"></span>LIVE · POLLING 10s</span>
       </div>
       <h1>Feedback Loop — Mathematical Tree</h1>
-      <p class="subtitle">Rooted request hierarchy across apps, Cloudflare Worker, untouched Orca runner, and the new Go Rex runner coordinating Fable 5.2 and ephemeral builder tabs. Click any node to inspect state and recovery.</p>
+      <p class="subtitle">Real telemetry from Worker D1 and <code>rex-runner</code>. Built components light up live; unbuilt pieces stay greyed out and hatched until wired.</p>
     </div>
-    <div class="controls" role="group" aria-label="Diagram view modes">
-      <button class="mode-btn" data-mode="flow" aria-pressed="true">1 · Request Flow</button>
-      <button class="mode-btn" data-mode="recovery" aria-pressed="false">2 · Failure &amp; Reboot</button>
-      <button class="mode-btn" data-mode="lanes" aria-pressed="false">3 · Orca vs Rex</button>
-      <button class="theme-btn" id="themeBtn" type="button" title="Toggle light/dark">Theme</button>
+    <div class="controls">
+      <button class="btn mode-btn" data-mode="flow" aria-pressed="true">1 · Request Flow</button>
+      <button class="btn mode-btn" data-mode="recovery" aria-pressed="false">2 · Failure &amp; Reboot</button>
+      <button class="btn mode-btn" data-mode="lanes" aria-pressed="false">3 · Orca vs Rex</button>
+      <button class="btn" id="refreshBtn" type="button">Refresh</button>
+      <button class="btn" id="themeBtn" type="button">Theme</button>
     </div>
   </header>
 
+  <section class="kpi-strip" aria-label="Live telemetry summary">
+    <div class="kpi">
+      <div class="kpi-label"><span>Worker D1</span><span class="pill live">LIVE</span></div>
+      <div class="kpi-val" id="kpiChats">—</div>
+      <div class="kpi-sub" id="kpiQueue">loading queue…</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span>Orca (Python)</span><span class="pill standby" id="kpiOrcaPill">—</span></div>
+      <div class="kpi-val" id="kpiOrcaVal">—</div>
+      <div class="kpi-sub" id="kpiOrcaSub">untouched production lane</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span>Rex (Go Binary)</span><span class="pill standby" id="kpiRexPill">—</span></div>
+      <div class="kpi-val" id="kpiRexVal">—</div>
+      <div class="kpi-sub" id="kpiRexSub">claim-apps: none (safe)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span>Fable 5.2 Tab 1</span><span class="pill standby" id="kpiFablePill">—</span></div>
+      <div class="kpi-val" id="kpiFableVal">—</div>
+      <div class="kpi-sub" id="kpiFableSub">inbox: — pending</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span>Build Progress</span><span class="pill live" id="kpiBuildPct">—</span></div>
+      <div class="kpi-val" id="kpiBuildVal">—</div>
+      <div class="progress-bar"><div class="progress-fill" id="kpiBuildBar" style="width:0%"></div></div>
+    </div>
+  </section>
+
   <div class="legend">
-    <span class="legend-item"><span class="swatch fwd"></span>Forward dispatch (request down tree)</span>
-    <span class="legend-item"><span class="swatch ret"></span>Return feedback &amp; status (up tree)</span>
-    <span class="legend-item"><span class="swatch rec"></span>Reboot / crash recovery &amp; reaper</span>
-    <span class="legend-item"><span class="swatch orca"></span>Existing Orca lane (untouched)</span>
+    <span class="legend-item"><span class="swatch-box live"></span>Built &amp; live</span>
+    <span class="legend-item"><span class="swatch-box standby"></span>Built · standby / manual</span>
+    <span class="legend-item"><span class="swatch-box unbuilt"></span>Unbuilt (greyed out)</span>
+    <span class="legend-item" id="lastUpdated">Syncing…</span>
   </div>
 
   <div class="workspace">
     <div class="canvas-frame">
-      <svg id="tree" class="mode-flow" viewBox="0 0 920 710" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mathematical tree of FeedbackKit request flow">
+      <svg id="tree" class="mode-flow" viewBox="0 0 920 715" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Live FeedbackKit mathematical tree">
         <defs>
+          <pattern id="unbuilt-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="8" height="8" fill="var(--unbuilt-bg)"/>
+            <line x1="0" y1="0" x2="0" y2="8" stroke="var(--unbuilt-hatch)" stroke-width="3"/>
+          </pattern>
           <marker id="arr-fwd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--accent)"/>
           </marker>
-          <marker id="arr-ret" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--ret)"/>
+          <marker id="arr-live" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--live)"/>
           </marker>
           <marker id="arr-rec" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--warn)"/>
+            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--standby)"/>
           </marker>
-          <marker id="arr-orca" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--muted)"/>
+          <marker id="arr-unbuilt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--unbuilt)"/>
           </marker>
         </defs>
 
         <!-- Rank guide lines -->
         <text class="rank-label" x="14" y="34">R0 · APPS</text>
-        <line class="rank-rule" x1="14" y1="84" x2="906" y2="84"/>
-        <text class="rank-label" x="14" y="106">R1 · WORKER</text>
-        <line class="rank-rule" x1="14" y1="184" x2="906" y2="184"/>
-        <text class="rank-label" x="14" y="206">R2 · RUNNERS</text>
-        <line class="rank-rule" x1="14" y1="304" x2="906" y2="304"/>
-        <text class="rank-label" x="14" y="326">R3 · COORDINATOR</text>
-        <line class="rank-rule" x1="14" y1="490" x2="906" y2="490"/>
-        <text class="rank-label" x="14" y="512">R4 · BUILDERS</text>
+        <line class="rank-rule" x1="14" y1="86" x2="906" y2="86"/>
+        <text class="rank-label" x="14" y="108">R1 · WORKER</text>
+        <line class="rank-rule" x1="14" y1="186" x2="906" y2="186"/>
+        <text class="rank-label" x="14" y="208">R2 · RUNNERS</text>
+        <line class="rank-rule" x1="14" y1="308" x2="906" y2="308"/>
+        <text class="rank-label" x="14" y="330">R3 · COORDINATOR</text>
+        <line class="rank-rule" x1="14" y1="494" x2="906" y2="494"/>
+        <text class="rank-label" x="14" y="516">R4 · BUILDERS</text>
 
         <!-- Rex session dashed boundary -->
-        <rect class="boundary" x="278" y="316" width="626" height="378"/>
-        <text class="boundary-tag" x="292" y="334">REX SESSION: feedback-loop (DEDICATED AUTOMATION BOUNDARY · OSC 7501 STATUS)</text>
+        <rect class="boundary" x="278" y="318" width="626" height="382"/>
+        <text class="boundary-tag" id="rexBoundaryTag" x="292" y="336">REX SESSION: feedback-loop · OSC 7501 STATUS</text>
 
-        <!-- EDGES: R0 Apps <-> R1 Worker -->
-        <path class="edge edge-fwd anim only-flow" d="M 445 72 L 445 104" marker-end="url(#arr-fwd)"/>
-        <path class="edge edge-ret anim only-flow" d="M 475 104 L 475 72" marker-end="url(#arr-ret)"/>
-        <text class="edge-label fwd" x="342" y="92">POST /v2/feedback</text>
-        <text class="edge-label ret" x="486" y="92">ACP live + APNs</text>
+        <!-- R0 <-> R1 edges -->
+        <path class="edge edge-fwd edge-live-flow only-flow" d="M 445 74 L 445 104" marker-end="url(#arr-fwd)"/>
+        <path class="edge edge-ret edge-live-flow only-flow" d="M 475 104 L 475 74" marker-end="url(#arr-live)"/>
+        <text class="edge-label fwd" x="342" y="93">POST /v2/feedback</text>
+        <text class="edge-label ret" x="486" y="93">ACP live + APNs</text>
 
-        <!-- EDGES: R1 Worker -> R2 Runners (Orthogonal mathematical tree split) -->
-        <!-- Left branch: Orca (untouched) -->
-        <path class="edge edge-orca lane-orca" d="M 405 170 L 405 194 L 146 194 L 146 218" marker-end="url(#arr-orca)"/>
-        <text class="edge-label lane-orca" x="160" y="190">existing /runner/poll (untouched)</text>
+        <!-- R0 Menu Bar About (unbuilt) -> Worker /about -->
+        <path class="edge edge-unbuilt" d="M 736 74 L 736 138 L 634 138" marker-end="url(#arr-unbuilt)"/>
+        <text class="edge-label unbuilt" x="646" y="132">About link (unbuilt)</text>
 
-        <!-- Right branch: Go Rex Runner -->
-        <path class="edge edge-fwd anim" d="M 515 170 L 515 194 L 580 194 L 580 218" marker-end="url(#arr-fwd)"/>
-        <path class="edge edge-ret anim only-flow" d="M 610 218 L 610 188 L 535 188 L 535 170" marker-end="url(#arr-ret)"/>
-        <text class="edge-label fwd" x="592" y="210">wait + claim</text>
-        <text class="edge-label ret" x="620" y="191">POST /runner/agent</text>
+        <!-- R1 -> R2 Orca (LIVE untouched) -->
+        <path class="edge edge-orca edge-live-flow" d="M 405 172 L 405 196 L 146 196 L 146 218" marker-end="url(#arr-live)"/>
+        <text class="edge-label ret" x="158" y="191">LIVE /runner/poll (untouched)</text>
 
-        <!-- Orca lane continuation R2 -> R3/R4 -->
-        <path class="edge edge-orca lane-orca" d="M 146 290 L 146 356" marker-end="url(#arr-orca)"/>
-        <text class="edge-label lane-orca" x="52" y="330">orca worktree create</text>
+        <!-- R1 -> R2 Go Rex Runner: claim edge (unbuilt/opt-in off) + live status push -->
+        <path id="edgeWorkerRexClaim" class="edge edge-unbuilt" d="M 515 172 L 515 196 L 568 196 L 568 218" marker-end="url(#arr-unbuilt)"/>
+        <path id="edgeRexPushStatus" class="edge edge-ret edge-live-flow" d="M 612 218 L 612 190 L 538 190 L 538 172" marker-end="url(#arr-live)"/>
+        <text id="lblWorkerRexClaim" class="edge-label unbuilt" x="454" y="212">claim (opt-in off)</text>
+        <text class="edge-label ret" x="622" y="193">POST /runner/rex-status</text>
 
-        <!-- EDGES: R2 Go Runner -> R3 Inbox, Coordinator, Reaper -->
-        <!-- Go Runner -> Serialized Inbox -> Fable -->
-        <path class="edge edge-fwd anim" d="M 530 290 L 530 348 L 418 348 L 418 366" marker-end="url(#arr-fwd)"/>
-        <text class="edge-label fwd" x="378" y="344">enqueue chat event</text>
+        <!-- Orca lane R2 -> R3 -->
+        <path class="edge edge-orca edge-live-flow" d="M 146 292 L 146 360" marker-end="url(#arr-live)"/>
+        <text class="edge-label ret" x="50" y="332">orca worktree create</text>
 
-        <path class="edge edge-fwd anim" d="M 500 412 L 542 412" marker-end="url(#arr-fwd)"/>
-        <text class="edge-label fwd" x="503" y="404">drain</text>
+        <!-- R2 Go Runner -> R3 Inbox -> Fable -->
+        <path class="edge edge-fwd edge-live-flow" d="M 530 292 L 530 350 L 418 350 L 418 368" marker-end="url(#arr-fwd)"/>
+        <text class="edge-label fwd" x="374" y="346">enqueue inbox.jsonl</text>
+        <path class="edge edge-fwd edge-live-flow" d="M 500 414 L 542 414" marker-end="url(#arr-fwd)"/>
+        <text class="edge-label fwd" x="503" y="406">drain</text>
 
-        <!-- Go Runner -> Reaper -->
-        <path class="edge edge-rec anim" d="M 650 290 L 650 348 L 818 348 L 818 366" marker-end="url(#arr-rec)"/>
-        <text class="edge-label rec" x="688" y="344">reap timer / kill</text>
+        <!-- R2 Go Runner -> Reaper -->
+        <path class="edge edge-rec" d="M 650 292 L 650 350 L 818 350 L 818 368" marker-end="url(#arr-rec)"/>
+        <text class="edge-label rec" x="692" y="346">rex-runner reap</text>
 
-        <!-- Reboot recovery edge: Go Runner wake-up -> Fable & Builders -->
-        <path class="edge edge-rec anim only-recovery" d="M 595 290 L 595 366" marker-end="url(#arr-rec)"/>
-        <text class="edge-label rec only-recovery" x="602" y="342">boot: start.sh --resume</text>
+        <!-- Recovery edge: launchd auto-boot (unbuilt) -->
+        <path class="edge edge-unbuilt only-recovery" d="M 595 292 L 595 368" marker-end="url(#arr-unbuilt)"/>
+        <text class="edge-label unbuilt only-recovery" x="602" y="344">launchd boot (unbuilt)</text>
 
-        <!-- EDGES: R3 Fable <-> R4 Ephemeral Builder Tabs (Tree fan-out) -->
-        <!-- Forward fan-out -->
-        <path class="edge edge-fwd anim" d="M 615 456 L 615 510 L 385 510 L 385 538" marker-end="url(#arr-fwd)"/>
-        <path class="edge edge-fwd anim" d="M 615 456 L 615 538" marker-end="url(#arr-fwd)"/>
-        <path class="edge edge-fwd anim" d="M 615 456 L 615 510 L 800 510 L 800 538" marker-end="url(#arr-fwd)"/>
-        <text class="edge-label fwd" x="468" y="505">spawn tab + brief (fb-xxxx)</text>
+        <!-- R3 Fable -> R4 Builders -->
+        <path id="edgeSpawn1" class="edge edge-unbuilt" d="M 615 458 L 615 512 L 385 512 L 385 540" marker-end="url(#arr-unbuilt)"/>
+        <path id="edgeSpawn2" class="edge edge-unbuilt" d="M 615 458 L 615 540" marker-end="url(#arr-unbuilt)"/>
+        <path id="edgeSpawn3" class="edge edge-unbuilt" d="M 615 458 L 615 512 L 800 512 L 800 540" marker-end="url(#arr-unbuilt)"/>
+        <text id="lblSpawn" class="edge-label unbuilt" x="458" y="507">rex-runner spawn (0 active)</text>
 
-        <!-- Return feedback bus: Builders -> Serialized Inbox -> Fable -->
-        <path class="edge edge-ret anim only-flow" d="M 385 636 L 385 668 L 800 668 L 800 636"/>
-        <path class="edge edge-ret anim only-flow" d="M 595 636 L 595 668"/>
-        <path class="edge edge-ret anim only-flow" d="M 385 668 L 306 668 L 306 412 L 336 412" marker-end="url(#arr-ret)"/>
-        <text class="edge-label ret" x="452" y="683">rex-runner report &lt;chat&gt; (status / diff / PR / checks) → inbox → Fable validates</text>
-
-        <!-- Recovery edges: Reaper -> Builders & run.json resume -->
-        <path class="edge edge-rec anim only-recovery" d="M 852 456 L 852 538" marker-end="url(#arr-rec)"/>
-        <text class="edge-label rec only-recovery" x="772" y="486">prune clean worktrees</text>
+        <!-- R4 Builders -> Return bus -> Inbox (auto-report hook unbuilt) -->
+        <path class="edge edge-unbuilt only-flow" d="M 385 638 L 385 672 L 800 672 L 800 638"/>
+        <path class="edge edge-unbuilt only-flow" d="M 595 638 L 595 672"/>
+        <path class="edge edge-unbuilt only-flow" d="M 385 672 L 306 672 L 306 414 L 336 414" marker-end="url(#arr-unbuilt)"/>
+        <text class="edge-label unbuilt" x="424" y="688">builder auto-report hook (unbuilt · manual rex-runner report works)</text>
 
         <!-- NODES -->
         <!-- R0: Apps -->
-        <g class="node" data-id="apps" transform="translate(310, 14)">
-          <rect class="box" width="300" height="58"/>
-          <text class="n-kicker" x="12" y="18">R0 · CLIENT APPS (FEEDBACKKIT SDK)</text>
-          <text class="n-title" x="12" y="36">Agent Pager · PR Hub · Trips</text>
-          <text class="n-sub" x="12" y="50">In-app chat · screenshots · videos · menu bar</text>
+        <g class="node state-live" data-id="apps" transform="translate(300, 14)">
+          <rect class="box" width="320" height="60"/>
+          <text class="n-kicker" x="12" y="17">R0 · CLIENT APPS (SDK)</text>
+          <text class="n-title" x="12" y="35">Agent Pager · PR Hub · Trips</text>
+          <text class="n-metric" id="nodeAppsMetric" x="12" y="51">Loading live app counts…</text>
+          <rect class="chip-bg" x="268" y="6" width="42" height="15" fill="var(--live-soft)"/>
+          <text class="chip-txt" x="277" y="17" fill="var(--live)">LIVE</text>
+        </g>
+
+        <!-- R0 Right: Menu Bar About Link (UNBUILT) -->
+        <g class="node state-unbuilt" data-id="menubar_about" transform="translate(650, 14)">
+          <rect class="box" width="212" height="60"/>
+          <text class="n-kicker" x="12" y="17">R0 · MENU BAR ITEM</text>
+          <text class="n-title" x="12" y="35">About → /about Link</text>
+          <text class="n-sub" x="12" y="51">Not wired in MenuBar yet</text>
+          <rect class="chip-bg" x="148" y="6" width="54" height="15" fill="var(--surface)"/>
+          <text class="chip-txt" x="155" y="17" fill="var(--unbuilt)">UNBUILT</text>
         </g>
 
         <!-- R1: Worker -->
-        <g class="node kind-root is-selected" data-id="worker" transform="translate(290, 104)">
-          <rect class="box" width="340" height="66"/>
-          <text class="n-kicker" x="12" y="18">R1 · CLOUDFLARE WORKER (SOURCE OF TRUTH)</text>
-          <text class="n-title" x="12" y="37">featurekit Worker + D1 + R2 + Live DO</text>
-          <text class="n-sub" x="12" y="54">/v2/feedback · /runner/* · /about (this page)</text>
+        <g class="node state-live is-selected" data-id="worker" transform="translate(290, 104)">
+          <rect class="box" width="340" height="68"/>
+          <text class="n-kicker" x="12" y="17">R1 · CLOUDFLARE WORKER</text>
+          <text class="n-title" x="12" y="36">featurekit Worker + D1 + R2</text>
+          <text class="n-metric" id="nodeWorkerMetric" x="12" y="55">Loading D1 telemetry…</text>
+          <rect class="chip-bg" x="288" y="6" width="42" height="15" fill="var(--live-soft)"/>
+          <text class="chip-txt" x="297" y="17" fill="var(--live)">LIVE</text>
         </g>
 
-        <!-- R2 Left: Orca Runner (Untouched) -->
-        <g class="node kind-orca lane-orca" data-id="orca-runner" transform="translate(32, 218)">
-          <rect class="box" width="228" height="72"/>
-          <text class="n-kicker" x="12" y="18">R2 · LEGACY LANE (UNTOUCHED)</text>
-          <text class="n-title" x="12" y="37">Orca Runner (Python)</text>
-          <text class="n-sub" x="12" y="53">runner.py · launchd · live today</text>
-          <rect class="chip-bg" x="148" y="6" width="70" height="16" fill="var(--muted-soft)"/>
-          <text class="chip-txt" x="155" y="17" fill="var(--muted)">UNTOUCHED</text>
+        <!-- R2 Left: Orca Runner -->
+        <g class="node state-standby" id="nodeOrcaRunner" data-id="orca_runner" transform="translate(32, 218)">
+          <rect class="box" width="228" height="74"/>
+          <text class="n-kicker" x="12" y="17">R2 · ORCA LANE (UNTOUCHED)</text>
+          <text class="n-title" x="12" y="36">Orca Runner (Python)</text>
+          <text class="n-metric" id="nodeOrcaMetric" x="12" y="54">Checking beat…</text>
+          <text class="n-sub" x="12" y="67">runner.py · untouched</text>
+          <rect class="chip-bg" id="chipOrcaBg" x="168" y="6" width="50" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipOrcaTxt" x="175" y="17" fill="var(--standby)">WAIT</text>
         </g>
 
-        <!-- R3/R4 Left: Orca Worktrees -->
-        <g class="node kind-orca lane-orca" data-id="orca-worktrees" transform="translate(32, 356)">
-          <rect class="box" width="228" height="96"/>
-          <text class="n-kicker" x="12" y="18">ORCA WORKSTREAM</text>
-          <text class="n-title" x="12" y="38">Per-chat Orca Worktrees</text>
-          <text class="n-sub" x="12" y="56">fb-&lt;8hex&gt; · Claude Opus 5.5</text>
-          <text class="n-sub" x="12" y="72">Orca agentSession.send queue</text>
-          <text class="n-sub" x="12" y="87">Keeps shipping while Rex iterates</text>
+        <!-- R3 Left: Orca Worktrees -->
+        <g class="node state-standby" id="nodeOrcaWorktrees" data-id="orca_worktrees" transform="translate(32, 360)">
+          <rect class="box" width="228" height="94"/>
+          <text class="n-kicker" x="12" y="17">ORCA WORKSTREAM</text>
+          <text class="n-title" x="12" y="37">Per-chat Orca Worktrees</text>
+          <text class="n-sub" x="12" y="55">fb-&lt;8hex&gt; · Claude Opus</text>
+          <text class="n-sub" x="12" y="70">agentSession.send queue</text>
+          <text class="n-sub" x="12" y="85">Protected while Rex iterates</text>
         </g>
 
         <!-- R2 Right: Go Rex Runner -->
-        <g class="node kind-coord" data-id="go-runner" transform="translate(432, 218)">
-          <rect class="box" width="316" height="72"/>
-          <text class="n-kicker" x="12" y="18">R2 · NEW REX LANE (SINGLE GO BINARY)</text>
-          <text class="n-title" x="12" y="37">rex-runner (Wake-up Loop &amp; Bridge)</text>
-          <text class="n-sub" x="12" y="54">launchd · long-poll /runner/wait · run.json</text>
-          <rect class="chip-bg" x="242" y="6" width="64" height="16" fill="var(--accent-soft)"/>
-          <text class="chip-txt" x="250" y="17" fill="var(--accent)">GO BINARY</text>
+        <g class="node state-standby" id="nodeGoRunner" data-id="go_runner" transform="translate(432, 218)">
+          <rect class="box" width="316" height="74"/>
+          <text class="n-kicker" x="12" y="17">R2 · REX LANE (GO BINARY)</text>
+          <text class="n-title" x="12" y="36">rex-runner (Wake-up &amp; Bridge)</text>
+          <text class="n-metric" id="nodeRexMetric" x="12" y="54">Checking Rex heartbeat…</text>
+          <text class="n-sub" x="12" y="67">LaunchAgent daemon: UNBUILT</text>
+          <rect class="chip-bg" id="chipRexBg" x="248" y="6" width="58" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipRexTxt" x="255" y="17" fill="var(--standby)">STANDBY</text>
         </g>
 
-        <!-- R3 Inside Rex: Serialized Inbox -->
-        <g class="node" data-id="inbox" transform="translate(336, 366)">
+        <!-- R3 Inside Rex: Inbox -->
+        <g class="node state-standby" id="nodeInbox" data-id="inbox" transform="translate(336, 368)">
           <rect class="box" width="164" height="90"/>
-          <text class="n-kicker" x="10" y="18">R3 · SERIALIZED QUEUE</text>
-          <text class="n-title" x="10" y="38">Coordinator Inbox</text>
-          <text class="n-sub" x="10" y="55">inbox.jsonl (FIFO)</text>
-          <text class="n-sub" x="10" y="70">Waits for OSC 7501</text>
-          <text class="n-sub" x="10" y="83">idle/done before send</text>
+          <text class="n-kicker" x="10" y="17">R3 · SERIALIZED FIFO</text>
+          <text class="n-title" x="10" y="36">Coordinator Inbox</text>
+          <text class="n-metric" id="nodeInboxMetric" x="10" y="54">0 pending</text>
+          <text class="n-sub" x="10" y="70">inbox.jsonl + flock</text>
+          <text class="n-sub" x="10" y="83">OSC 7501 gated drain</text>
         </g>
 
-        <!-- R3 Inside Rex: Fable 5.2 Coordinator -->
-        <g class="node kind-coord" data-id="fable" transform="translate(542, 366)">
+        <!-- R3 Inside Rex: Fable 5.2 -->
+        <g class="node state-standby" id="nodeFable" data-id="fable" transform="translate(542, 368)">
           <rect class="box" width="194" height="90"/>
-          <text class="n-kicker" x="10" y="18">R3 · TAB 1 (PINNED)</text>
-          <text class="n-title" x="10" y="38">Fable 5.2 Coordinator</text>
-          <text class="n-sub" x="10" y="55">feedback-coordinator/</text>
-          <text class="n-sub" x="10" y="70">Strict coord &amp; validator</text>
-          <text class="n-sub" x="10" y="83">Pinned UUID · rotatable</text>
+          <text class="n-kicker" x="10" y="17">R3 · TAB 1 (PINNED)</text>
+          <text class="n-title" x="10" y="36">Fable 5.2 Coordinator</text>
+          <text class="n-metric" id="nodeFableMetric" x="10" y="54">Checking Tab 1…</text>
+          <text class="n-sub" x="10" y="70">Pinned UUID · rotatable</text>
+          <text class="n-sub" x="10" y="83">Strict coord &amp; validator</text>
+          <rect class="chip-bg" id="chipFableBg" x="130" y="6" width="54" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipFableTxt" x="138" y="17" fill="var(--standby)">WAIT</text>
         </g>
 
-        <!-- R3 Inside Rex: Deterministic Reaper -->
-        <g class="node kind-reaper" data-id="reaper" transform="translate(754, 366)">
+        <!-- R3 Inside Rex: Reaper -->
+        <g class="node state-standby" id="nodeReaper" data-id="reaper" transform="translate(754, 368)">
           <rect class="box" width="136" height="90"/>
-          <text class="n-kicker" x="10" y="18">R3 · CLEANUP</text>
-          <text class="n-title" x="10" y="38">Reaper / Kill</text>
-          <text class="n-sub" x="10" y="55">rex-runner reap</text>
-          <text class="n-sub" x="10" y="70">Clean git check</text>
-          <text class="n-sub" x="10" y="83">Close tab + prune</text>
+          <text class="n-kicker" x="10" y="17">R3 · CLEANUP</text>
+          <text class="n-title" x="10" y="36">Reaper / Kill</text>
+          <text class="n-sub" x="10" y="54">rex-runner reap</text>
+          <text class="n-sub" x="10" y="69">Clean git check</text>
+          <text class="n-sub" x="10" y="83">Built · manual</text>
         </g>
 
-        <!-- R4 Inside Rex: Ephemeral Builder Leaves -->
-        <g class="node" data-id="builder-app" transform="translate(296, 538)">
+        <!-- R4 Inside Rex: 3 Builder Slots (greyed out when 0 active, light up dynamically from live runs) -->
+        <g class="node state-unbuilt" id="slot0" data-id="builder_slot_0" transform="translate(296, 540)">
           <rect class="box" width="184" height="98"/>
-          <text class="n-kicker" x="10" y="18">R4 · TAB 2 (EPHEMERAL)</text>
-          <text class="n-title" x="10" y="37">fb-1a2b · App Fix</text>
-          <text class="n-sub" x="10" y="54">Claude Opus / Codex</text>
-          <text class="n-sub" x="10" y="69">Repo: agent-pager / prhub</text>
-          <text class="n-sub" x="10" y="85">Subfolder + run.json</text>
+          <text class="n-kicker" id="slot0Kicker" x="10" y="17">R4 · SLOT 1 (EPHEMERAL)</text>
+          <text class="n-title" id="slot0Title" x="10" y="36">App Builder Tab</text>
+          <text class="n-metric" id="slot0Metric" x="10" y="54">No active Rex run</text>
+          <text class="n-sub" id="slot0Sub1" x="10" y="70">Claude / Codex subfolder</text>
+          <text class="n-sub" id="slot0Sub2" x="10" y="85">Auto-claim: UNBUILT</text>
+          <rect class="chip-bg" id="slot0ChipBg" x="122" y="6" width="52" height="15" fill="var(--surface)"/>
+          <text class="chip-txt" id="slot0ChipTxt" x="128" y="17" fill="var(--unbuilt)">UNBUILT</text>
         </g>
 
-        <g class="node" data-id="builder-kits" transform="translate(502, 538)">
+        <g class="node state-unbuilt" id="slot1" data-id="builder_slot_1" transform="translate(502, 540)">
           <rect class="box" width="190" height="98"/>
-          <text class="n-kicker" x="10" y="18">R4 · TAB 3 (EPHEMERAL)</text>
-          <text class="n-title" x="10" y="37">fb-9e8d · Shared Kit</text>
-          <text class="n-sub" x="10" y="54">Claude / Codex</text>
-          <text class="n-sub" x="10" y="69">FeedbackKit · DurableNet</text>
-          <text class="n-sub" x="10" y="85">AgentChatKit · PRKit</text>
+          <text class="n-kicker" id="slot1Kicker" x="10" y="17">R4 · SLOT 2 (EPHEMERAL)</text>
+          <text class="n-title" id="slot1Title" x="10" y="36">Shared Kit Builder</text>
+          <text class="n-metric" id="slot1Metric" x="10" y="54">No active Rex run</text>
+          <text class="n-sub" id="slot1Sub1" x="10" y="70">FeedbackKit · DurableNet</text>
+          <text class="n-sub" id="slot1Sub2" x="10" y="85">AgentChatKit · PRKit</text>
+          <rect class="chip-bg" id="slot1ChipBg" x="128" y="6" width="52" height="15" fill="var(--surface)"/>
+          <text class="chip-txt" id="slot1ChipTxt" x="134" y="17" fill="var(--unbuilt)">UNBUILT</text>
         </g>
 
-        <g class="node" data-id="builder-agy" transform="translate(712, 538)">
+        <g class="node state-unbuilt" id="slot2" data-id="builder_slot_2" transform="translate(712, 540)">
           <rect class="box" width="178" height="98"/>
-          <text class="n-kicker" x="10" y="18">R4 · TAB 4 (EPHEMERAL)</text>
-          <text class="n-title" x="10" y="37">fb-4f5a · Antigravity</text>
-          <text class="n-sub" x="10" y="54">agy + rex-antigravity-hooks</text>
-          <text class="n-sub" x="10" y="69">OSC 7501 status native</text>
-          <text class="n-sub" x="10" y="85">Own transcript + run.json</text>
+          <text class="n-kicker" id="slot2Kicker" x="10" y="17">R4 · SLOT 3 (EPHEMERAL)</text>
+          <text class="n-title" id="slot2Title" x="10" y="36">Antigravity Builder</text>
+          <text class="n-metric" id="slot2Metric" x="10" y="54">Hooks installed · 0 runs</text>
+          <text class="n-sub" id="slot2Sub1" x="10" y="70">rex-antigravity-hooks</text>
+          <text class="n-sub" id="slot2Sub2" x="10" y="85">OSC 7501 ready</text>
+          <rect class="chip-bg" id="slot2ChipBg" x="116" y="6" width="52" height="15" fill="var(--surface)"/>
+          <text class="chip-txt" id="slot2ChipTxt" x="122" y="17" fill="var(--unbuilt)">UNBUILT</text>
         </g>
       </svg>
     </div>
 
     <aside class="inspector" aria-live="polite">
-      <p class="ins-kicker" id="insKicker">R1 · CLOUDFLARE WORKER</p>
+      <div class="ins-head">
+        <p class="ins-kicker" id="insKicker">R1 · CLOUDFLARE WORKER</p>
+        <span class="pill live" id="insBadge">LIVE</span>
+      </div>
       <h2 class="ins-title" id="insTitle">featurekit Worker</h2>
       <p class="ins-summary" id="insSummary"></p>
       <div class="kv">
-        <div class="kv-label">Runtime &amp; Location</div>
-        <div class="kv-val" id="insRuntime"></div>
+        <div class="kv-label">Live Telemetry</div>
+        <div class="kv-val" id="insLive">Syncing…</div>
       </div>
       <div class="kv">
-        <div class="kv-label">State &amp; Interfaces</div>
-        <div class="kv-val" id="insState"></div>
+        <div class="kv-label">Build Checklist (Built vs Unbuilt)</div>
+        <ul class="checklist" id="insChecklist"></ul>
       </div>
       <div class="kv">
         <div class="kv-label">Failure &amp; Reboot Recovery</div>
         <div class="kv-val" id="insRecovery"></div>
       </div>
-      <div class="live-preview-box">
-        <strong>Planned Live Telemetry</strong>
-        <span id="insLive"></span>
-      </div>
     </aside>
   </div>
-
-  <section class="strip">
-    <div class="card">
-      <h2>Nondestructive Split</h2>
-      <p>The existing Python Orca runner (<code>runner/</code>) stays untouched and keeps handling live feedback while the new Go binary (<code>rex-runner</code>) iterates in parallel.</p>
-    </div>
-    <div class="card">
-      <h2>Per-Run Isolation &amp; Resume</h2>
-      <p>Every builder runs in its own folder with <code>run.json</code> recording <code>{chat_id, repo, agent, session_id, rex_tab}</code> so a reboot resumes Claude, Codex, or Antigravity cleanly.</p>
-    </div>
-    <div class="card">
-      <h2>Zero TTY Collisions</h2>
-      <p>Builders never raw-type into Fable. Events append to <code>inbox.jsonl</code> and drain into Fable only when Rex OSC 7501 reports <code>idle</code> or <code>done</code>.</p>
-    </div>
-  </section>
 </div>
 
 <script>
-const NODES = {
-  apps: {
-    kicker: "R0 · CLIENT APPS",
-    title: "Agent Pager · PR Hub · Trips",
-    summary: "iOS and macOS apps embedding FeedbackKit. Owners trigger coding agents that land changes; builders open PRs; everyone else opens a GitHub issue.",
-    runtime: "SwiftUI apps + macOS Menu Bar app (which will link here via About).",
-    state: "<code>POST /v2/feedback</code>, screenshot/video uploads to R2, live updates over <code>/v2/acp</code> and APNs.",
-    recovery: "DurableNetworking queues unsent messages offline and retries idempotently via <code>client_ref</code>.",
-    live: "Connected apps, unread feedback chats, and Menu Bar builder toggle status."
-  },
-  worker: {
-    kicker: "R1 · CLOUDFLARE WORKER",
-    title: "featurekit Worker",
-    summary: "Single source of truth for all feedback chats, media attachments, delivery journals, and wake-up signals across every app.",
-    runtime: "Cloudflare Worker + D1 (SQLite) + R2 (media) + Durable Objects (<code>RunnerWake</code>, <code>FeedbackLiveRoom</code>).",
-    state: "<code>/v2/feedback</code>, <code>/runner/wait</code>, <code>/runner/poll</code>, <code>/runner/claim</code>, <code>/runner/agent</code>, and <code>GET /about</code>.",
-    recovery: "Stateless edge compute backed by D1. Unclaimed messages remain pending until a runner claims and reports terminal outcome.",
-    live: "Pending work queue depth, active long-poll waiters, and live node status payload feeding this page."
-  },
-  "orca-runner": {
-    kicker: "R2 · LEGACY LANE (UNTOUCHED)",
-    title: "Orca Runner (Python)",
-    summary: "Existing production runner kept completely untouched while the new Go Rex runner is built and validated.",
-    runtime: "Python LaunchAgent (<code>feedbackkit_runner.service</code>) driving paired Orca runtimes.",
-    state: "<code>state.json</code>, <code>builders.json</code>, <code>status.json</code>.",
-    recovery: "launchd restarts automatically; claimed messages are journaled before delivery.",
-    live: "Live health dot, last tick timestamp, and active Orca chat count."
-  },
-  "orca-worktrees": {
-    kicker: "ORCA WORKSTREAM",
-    title: "Per-Chat Orca Worktrees",
-    summary: "Existing per-chat worktrees (<code>fb-&lt;8hex&gt;</code>) running Claude Opus inside Orca. Continues serving live app feedback with zero disruption.",
-    runtime: "Orca-managed git worktrees + Orca <code>agentSession.send</code> queue.",
-    state: "Each chat pinned to its initial builder host; 24h idle tidy via <code>orca worktree rm</code>.",
-    recovery: "Messages wait while a builder is offline and replay once Orca answers.",
-    live: "Count of active Orca chats and last shipped commit status."
-  },
-  "go-runner": {
-    kicker: "R2 · NEW REX LANE",
-    title: "rex-runner (Go Binary)",
-    summary: "New nondestructive Go binary implementing the wake-up loop, Worker polling, Rex session/tab orchestration, serialized inbox drain, and deterministic reaper.",
-    runtime: "Compiled Go binary managed by launchd (separate from Python <code>runner/</code>).",
-    state: "Holds <code>/runner/wait</code> long-poll, manages <code>run.json</code> manifests per feedback folder, calls <code>rex</code> CLI.",
-    recovery: "On machine boot: ensures Rex session <code>feedback-loop</code> exists, resumes Tab 1 Fable via <code>start.sh</code>, and resumes any unfinished <code>fb-xxxx</code> tabs from their <code>run.json</code>.",
-    live: "Binary version, uptime, wake-up loop latency, and active tab map."
-  },
-  inbox: {
-    kicker: "R3 · SERIALIZED QUEUE",
-    title: "Coordinator Inbox (FIFO)",
-    summary: "Prevents concurrent builders or incoming chats from colliding inside Fable's terminal.",
-    runtime: "Append-only local queue (<code>inbox.jsonl</code>) drained by <code>rex-runner</code>.",
-    state: "Stores typed events: <code>new_chat</code>, <code>user_reply</code>, <code>builder_update</code>, <code>builder_blocked</code>, <code>reap_notice</code>.",
-    recovery: "Persisted on disk with ack offsets; unacknowledged events survive crashes and drain once Fable returns to OSC 7501 <code>idle</code>/<code>done</code>.",
-    live: "Queued event count, oldest waiting message age, and Fable's current OSC 7501 state."
-  },
-  fable: {
-    kicker: "R3 · TAB 1 (PINNED)",
-    title: "Fable 5.2 Coordinator",
-    summary: "Strictly coordinates and validates across all apps and shared kit repos. Never edits app code directly; delegates fixes to ephemeral builder tabs and checks CI/tests before shipping.",
-    runtime: "Claude Code (<code>claude-fable-5-2</code>) in dedicated <code>~/Developer/feedback-coordinator/</code>, Tab 1 of Rex session <code>feedback-loop</code>.",
-    state: "Pinned UUID in <code>.session-id</code>; transcript directory symlinked across account profiles for clean rotation without losing context.",
-    recovery: "<code>start.sh</code> detects existing transcript and runs <code>--resume &lt;uuid&gt;</code> automatically after any reboot or account switch.",
-    live: "OSC 7501 status (<code>idle</code>/<code>working</code>/<code>blocked</code>), active account profile, and linked Rex block ID."
-  },
-  reaper: {
-    kicker: "R3 · CLEANUP",
-    title: "Deterministic Reaper / Kill",
-    summary: "Closes finished Rex tabs and removes idle worktrees without relying on Fable's context window.",
-    runtime: "Go subcommand (<code>rex-runner reap</code>) on a periodic ticker or triggered on demand by Fable.",
-    state: "Reads each run's <code>run.json</code>, verifies clean <code>git status</code>, verifies zero unpushed commits, and checks idle TTL.",
-    recovery: "Dirty or unpushed worktrees are never deleted — marked <code>kept</code> and surfaced back to Fable.",
-    live: "Last sweep time, tabs reaped today, and worktrees held for uncommitted work."
-  },
-  "builder-app": {
-    kicker: "R4 · EPHEMERAL BUILDER TAB",
-    title: "fb-1a2b · App Fix",
-    summary: "Isolated builder thread fixing app-level feedback (Agent Pager, PR Hub, or Trips) in its own worktree.",
-    runtime: "Claude Opus or Codex in a dedicated Rex tab inside <code>feedback-loop</code>.",
-    state: "Own subfolder + <code>run.json</code> (<code>{chat_id, repo, branch, agent, session_id, rex_block}</code>).",
-    recovery: "If the machine restarts mid-build, <code>rex-runner</code> respawns the tab in the same folder with <code>--resume &lt;session_id&gt;</code>.",
-    live: "Live branch name, OSC 7501 activity, and link to jump straight to the Rex tab."
-  },
-  "builder-kits": {
-    kicker: "R4 · EPHEMERAL BUILDER TAB",
-    title: "fb-9e8d · Shared Kit Fix",
-    summary: "Builder thread routed by Fable when app feedback actually belongs in a shared Swift package (FeedbackKit, DurableNetworking, AgentChatKit, or PRKit).",
-    runtime: "Claude Opus or Codex in a dedicated Rex tab; Fable sequences kit release → downstream app adoption.",
-    state: "Own kit worktree + <code>run.json</code> linked back to parent <code>chat_id</code>.",
-    recovery: "Resumes from kit worktree + pinned agent session ID; Fable tracks downstream adoption state.",
-    live: "Target kit repo, CI status, and downstream adoption link."
-  },
-  "builder-agy": {
-    kicker: "R4 · EPHEMERAL BUILDER TAB",
-    title: "fb-4f5a · Antigravity Builder",
-    summary: "Builder thread running Google Antigravity with <code>rex-antigravity-hooks</code> installed for Rex session awareness and native OSC 7501 status.",
-    runtime: "<code>agy</code> CLI in a dedicated Rex tab with <code>rex-antigravity-hooks</code> plugin active.",
-    state: "Own subfolder + Antigravity conversation ID saved in <code>run.json</code>.",
-    recovery: "Resumes conversation in its subfolder on reboot; OSC 7501 reports <code>blocked</code> whenever user input is needed.",
-    live: "Antigravity conversation ID, OSC 7501 state, and active tool summary."
+let LATEST = null;
+let SELECTED = "worker";
+
+function fmtAge(sec) {
+  if (sec === null || sec === undefined) return "never";
+  if (sec < 60) return sec + "s ago";
+  if (sec < 3600) return Math.floor(sec / 60) + "m ago";
+  return Math.floor(sec / 3600) + "h ago";
+}
+
+function setNodeState(el, state) {
+  if (!el) return;
+  el.classList.remove("state-live", "state-standby", "state-offline", "state-unbuilt");
+  el.classList.add("state-" + state);
+}
+
+function setPill(el, state, label) {
+  if (!el) return;
+  el.className = "pill " + state;
+  el.textContent = label || state.toUpperCase();
+}
+
+function setChip(bgEl, txtEl, state, label) {
+  if (!bgEl || !txtEl) return;
+  const styles = {
+    live: ["var(--live-soft)", "var(--live)"],
+    standby: ["var(--standby-soft)", "var(--standby)"],
+    offline: ["var(--offline-soft)", "var(--offline)"],
+    unbuilt: ["var(--surface)", "var(--unbuilt)"]
+  };
+  const [bg, fg] = styles[state] || styles.standby;
+  bgEl.setAttribute("fill", bg);
+  txtEl.setAttribute("fill", fg);
+  txtEl.textContent = label;
+}
+
+function metaFor(id, data) {
+  const w = data ? data.worker : null;
+  const o = data ? data.orca : null;
+  const r = data ? data.rex : null;
+  const c = data ? data.components : {};
+  const runs = r ? r.runs : [];
+
+  const catalog = {
+    apps: {
+      kicker: "R0 · CLIENT APPS",
+      title: "Agent Pager · PR Hub · Trips",
+      state: c.apps || "live",
+      summary: "Apps embedding FeedbackKit SDK. Owners trigger coding fixes; builders open PRs; everyone else files a GitHub issue.",
+      live: w ? w.apps.map((a) => a.app + ": " + a.chats + " chat(s)").join(" · ") : "Loading…",
+      checklist: [
+        [true, "FeedbackKit SDK integrated in apps"],
+        [true, "Live ACP updates + APNs push"],
+        [false, "Route selected apps into Rex lane via --claim-apps"]
+      ],
+      recovery: "DurableNetworking buffers messages offline and replays idempotently via client_ref."
+    },
+    menubar_about: {
+      kicker: "R0 · MENU BAR ITEM",
+      title: "Menu Bar About → /about Link",
+      state: c.menubar_about || "unbuilt",
+      summary: "Menu bar entry that opens this live dashboard directly from macOS.",
+      live: "Unbuilt — open this URL directly in browser for now.",
+      checklist: [
+        [true, "Live /about dashboard deployed on Worker"],
+        [false, "Add About menu item in runner/MenuBar Swift app"],
+        [false, "Release updated Menu Bar build"]
+      ],
+      recovery: "Stateless URL launcher; falls back to browser bookmark."
+    },
+    worker: {
+      kicker: "R1 · CLOUDFLARE WORKER",
+      title: "featurekit Worker + D1 + R2",
+      state: c.worker || "live",
+      summary: "Cloudflare Worker holding every app's chats, media, wake-up Durable Object, and this live dashboard API.",
+      live: w ? (w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " delivering · " + w.failed_messages + " failed") : "Loading…",
+      checklist: [
+        [true, "D1 chats + messages + runner_beat live"],
+        [true, "GET /about + GET /about/status.json live"],
+        [true, "POST /runner/rex-status heartbeat ingest live"]
+      ],
+      recovery: "Stateless edge Worker over D1 & R2. Unclaimed messages wait safely until claimed."
+    },
+    orca_runner: {
+      kicker: "R2 · ORCA LANE (UNTOUCHED)",
+      title: "Orca Runner (Python)",
+      state: c.orca_runner || "standby",
+      summary: "Existing production Python runner kept 100% untouched while the Go Rex runner iterates in parallel.",
+      live: o ? (o.online ? "ONLINE · last poll " + fmtAge(o.age_seconds) : "OFFLINE · last poll " + fmtAge(o.age_seconds)) : "Loading…",
+      checklist: [
+        [true, "Production LaunchAgent running"],
+        [true, "Protected from rex-runner (--claim-apps empty by default)"]
+      ],
+      recovery: "launchd restarts automatically; claimed messages are journaled before delivery."
+    },
+    orca_worktrees: {
+      kicker: "ORCA WORKSTREAM",
+      title: "Per-Chat Orca Worktrees",
+      state: c.orca_worktrees || "standby",
+      summary: "Existing per-chat Orca worktrees continuing to serve live app feedback with zero disruption.",
+      live: o && o.online ? "Active production workstream" : "Waiting on Orca runner heartbeat",
+      checklist: [
+        [true, "Per-chat worktree creation & 24h tidy live"],
+        [true, "Untouched by Rex iteration"]
+      ],
+      recovery: "Messages queue while a builder host is offline and replay once Orca answers."
+    },
+    go_runner: {
+      kicker: "R2 · REX LANE (GO BINARY)",
+      title: "rex-runner (Go Binary)",
+      state: c.go_runner || "standby",
+      summary: "Nondestructive single Go binary for Rex session boot, serialized inbox drain, deterministic reap, and opt-in Worker claiming.",
+      live: r && r.reported_at_ms
+        ? ("Heartbeat " + fmtAge(r.age_seconds) + " · session " + r.session_name + " · claim_apps: " + (r.claim_apps.length ? r.claim_apps.join(", ") : "none (observe only)"))
+        : "Binary installed; run rex-runner push-status or serve to report live.",
+      checklist: [
+        [true, "Go binary built & installed (boot, spawn, report, drain, reap, serve, push-status)"],
+        [true, "Worker /runner/rex-status telemetry push"],
+        [false, "macOS LaunchAgent keeping rex-runner serve alive across reboots"],
+        [false, "Opt-in --claim-apps enabled for first test app"]
+      ],
+      recovery: "On boot, rex-runner boot ensures feedback-loop + Fable Tab 1 and resumes unfinished run.json builder folders."
+    },
+    inbox: {
+      kicker: "R3 · SERIALIZED QUEUE",
+      title: "Coordinator Inbox (FIFO)",
+      state: c.inbox || "standby",
+      summary: "File-locked append-only inbox.jsonl drained into Fable only when Rex OSC 7501 reports idle/done.",
+      live: r ? (r.inbox_pending + " pending event(s) queued for Fable") : "Loading…",
+      checklist: [
+        [true, "Flocked inbox.jsonl + atomic cursor ack built in Go"],
+        [true, "OSC 7501 stream watcher in rex-runner serve"],
+        [false, "Continuous serve daemon running via LaunchAgent"]
+      ],
+      recovery: "Unacknowledged events stay on disk across crashes and drain cleanly once Fable returns to idle."
+    },
+    fable: {
+      kicker: "R3 · TAB 1 (PINNED)",
+      title: "Fable 5.2 Coordinator",
+      state: c.fable || "standby",
+      summary: "Strictly coordinates and validates across apps and shared kit repos from its own isolated folder.",
+      live: r ? ((r.coordinator_active ? "Tab 1 ACTIVE" : "Tab 1 NOT REPORTED") + " · state: " + r.coordinator_state) : "Loading…",
+      checklist: [
+        [true, "Dedicated feedback-coordinator/ folder with pinned UUID start.sh"],
+        [true, "Transcript folder symlinked across account profiles for rotation"],
+        [true, "Running Fable 5.2 in Rex session feedback-loop Tab 1"],
+        [false, "End-to-end Worker → Inbox → Fable → Builder test run"]
+      ],
+      recovery: "start.sh automatically runs --resume <pinned-uuid> after any restart or account rotation."
+    },
+    reaper: {
+      kicker: "R3 · CLEANUP",
+      title: "Deterministic Reaper",
+      state: c.reaper || "standby",
+      summary: "Verifies clean git status, zero unpushed commits, and idle TTL before closing finished Rex tabs.",
+      live: r ? (r.runs.filter((x) => x.status === "reaped").length + " reaped · " + r.runs.filter((x) => x.status === "kept").length + " kept") : "Standby",
+      checklist: [
+        [true, "rex-runner reap subcommand + git safety tests built"],
+        [false, "Periodic reap running continuously inside LaunchAgent serve"]
+      ],
+      recovery: "Never deletes dirty or unpushed folders — marks kept and notifies Fable."
+    }
+  };
+
+  for (let i = 0; i < 3; i++) {
+    const run = runs[i];
+    const slotKey = "builder_slot_" + i;
+    if (run) {
+      catalog[slotKey] = {
+        kicker: "R4 · LIVE BUILDER TAB " + (i + 2),
+        title: run.chat_id + " (" + run.app + ")",
+        state: run.status === "active" || run.status === "blocked" ? "live" : "standby",
+        summary: "Isolated builder subfolder tracked by run.json inside Rex session feedback-loop.",
+        live: "agent=" + run.agent + " · status=" + run.status + " · updated " + fmtAge(data ? Math.max(0, Math.floor((data.now_ms - run.updated_at_ms) / 1000)) : null),
+        checklist: [
+          [true, "Isolated folder + run.json manifest"],
+          [true, "Dedicated Rex tab in feedback-loop"],
+          [false, "Automatic builder-to-Fable stop hook calling rex-runner report"]
+        ],
+        recovery: "rex-runner boot reads run.json and resumes " + run.agent + " with its saved session ID."
+      };
+    } else {
+      const titles = ["App Builder Slot", "Shared Kit Builder Slot", "Antigravity Builder Slot"];
+      catalog[slotKey] = {
+        kicker: "R4 · EPHEMERAL BUILDER SLOT " + (i + 1),
+        title: titles[i],
+        state: "unbuilt",
+        summary: "No active Rex builder tab in this slot yet. Lights up automatically once rex-runner spawns a fb-xxxx run.",
+        live: "0 active runs in this slot",
+        checklist: [
+          [true, "rex-runner spawn + run.json manifest format built"],
+          [true, "rex-antigravity-hooks plugin published & installed"],
+          [false, "First live feedback chat routed through Rex builder tab"],
+          [false, "Automatic builder Stop hook calling rex-runner report"]
+        ],
+        recovery: "Each spawned run gets its own folder + run.json so reboots resume exact agent history."
+      };
+    }
   }
-};
+  return catalog[id] || catalog.worker;
+}
 
-const svg = document.getElementById("tree");
-const nodes = document.querySelectorAll(".node");
-const modeBtns = document.querySelectorAll(".mode-btn");
-
-function selectNode(id) {
-  const info = NODES[id];
-  if (!info) return;
-  nodes.forEach((n) => n.classList.toggle("is-selected", n.dataset.id === id));
+function renderInspector() {
+  const info = metaFor(SELECTED, LATEST);
   document.getElementById("insKicker").textContent = info.kicker;
   document.getElementById("insTitle").textContent = info.title;
   document.getElementById("insSummary").textContent = info.summary;
-  document.getElementById("insRuntime").innerHTML = info.runtime;
-  document.getElementById("insState").innerHTML = info.state;
-  document.getElementById("insRecovery").innerHTML = info.recovery;
-  document.getElementById("insLive").innerHTML = info.live;
+  document.getElementById("insLive").textContent = info.live;
+  document.getElementById("insRecovery").textContent = info.recovery;
+  setPill(document.getElementById("insBadge"), info.state, info.state.toUpperCase());
+
+  const ul = document.getElementById("insChecklist");
+  ul.innerHTML = "";
+  for (const [done, label] of info.checklist) {
+    const li = document.createElement("li");
+    li.className = done ? "done" : "todo";
+    li.innerHTML = '<span class="mark">' + (done ? "✓" : "○") + "</span><span>" + label + "</span>";
+    ul.appendChild(li);
+  }
 }
 
-nodes.forEach((n) => n.addEventListener("click", () => selectNode(n.dataset.id)));
+function applyStatus(data) {
+  LATEST = data;
+  const w = data.worker;
+  const o = data.orca;
+  const r = data.rex;
+  const c = data.components;
 
-modeBtns.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const mode = btn.dataset.mode;
-    svg.classList.remove("mode-flow", "mode-recovery", "mode-lanes");
-    svg.classList.add("mode-" + mode);
-    modeBtns.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  // Top KPI Strip
+  document.getElementById("kpiChats").textContent = w.total_chats + " chats";
+  document.getElementById("kpiQueue").textContent =
+    w.pending_messages + " pending · " + w.delivering_messages + " delivering · " + w.failed_messages + " failed";
+
+  setPill(document.getElementById("kpiOrcaPill"), c.orca_runner, o.online ? "LIVE" : "OFFLINE");
+  document.getElementById("kpiOrcaVal").textContent = o.online ? "Online" : "Offline";
+  document.getElementById("kpiOrcaSub").textContent = "last poll " + fmtAge(o.age_seconds);
+
+  setPill(document.getElementById("kpiRexPill"), c.go_runner, r.connected ? "LIVE" : "STANDBY");
+  document.getElementById("kpiRexVal").textContent = r.connected ? "Connected" : (r.reported_at_ms ? "Standby" : "No beat");
+  document.getElementById("kpiRexSub").textContent =
+    (r.reported_at_ms ? "beat " + fmtAge(r.age_seconds) : "awaiting push") + " · claim: " + (r.claim_apps.length ? r.claim_apps.join(",") : "off");
+
+  setPill(document.getElementById("kpiFablePill"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "STANDBY") : "OFFLINE");
+  document.getElementById("kpiFableVal").textContent = r.coordinator_active ? r.coordinator_state : "offline";
+  document.getElementById("kpiFableSub").textContent = "inbox: " + r.inbox_pending + " pending";
+
+  // Build Progress
+  const keys = Object.keys(c);
+  const builtCount = keys.filter((k) => c[k] === "live" || c[k] === "standby").length;
+  const liveCount = keys.filter((k) => c[k] === "live").length;
+  const pct = Math.round((builtCount / keys.length) * 100);
+  document.getElementById("kpiBuildPct").textContent = pct + "%";
+  document.getElementById("kpiBuildVal").textContent = liveCount + " live · " + (builtCount - liveCount) + " standby · " + (keys.length - builtCount) + " unbuilt";
+  document.getElementById("kpiBuildBar").style.width = pct + "%";
+
+  // Node labels & live states
+  document.getElementById("nodeAppsMetric").textContent =
+    w.apps.map((a) => a.app + " (" + a.chats + ")").join(" · ") || "No apps configured";
+  document.getElementById("nodeWorkerMetric").textContent =
+    w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " active";
+
+  setNodeState(document.getElementById("nodeOrcaRunner"), c.orca_runner);
+  setNodeState(document.getElementById("nodeOrcaWorktrees"), c.orca_worktrees);
+  document.getElementById("nodeOrcaMetric").textContent = o.online ? ("Online · beat " + fmtAge(o.age_seconds)) : ("Offline · " + fmtAge(o.age_seconds));
+  setChip(document.getElementById("chipOrcaBg"), document.getElementById("chipOrcaTxt"), c.orca_runner, o.online ? "LIVE" : "OFFLINE");
+
+  setNodeState(document.getElementById("nodeGoRunner"), c.go_runner);
+  document.getElementById("nodeRexMetric").textContent = r.reported_at_ms
+    ? ("Beat " + fmtAge(r.age_seconds) + " · " + r.runs.length + " run(s)")
+    : "Built · awaiting heartbeat";
+  setChip(document.getElementById("chipRexBg"), document.getElementById("chipRexTxt"), c.go_runner, r.connected ? "LIVE" : "STANDBY");
+
+  setNodeState(document.getElementById("nodeInbox"), c.inbox);
+  document.getElementById("nodeInboxMetric").textContent = r.inbox_pending + " pending event(s)";
+
+  setNodeState(document.getElementById("nodeFable"), c.fable);
+  document.getElementById("nodeFableMetric").textContent = r.coordinator_active
+    ? ("Tab 1 ACTIVE · " + r.coordinator_state)
+    : "Tab 1 not detected";
+  setChip(document.getElementById("chipFableBg"), document.getElementById("chipFableTxt"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "STANDBY") : "OFF");
+
+  document.getElementById("rexBoundaryTag").textContent =
+    "REX SESSION: " + r.session_name + (r.session_active ? " (ACTIVE)" : " (OFFLINE)") + " · OSC 7501 STATUS";
+
+  // Claim edge state
+  const claimEdge = document.getElementById("edgeWorkerRexClaim");
+  const claimLbl = document.getElementById("lblWorkerRexClaim");
+  if (r.claim_apps.length > 0) {
+    claimEdge.setAttribute("class", "edge edge-fwd edge-live-flow");
+    claimEdge.setAttribute("marker-end", "url(#arr-fwd)");
+    claimLbl.setAttribute("class", "edge-label fwd");
+    claimLbl.textContent = "claim: " + r.claim_apps.join(",");
+  } else {
+    claimEdge.setAttribute("class", "edge edge-unbuilt");
+    claimEdge.setAttribute("marker-end", "url(#arr-unbuilt)");
+    claimLbl.setAttribute("class", "edge-label unbuilt");
+    claimLbl.textContent = "claim (opt-in off)";
+  }
+
+  // Dynamic R4 builder slots
+  const activeCount = r.runs.filter((x) => x.status === "active" || x.status === "blocked").length;
+  const spawnLbl = document.getElementById("lblSpawn");
+  spawnLbl.textContent = activeCount > 0 ? ("rex-runner spawn (" + activeCount + " active)") : "rex-runner spawn (0 active)";
+  spawnLbl.setAttribute("class", activeCount > 0 ? "edge-label fwd" : "edge-label unbuilt");
+
+  for (let i = 0; i < 3; i++) {
+    const slot = document.getElementById("slot" + i);
+    const edge = document.getElementById("edgeSpawn" + (i + 1));
+    const run = r.runs[i];
+    if (run) {
+      const st = run.status === "active" || run.status === "blocked" ? "live" : "standby";
+      setNodeState(slot, st);
+      edge.setAttribute("class", st === "live" ? "edge edge-fwd edge-live-flow" : "edge edge-rec");
+      edge.setAttribute("marker-end", st === "live" ? "url(#arr-fwd)" : "url(#arr-rec)");
+      document.getElementById("slot" + i + "Kicker").textContent = "R4 · TAB " + (i + 2) + " (" + run.app + ")";
+      document.getElementById("slot" + i + "Title").textContent = run.chat_id;
+      document.getElementById("slot" + i + "Metric").textContent = run.agent + " · " + run.status;
+      document.getElementById("slot" + i + "Sub1").textContent = "updated " + fmtAge(Math.max(0, Math.floor((data.now_ms - run.updated_at_ms) / 1000)));
+      document.getElementById("slot" + i + "Sub2").textContent = "run.json tracked";
+      setChip(document.getElementById("slot" + i + "ChipBg"), document.getElementById("slot" + i + "ChipTxt"), st, run.status.toUpperCase());
+    } else {
+      setNodeState(slot, "unbuilt");
+      edge.setAttribute("class", "edge edge-unbuilt");
+      edge.setAttribute("marker-end", "url(#arr-unbuilt)");
+      setChip(document.getElementById("slot" + i + "ChipBg"), document.getElementById("slot" + i + "ChipTxt"), "unbuilt", "UNBUILT");
+    }
+  }
+
+  document.getElementById("lastUpdated").textContent = "Updated " + new Date(data.now_ms).toLocaleTimeString();
+  renderInspector();
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch("/about/status.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    applyStatus(data);
+  } catch (err) {
+    document.getElementById("lastUpdated").textContent = "Sync error: " + err.message;
+  }
+}
+
+document.querySelectorAll(".node").forEach((n) => {
+  n.addEventListener("click", () => {
+    SELECTED = n.dataset.id;
+    document.querySelectorAll(".node").forEach((x) => x.classList.toggle("is-selected", x.dataset.id === SELECTED));
+    renderInspector();
   });
 });
 
+document.querySelectorAll(".mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const svg = document.getElementById("tree");
+    svg.classList.remove("mode-flow", "mode-recovery", "mode-lanes");
+    svg.classList.add("mode-" + btn.dataset.mode);
+    document.querySelectorAll(".mode-btn").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  });
+});
+
+document.getElementById("refreshBtn").addEventListener("click", pollStatus);
 document.getElementById("themeBtn").addEventListener("click", () => {
   const root = document.documentElement;
   const current = root.getAttribute("data-theme");
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const next = current ? (current === "dark" ? "light" : "dark") : (prefersDark ? "light" : "dark");
-  root.setAttribute("data-theme", next);
+  root.setAttribute("data-theme", current ? (current === "dark" ? "light" : "dark") : (prefersDark ? "light" : "dark"));
 });
 
-selectNode("worker");
+renderInspector();
+pollStatus();
+setInterval(pollStatus, 10000);
 </script>
 </body>
 </html>

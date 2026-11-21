@@ -11,6 +11,7 @@ const (
 	DefaultSessionName   = "feedback-loop"
 	DefaultCoordWindow   = "fable-coordinator"
 	DefaultCoordLauncher = "cly"
+	DefaultWorkerURL     = "https://featurekit.jai-f89.workers.dev"
 )
 
 // Config holds runtime paths and options for rex-runner.
@@ -57,7 +58,26 @@ func (c *Config) LoadCredentials() error {
 	if c.WorkerURL != "" && c.RunnerToken != "" {
 		return nil
 	}
-	f, err := os.Open(c.CredsPath)
+	candidates := []string{c.CredsPath}
+	if home, err := os.UserHomeDir(); err == nil {
+		alt := filepath.Join(home, ".credentials", "featurekit")
+		if alt != c.CredsPath {
+			candidates = append(candidates, alt)
+		}
+	}
+	for _, path := range candidates {
+		if err := c.readCredFile(path); err != nil {
+			return err
+		}
+	}
+	if c.WorkerURL == "" && c.RunnerToken != "" {
+		c.WorkerURL = DefaultWorkerURL
+	}
+	return nil
+}
+
+func (c *Config) readCredFile(path string) error {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
