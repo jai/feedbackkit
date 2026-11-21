@@ -1,0 +1,155 @@
+package worker
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// WorkItem matches one pending work item returned by `POST /runner/poll`.
+type WorkItem struct {
+	Chat    string `json:"chat"`
+	Message string `json:"message"`
+	App     string `json:"app"`
+	Login   string `json:"login"`
+	Repo    string `json:"repo"`
+	Role    string `json:"role"`
+	Name    string `json:"name,omitempty"`
+	Echo    bool   `json:"echo,omitempty"`
+}
+
+// ClaimResponse holds the payload returned by `POST /runner/claim`.
+type ClaimResponse struct {
+	Chat  string `json:"chat"`
+	App   string `json:"app"`
+	Login string `json:"login"`
+	Repo  string `json:"repo"`
+	Role  string `json:"role"`
+	Text  string `json:"text"`
+	Build string `json:"build,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+// Client speaks FeedbackKit Worker's `/runner/*` HTTP API.
+type Client struct {
+	BaseURL string
+	Token   string
+	HTTP    *http.Client
+}
+
+func NewClient(baseURL, token string) *Client {
+	return &Client{
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		Token:   token,
+		HTTP:    &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+func (c *Client) postJSON(ctx context.Context, route string, body any, out any) (int, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/runner/"+route, bytes.NewReader(raw))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "feedbackkit-rex-runner")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return resp.StatusCode, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, fmt.Errorf("worker /runner/%s status %d: %s", route, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	if out != nil && len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return resp.StatusCode, fmt.Errorf("decode /runner/%s: %w", route, err)
+		}
+	}
+	return resp.StatusCode, nil
+}
+
+// Wait long-polls `POST /runner/wait` until a new message arrives or timeout expires.
+func (c *Client) Wait(ctx context.Context, since *int, hold time.Duration) (int, bool, error) {
+	ms := int(hold.Milliseconds())
+	if ms > 25_000 {
+		ms = 25_000
+	}
+	payload := map[string]any{"since": since, "ms": ms}
+	var resp struct {
+		Seq int `json:"seq"`
+	}
+	code, err := c.postJSON(ctx, "wait", payload, &resp)
+	if code == http.StatusNotFound {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, true, err
+	}
+	return resp.Seq, true, nil
+}
+
+// Poll fetches pending work items from `POST /runner/poll`.
+func (c *Client) Poll(ctx context.Context, online bool, detail string) ([]WorkItem, error) {
+	var d *string
+	if detail != "" {
+		d = &detail
+	}
+	var resp struct {
+		Work []WorkItem `json:"work"`
+	}
+	_, err := c.postJSON(ctx, "poll", map[string]any{"orca": online, "detail": d}, &resp)
+	return resp.Work, err
+}
+
+// Claim claims one pending message (returns nil, nil if already claimed or gone).
+func (c *Client) Claim(ctx context.Context, item WorkItem) (*ClaimResponse, error) {
+	var resp ClaimResponse
+	code, err := c.postJSON(ctx, "claim", map[string]any{
+		"app":     item.App,
+		"login":   item.Login,
+		"chat":    item.Chat,
+		"message": item.Message,
+	}, &resp)
+	if code == http.StatusNotFound || code == http.StatusConflict {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Result reports delivered/failed back to `POST /runner/result`.
+func (c *Client) Result(ctx context.Context, item WorkItem, status, detail string) error {
+	var d *string
+	if detail != "" {
+		d = &detail
+	}
+	code, err := c.postJSON(ctx, "result", map[string]any{
+		"app":     item.App,
+		"login":   item.Login,
+		"chat":    item.Chat,
+		"message": item.Message,
+		"status":  status,
+		"detail":  d,
+	}, nil)
+	if code == http.StatusNotFound || code == http.StatusConflict {
+		return nil
+	}
+	return err
+}
