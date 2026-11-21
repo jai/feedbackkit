@@ -47,6 +47,8 @@ func main() {
 		err = cmdSpawn(ctx, cfg, os.Args[2:])
 	case "report":
 		err = cmdReport(cfg, os.Args[2:])
+	case "reply":
+		err = cmdReply(ctx, cfg, os.Args[2:])
 	case "drain":
 		err = cmdDrain(ctx, cfg, os.Args[2:])
 	case "reap":
@@ -78,8 +80,9 @@ Commands:
   push-status  Publish sanitized Rex status snapshot to Worker (/about live dashboard)
   boot         Ensure feedback-loop session, Fable Tab 1, and resume unfinished runs
   spawn    Create an isolated run folder + run.json, open a Rex tab, enqueue inbox
-  report   Record builder progress/completion and append to Fable's FIFO inbox
-  drain    Deliver queued inbox.jsonl events to Fable's Rex block and ack cursor
+  report       Record builder progress/completion and append to Fable's FIFO inbox
+  reply        Post a user-facing reply/status back to the FeedbackKit Worker (phone/app)
+  drain        Deliver queued inbox.jsonl events to Fable's Rex block and ack cursor
   reap     Deterministically close/prune clean, pushed runs idle past TTL
   serve    Run the long-lived wake-up loop (boot + OSC 7501 drain + reap + optional opt-in Worker poll)
 `)
@@ -127,7 +130,7 @@ func buildStatus(ctx context.Context, cfg config.Config, rc *rex.Client) (status
 	return snap, nil
 }
 
-func pushLiveStatus(ctx context.Context, cfg config.Config, rc *rex.Client, coordState string) error {
+func pushLiveStatus(ctx context.Context, cfg config.Config, rc *rex.Client, coordState string, daemon bool) error {
 	if cfg.WorkerURL == "" || cfg.RunnerToken == "" {
 		return errors.New("FEEDBACKKIT_URL and FEEDBACKKIT_RUNNER_TOKEN are required")
 	}
@@ -148,26 +151,150 @@ func pushLiveStatus(ctx context.Context, cfg config.Config, rc *rex.Client, coor
 	if coordState == "" {
 		coordState = "idle"
 	}
-	return worker.NewClient(cfg.WorkerURL, cfg.RunnerToken).PushRexStatus(ctx, worker.RexStatusPayload{
+	wc := worker.NewClient(cfg.WorkerURL, cfg.RunnerToken)
+	if err := wc.PushRexStatus(ctx, worker.RexStatusPayload{
 		SessionName:       snap.SessionName,
 		SessionActive:     snap.SessionID != "",
 		CoordinatorActive: snap.CoordBlockID != "",
 		CoordinatorState:  coordState,
 		InboxPending:      snap.InboxPending,
+		DaemonRunning:     daemon,
 		ClaimApps:         snap.ClaimApps,
 		Runs:              runs,
+	}); err != nil {
+		return err
+	}
+
+	// Capture live Rex panes & recent inbox for authenticated `/about/inspect` drill-down.
+	var panes []worker.RexInspectPane
+	if snap.SessionID != "" && snap.CoordBlockID != "" {
+		if capText, err := rc.Capture(ctx, snap.SessionID, snap.CoordBlockID); err == nil {
+			panes = append(panes, worker.RexInspectPane{
+				ID:      cfg.CoordWindow,
+				Label:   "Fable 5.2 Coordinator",
+				Kind:    "coordinator",
+				Status:  coordState,
+				Agent:   "claude-fable-5-2",
+				Capture: capText,
+			})
+		}
+	}
+	for _, r := range snap.Runs {
+		if r.Status == state.StatusReaped || r.RexSessionID == "" || r.RexBlockID == "" {
+			continue
+		}
+		if capText, err := rc.Capture(ctx, r.RexSessionID, r.RexBlockID); err == nil {
+			panes = append(panes, worker.RexInspectPane{
+				ID:      r.ChatID,
+				Label:   r.ChatID + " (" + r.App + ")",
+				Kind:    "builder",
+				Status:  string(r.Status),
+				Agent:   r.Agent,
+				App:     r.App,
+				Capture: capText,
+			})
+		}
+	}
+	var recentInbox []worker.RexInspectInboxEvent
+	if evs, err := inbox.New(cfg.StateDir).Recent(20); err == nil {
+		for _, ev := range evs {
+			recentInbox = append(recentInbox, worker.RexInspectInboxEvent{
+				ID:        ev.ID,
+				Kind:      ev.Kind,
+				ChatID:    ev.ChatID,
+				App:       ev.App,
+				Status:    ev.Status,
+				Summary:   ev.Summary,
+				CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	_ = wc.PushRexInspect(ctx, worker.RexInspectPayload{
+		SessionName: snap.SessionName,
+		Panes:       panes,
+		RecentInbox: recentInbox,
 	})
+	return nil
 }
 
 func cmdPushStatus(ctx context.Context, cfg config.Config, args []string) error {
 	fs := flag.NewFlagSet("push-status", flag.ExitOnError)
 	coordState := fs.String("coord-state", "idle", "current coordinator OSC 7501 state")
+	daemon := fs.Bool("daemon", false, "mark daemon_running=true")
 	_ = fs.Parse(args)
 
-	if err := pushLiveStatus(ctx, cfg, rex.NewClient(cfg.RexBinary), *coordState); err != nil {
+	cfg.ClaimApps = config.LoadRuntimeClaimApps(cfg.StateDir, cfg.ClaimApps)
+	if err := pushLiveStatus(ctx, cfg, rex.NewClient(cfg.RexBinary), *coordState, *daemon); err != nil {
 		return err
 	}
-	fmt.Printf("pushed Rex status to %s/runner/rex-status\n", strings.TrimRight(cfg.WorkerURL, "/"))
+	fmt.Printf("pushed Rex status + live inspect snapshot to %s\n", strings.TrimRight(cfg.WorkerURL, "/"))
+	return nil
+}
+
+func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
+	fs := flag.NewFlagSet("reply", flag.ExitOnError)
+	chatID := fs.String("chat", "", "FeedbackKit chat ID (e.g. fb_...)")
+	text := fs.String("text", "", "reply text to show on Jai's phone/app")
+	app := fs.String("app", "", "app slug (auto-resolved from chat record if omitted)")
+	login := fs.String("login", "", "sender GitHub login (auto-resolved from chat record if omitted)")
+	working := fs.Bool("working", false, "whether the agent is still actively working")
+	activity := fs.String("activity", "", "optional short working status line (<=80 chars)")
+	_ = fs.Parse(args)
+
+	if *chatID == "" {
+		return errors.New("--chat is required")
+	}
+	if cfg.WorkerURL == "" || cfg.RunnerToken == "" {
+		return errors.New("FEEDBACKKIT_URL and FEEDBACKKIT_RUNNER_TOKEN are required")
+	}
+	rec, err := state.LoadChat(cfg.StateDir, *chatID)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		rec = state.ChatRecord{ChatID: *chatID}
+	}
+	if *app != "" {
+		rec.App = *app
+	}
+	if *login != "" {
+		rec.Login = *login
+	}
+	if rec.App == "" || rec.Login == "" {
+		return errors.New("chat app/login unknown; pass --app and --login")
+	}
+	if strings.TrimSpace(*text) != "" {
+		now := time.Now().UTC()
+		rec.Messages = append(rec.Messages, state.ChatReply{
+			ID:   fmt.Sprintf("rex-%d", now.UnixNano()),
+			Text: strings.TrimSpace(*text),
+			At:   now.Format(time.RFC3339),
+		})
+	}
+	if err := state.SaveChat(cfg.StateDir, rec); err != nil {
+		return err
+	}
+	msgs := make([]worker.AgentMessage, 0, len(rec.Messages))
+	for _, m := range rec.Messages {
+		msgs = append(msgs, worker.AgentMessage{ID: m.ID, Text: m.Text, At: m.At})
+	}
+	var act *string
+	if strings.TrimSpace(*activity) != "" {
+		s := truncate(*activity, 80)
+		act = &s
+	}
+	if err := worker.NewClient(cfg.WorkerURL, cfg.RunnerToken).PostAgent(ctx, worker.AgentSidePayload{
+		App:       rec.App,
+		Login:     rec.Login,
+		Chat:      rec.ChatID,
+		Messages:  msgs,
+		IsWorking: *working,
+		Activity:  act,
+		Thread:    nil,
+	}); err != nil {
+		return err
+	}
+	fmt.Printf("replied to %s (%s/%s): %d message(s) working=%v\n", rec.ChatID, rec.App, rec.Login, len(msgs), *working)
 	return nil
 }
 
@@ -550,13 +677,14 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 	reapTTL := fs.Duration("reap-ttl", 24*time.Hour, "idle TTL before reaping")
 	_ = fs.Parse(args)
 
-	cfg.ClaimApps = config.ParseAppList(*claimApps)
+	baseClaimApps := config.ParseAppList(*claimApps)
+	cfg.ClaimApps = config.LoadRuntimeClaimApps(cfg.StateDir, baseClaimApps)
 	rc := rex.NewClient(cfg.RexBinary)
 	coord, err := ensureCoordinator(ctx, cfg, rc)
 	if err != nil {
 		return fmt.Errorf("boot coordinator: %w", err)
 	}
-	log.Printf("serve started: session=%s coord_block=%s claim_apps=%q", coord.SessionID, coord.BlockID, *claimApps)
+	log.Printf("serve started: session=%s coord_block=%s claim_apps=%v", coord.SessionID, coord.BlockID, cfg.ClaimApps)
 
 	var (
 		mu         sync.Mutex
@@ -603,12 +731,21 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 		}
 	}()
 
-	// Optional Worker wake-up loop for explicitly opted-in apps only.
-	if len(cfg.ClaimApps) > 0 && cfg.WorkerURL != "" && cfg.RunnerToken != "" {
+	// Worker wake-up loop (hot-reloads config.json claim_apps so switching apps needs no restart).
+	if cfg.WorkerURL != "" && cfg.RunnerToken != "" {
 		wc := worker.NewClient(cfg.WorkerURL, cfg.RunnerToken)
 		go func() {
 			var seq *int
 			for ctx.Err() == nil {
+				activeApps := config.LoadRuntimeClaimApps(cfg.StateDir, baseClaimApps)
+				if len(activeApps) == 0 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(10 * time.Second):
+						continue
+					}
+				}
 				nextSeq, supported, err := wc.Wait(ctx, seq, 25*time.Second)
 				if err != nil {
 					log.Printf("worker wait error: %v", err)
@@ -624,19 +761,50 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 					continue
 				}
 				for _, item := range work {
-					if !cfg.ClaimApps[item.App] {
+					if !activeApps[item.App] {
 						continue // Leave non-opted-in apps untouched for Python Orca runner.
 					}
 					claimed, err := wc.Claim(ctx, item)
 					if err != nil || claimed == nil {
 						continue
 					}
+					kind := "new_chat"
+					rec, loadErr := state.LoadChat(cfg.StateDir, claimed.Chat)
+					if loadErr == nil {
+						kind = "user_reply"
+					} else {
+						rec = state.ChatRecord{
+							ChatID: claimed.Chat,
+							App:    claimed.App,
+							Login:  claimed.Login,
+							Repo:   claimed.Repo,
+							Role:   claimed.Role,
+							Title:  claimed.Title,
+						}
+					}
+					_ = state.SaveChat(cfg.StateDir, rec)
+					act := "Coordinator reviewing"
+					msgs := make([]worker.AgentMessage, 0, len(rec.Messages))
+					for _, m := range rec.Messages {
+						msgs = append(msgs, worker.AgentMessage{ID: m.ID, Text: m.Text, At: m.At})
+					}
+					_ = wc.PostAgent(ctx, worker.AgentSidePayload{
+						App:       claimed.App,
+						Login:     claimed.Login,
+						Chat:      claimed.Chat,
+						Messages:  msgs,
+						IsWorking: true,
+						Activity:  &act,
+					})
 					_, _ = inbox.New(cfg.StateDir).Append(inbox.Event{
-						Kind:    "new_chat",
-						ChatID:  claimed.Chat,
-						App:     claimed.App,
-						Repo:    claimed.Repo,
-						Summary: fmt.Sprintf("%s (%s): %s", claimed.Login, claimed.Role, truncate(claimed.Text, 240)),
+						Kind:   kind,
+						ChatID: claimed.Chat,
+						App:    claimed.App,
+						Repo:   claimed.Repo,
+						Summary: fmt.Sprintf(
+							"%s (%s): %s | Reply via: rex-runner reply --chat %s --text \"...\"",
+							claimed.Login, claimed.Role, truncate(claimed.Text, 240), claimed.Chat,
+						),
 					})
 					_ = wc.Result(ctx, item, "delivered", "queued for Fable coordinator")
 					tryDrain()
@@ -656,7 +824,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 	defer reapTicker.Stop()
 
 	if cfg.WorkerURL != "" && cfg.RunnerToken != "" {
-		_ = pushLiveStatus(ctx, cfg, rc, "idle")
+		cfg.ClaimApps = config.LoadRuntimeClaimApps(cfg.StateDir, baseClaimApps)
+		_ = pushLiveStatus(ctx, cfg, rc, "idle", true)
 	}
 
 	for {
@@ -671,7 +840,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 				mu.Lock()
 				st := coordState
 				mu.Unlock()
-				if err := pushLiveStatus(ctx, cfg, rc, st); err != nil {
+				cfg.ClaimApps = config.LoadRuntimeClaimApps(cfg.StateDir, baseClaimApps)
+				if err := pushLiveStatus(ctx, cfg, rc, st, true); err != nil {
 					log.Printf("push-status error: %v", err)
 				}
 			}

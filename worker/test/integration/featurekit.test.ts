@@ -187,4 +187,38 @@ test("GET /about serves the live architecture dashboard HTML and sanitized statu
   const wvHtml = await wv.text();
   assert.match(wvHtml, /30-Second Mental Model/);
   assert.match(wvHtml, /Copy Resume Prompt/);
+  assert.match(wvHtml, /data-term="runner"/);
+
+  const unauthInspect = await serveFeatureKit(new Request("https://kit.example/about/inspect"), e);
+  assert.equal(unauthInspect.status, 401);
+  const pushInspect = await serveFeatureKit(
+    new Request("https://kit.example/runner/rex-inspect", {
+      method: "POST",
+      headers: { Authorization: "Bearer runner", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_name: "feedback-loop",
+        panes: [
+          {
+            id: "fable-coordinator",
+            label: "Fable 5.2",
+            kind: "coordinator",
+            status: "idle",
+            capture: "Fable prompt ready",
+          },
+        ],
+        recent_inbox: [{ id: "ev-1", kind: "new_chat", chat_id: "fb-1a2b", summary: "Fix font" }],
+      }),
+    }),
+    e,
+  );
+  assert.equal(pushInspect.status, 200);
+  const inspectRes = await serveFeatureKit(
+    new Request("https://kit.example/about/inspect", { headers: { Authorization: "Bearer runner" } }),
+    e,
+  );
+  assert.equal(inspectRes.status, 200);
+  const inspected = await inspectRes.json();
+  assert.equal(inspected.panes.length, 1);
+  assert.equal(inspected.panes[0].capture, "Fable prompt ready");
+  assert.equal(inspected.recent_inbox.length, 1);
 });

@@ -150,6 +150,7 @@ type RexStatusPayload struct {
 	CoordinatorActive bool            `json:"coordinator_active"`
 	CoordinatorState  string          `json:"coordinator_state"`
 	InboxPending      int             `json:"inbox_pending"`
+	DaemonRunning     bool            `json:"daemon_running"`
 	ClaimApps         []string        `json:"claim_apps"`
 	Runs              []RexRunSummary `json:"runs"`
 }
@@ -157,6 +158,71 @@ type RexStatusPayload struct {
 // PushRexStatus publishes sanitized Rex runner telemetry to `POST /runner/rex-status`.
 func (c *Client) PushRexStatus(ctx context.Context, payload RexStatusPayload) error {
 	_, err := c.postJSON(ctx, "rex-status", payload, nil)
+	return err
+}
+
+// RexInspectPane is one live captured Rex pane for authenticated `/about/inspect` drill-down.
+type RexInspectPane struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Kind    string `json:"kind"` // coordinator | builder
+	Status  string `json:"status"`
+	Agent   string `json:"agent,omitempty"`
+	App     string `json:"app,omitempty"`
+	Capture string `json:"capture"`
+}
+
+// RexInspectInboxEvent is one recent inbox event shown in `/about/inspect`.
+type RexInspectInboxEvent struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	ChatID    string `json:"chat_id,omitempty"`
+	App       string `json:"app,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Summary   string `json:"summary"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// RexInspectPayload is pushed to `POST /runner/rex-inspect`.
+type RexInspectPayload struct {
+	SessionName string                 `json:"session_name"`
+	Panes       []RexInspectPane       `json:"panes"`
+	RecentInbox []RexInspectInboxEvent `json:"recent_inbox"`
+}
+
+// PushRexInspect publishes live Rex pane captures + recent inbox events to `POST /runner/rex-inspect`.
+func (c *Client) PushRexInspect(ctx context.Context, payload RexInspectPayload) error {
+	_, err := c.postJSON(ctx, "rex-inspect", payload, nil)
+	return err
+}
+
+// AgentMessage matches one agent-side message expected by `POST /runner/agent`.
+type AgentMessage struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+	At   string `json:"at"`
+}
+
+// AgentSidePayload matches FeedbackKit Worker's `POST /runner/agent` contract.
+type AgentSidePayload struct {
+	App       string         `json:"app"`
+	Login     string         `json:"login"`
+	Chat      string         `json:"chat"`
+	Messages  []AgentMessage `json:"messages"`
+	IsWorking bool           `json:"isWorking"`
+	Activity  *string        `json:"activity"`
+	Thread    any            `json:"thread"`
+}
+
+// PostAgent pushes the agent's messages and working status to `POST /runner/agent`.
+func (c *Client) PostAgent(ctx context.Context, payload AgentSidePayload) error {
+	if payload.Messages == nil {
+		payload.Messages = []AgentMessage{}
+	}
+	code, err := c.postJSON(ctx, "agent", payload, nil)
+	if code == http.StatusNotFound {
+		return nil
+	}
 	return err
 }
 

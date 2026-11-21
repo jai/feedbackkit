@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,34 @@ func (c *Config) readCredFile(path string) error {
 		}
 	}
 	return sc.Err()
+}
+
+// LoadRuntimeClaimApps reads `<stateDir>/config.json` (`{"claim_apps": [...]}`) if present
+// and merges it with any CLI-provided app allowlist so switching apps requires no restart.
+func LoadRuntimeClaimApps(stateDir string, base map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for k, v := range base {
+		if v {
+			out[k] = true
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "config.json"))
+	if err != nil {
+		return out
+	}
+	var file struct {
+		ClaimApps []string `json:"claim_apps"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return out
+	}
+	for _, app := range file.ClaimApps {
+		slug := strings.TrimSpace(app)
+		if slug != "" {
+			out[slug] = true
+		}
+	}
+	return out
 }
 
 // ParseAppList parses a comma-separated list of app slugs into a lookup set.

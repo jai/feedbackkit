@@ -108,6 +108,26 @@ func (q *Queue) Pending() ([]Event, int, error) {
 	return events, total, err
 }
 
+// Recent returns up to limit most recent events in inbox.jsonl.
+func (q *Queue) Recent(limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var out []Event
+	err := q.withLock(func() error {
+		all, err := q.readAllLocked()
+		if err != nil {
+			return err
+		}
+		if len(all) > limit {
+			all = all[len(all)-limit:]
+		}
+		out = append(out, all...)
+		return nil
+	})
+	return out, err
+}
+
 // Ack advances the cursor to at least nextLine.
 func (q *Queue) Ack(nextLine int) error {
 	return q.withLock(func() error {

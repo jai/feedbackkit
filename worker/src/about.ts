@@ -9,6 +9,8 @@
 import type { AppConfig, FeatureKitEnv } from "./featurekit.ts";
 
 const REX_STATUS_KEY = "rex/status.json";
+const REX_INSPECT_KEY = "rex/inspect.json";
+const MAX_INSPECT_BYTES = 256 * 1024;
 const ORCA_FRESH_MS = 90_000;
 const REX_FRESH_MS = 120_000;
 const SLUG_RE = /^[a-zA-Z0-9._-]{1,48}$/;
@@ -29,8 +31,34 @@ export interface StoredRexStatus {
   coordinator_active: boolean;
   coordinator_state: string;
   inbox_pending: number;
+  daemon_running?: boolean;
   claim_apps: string[];
   runs: RexRunSnapshot[];
+}
+
+export interface StoredRexInspectPane {
+  id: string;
+  label: string;
+  kind: string;
+  status: string;
+  agent?: string;
+  app?: string;
+  capture: string;
+}
+
+export interface StoredRexInspect {
+  reported_at_ms: number;
+  session_name: string;
+  panes: StoredRexInspectPane[];
+  recent_inbox: Array<{
+    id: string;
+    kind: string;
+    chat_id?: string;
+    app?: string;
+    status?: string;
+    summary: string;
+    created_at?: string;
+  }>;
 }
 
 export type ComponentBuildState = "live" | "standby" | "offline" | "unbuilt";
@@ -92,6 +120,7 @@ export async function putRexStatus(request: Request, env: FeatureKitEnv, now: nu
     coordinator_active: obj.coordinator_active === true,
     coordinator_state: safeState(obj.coordinator_state, "idle"),
     inbox_pending: safeInt(obj.inbox_pending, 0, 10_000),
+    daemon_running: obj.daemon_running === true,
     claim_apps: claimApps,
     runs,
   };
@@ -100,6 +129,86 @@ export async function putRexStatus(request: Request, env: FeatureKitEnv, now: nu
     httpMetadata: { contentType: "application/json" },
   });
   return Response.json({ ok: true, reported_at_ms: now });
+}
+
+/** Stores authenticated live Rex terminal captures & recent inbox events in R2 for dashboard drill-down. */
+export async function putRexInspect(request: Request, env: FeatureKitEnv, now: number): Promise<Response> {
+  const rawText = await request.text();
+  if (rawText.length > MAX_INSPECT_BYTES) {
+    return Response.json({ error: "Inspect payload too large." }, { status: 413 });
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText);
+  } catch {
+    return Response.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return Response.json({ error: "Expected JSON object." }, { status: 400 });
+  }
+  const obj = raw as Record<string, unknown>;
+  const panesRaw = Array.isArray(obj.panes) ? obj.panes : [];
+  const panes: StoredRexInspectPane[] = [];
+  for (const item of panesRaw.slice(0, 16)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const p = item as Record<string, unknown>;
+    const id = safeSlug(p.id);
+    if (!id) {
+      continue;
+    }
+    panes.push({
+      id,
+      label: typeof p.label === "string" ? p.label.slice(0, 80) : id,
+      kind: safeState(p.kind, "builder"),
+      status: safeState(p.status, "active"),
+      agent: typeof p.agent === "string" ? safeSlug(p.agent) : undefined,
+      app: typeof p.app === "string" ? safeSlug(p.app) : undefined,
+      capture: typeof p.capture === "string" ? p.capture.slice(-12_000) : "",
+    });
+  }
+  const inboxRaw = Array.isArray(obj.recent_inbox) ? obj.recent_inbox : [];
+  const recentInbox = inboxRaw
+    .slice(-20)
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+    .map((ev) => ({
+      id: typeof ev.id === "string" ? ev.id.slice(0, 64) : "",
+      kind: safeState(ev.kind, "event"),
+      chat_id: typeof ev.chat_id === "string" ? safeSlug(ev.chat_id) : undefined,
+      app: typeof ev.app === "string" ? safeSlug(ev.app) : undefined,
+      status: typeof ev.status === "string" ? safeState(ev.status, "") : undefined,
+      summary: typeof ev.summary === "string" ? ev.summary.slice(0, 400) : "",
+      created_at: typeof ev.created_at === "string" ? ev.created_at.slice(0, 40) : undefined,
+    }));
+
+  const stored: StoredRexInspect = {
+    reported_at_ms: now,
+    session_name: safeSlug(obj.session_name, "feedback-loop"),
+    panes,
+    recent_inbox: recentInbox,
+  };
+  await env.FEEDBACK.put(REX_INSPECT_KEY, JSON.stringify(stored), {
+    httpMetadata: { contentType: "application/json" },
+  });
+  return Response.json({ ok: true, panes: panes.length, reported_at_ms: now });
+}
+
+/** Serves authenticated live terminal captures & inbox events for `/about` drill-down. */
+export async function aboutInspectResponse(env: FeatureKitEnv): Promise<Response> {
+  const obj = await env.FEEDBACK.get(REX_INSPECT_KEY);
+  if (!obj) {
+    return Response.json(
+      { reported_at_ms: null, session_name: "feedback-loop", panes: [], recent_inbox: [] },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  try {
+    const data = await obj.json();
+    return Response.json(data, { headers: { "Cache-Control": "no-store" } });
+  } catch {
+    return Response.json({ error: "Corrupt inspect snapshot." }, { status: 500 });
+  }
 }
 
 interface AppCountRow {
@@ -180,10 +289,10 @@ export async function aboutStatusResponse(
     orca_worktrees: orcaOnline ? "live" : "standby",
     go_runner: rexFresh ? "live" : rex ? "standby" : "standby",
     worker_rex_claim: rex && rex.claim_apps.length > 0 ? "live" : "unbuilt",
-    launchd_boot: "unbuilt",
+    launchd_boot: rexFresh && rex?.daemon_running ? "live" : "unbuilt",
     inbox: rexFresh ? "live" : "standby",
     fable: rex?.coordinator_active ? (rexFresh ? "live" : "standby") : "standby",
-    reaper: "standby",
+    reaper: rexFresh && rex?.daemon_running ? "live" : "standby",
     builder_tabs: activeRexRuns.length > 0 ? "live" : "unbuilt",
     builder_auto_report: "unbuilt",
   };
@@ -552,6 +661,45 @@ const ABOUT_HTML = `<!doctype html>
     text-decoration: none;
   }
   .cf-links-bar a:hover { background: var(--accent); color: #ffffff; }
+  .terms-drawer {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+  }
+  .terms-drawer.open { display: block; }
+  .terms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 14px; font-size: 12px; }
+  .terms-grid dt { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); }
+  .terms-grid dd { margin: 2px 0 0; color: var(--text-dim); }
+  .inspect-box { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+  .inspect-controls { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .inspect-controls input {
+    flex: 1 1 140px;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  pre.term-dump {
+    margin: 8px 0 0;
+    padding: 10px;
+    background: #0b1120;
+    color: #e2e8f0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.38;
+    max-height: 300px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 
   .mode-flow .only-recovery { opacity: 0.16; }
   .mode-recovery .only-flow { opacity: 0.22; }
@@ -593,6 +741,7 @@ const ABOUT_HTML = `<!doctype html>
     </div>
     <div class="controls">
       <a class="btn worldview" href="/about/worldview">Mental Model (30s) →</a>
+      <button class="btn" id="termsBtn" type="button" aria-expanded="false">Terms</button>
       <button class="btn mode-btn" data-mode="flow" aria-pressed="true">1 · Request Flow</button>
       <button class="btn mode-btn" data-mode="recovery" aria-pressed="false">2 · Failure &amp; Reboot</button>
       <button class="btn mode-btn" data-mode="lanes" aria-pressed="false">3 · Orca vs Rex</button>
@@ -627,6 +776,10 @@ const ABOUT_HTML = `<!doctype html>
       <div class="kpi-val" id="kpiBuildVal">—</div>
       <div class="progress-bar"><div class="progress-fill" id="kpiBuildBar" style="width:0%"></div></div>
     </div>
+  </section>
+
+  <section class="terms-drawer" id="termsDrawer" aria-label="Glossary of system terms">
+    <dl class="terms-grid" id="termsGrid"></dl>
   </section>
 
   <div class="legend">
@@ -892,13 +1045,51 @@ const ABOUT_HTML = `<!doctype html>
         <div class="kv-label">Failure &amp; Reboot Recovery</div>
         <div class="kv-val" id="insRecovery"></div>
       </div>
+      <div class="inspect-box" id="inspectBox">
+        <div class="kv-label">Live Thread / Terminal Dump (Token-Gated)</div>
+        <div class="inspect-controls" id="inspectAuthRow">
+          <input type="password" id="inspectTokenInput" placeholder="Runner or Admin token…"/>
+          <button class="btn" id="inspectUnlockBtn" type="button">Unlock</button>
+          <button class="btn" id="inspectClearBtn" type="button" style="display:none">Lock</button>
+        </div>
+        <div class="kv-val" id="inspectMeta" style="margin-top:6px;font-size:11px;color:var(--text-dim)">Enter your runner token once (stored locally in this browser) to inspect live Rex panes and inbox events.</div>
+        <pre class="term-dump" id="inspectDump" style="display:none"></pre>
+      </div>
     </aside>
   </div>
 </div>
 
 <script>
 let LATEST = null;
+let INSPECT = null;
 let SELECTED = "worker";
+const TOKEN_KEY = "fk_about_inspect_token";
+
+const ABOUT_TERMS = {
+  runner: "Local Mac daemon (Python runner/ for Orca, Go rex-runner for Rex) bridging the Worker and your Mac.",
+  agent: "The AI model coordinating or coding (Fable 5.2, Claude Opus, Codex, or Antigravity).",
+  worker: "featurekit Cloudflare Worker storing chats (D1), media (R2), live rooms (DO), and this dashboard.",
+  fable: "Claude Fable 5.2 in Tab 1 of Rex session feedback-loop — coordinates & validates, never edits app code directly.",
+  inbox: "File-locked FIFO queue (inbox.jsonl) drained into Fable only when OSC 7501 reports idle/done.",
+  reaper: "Deterministic cleanup (rex-runner reap) verifying clean git + pushed commits before closing tabs.",
+  "OSC 7501": "Rex Program Status Protocol escape sequence reporting live idle/working/blocked/done/error states.",
+  "run.json": "Per-chat manifest in each builder subfolder enabling exact session resume after reboot.",
+  "/runner/agent": "Endpoint where the runner posts agent replies & working status to D1 so your phone updates live.",
+  "/v2/acp": "AgentChatKit live streaming protocol pushing updates to iOS/macOS apps."
+};
+
+const termsGridEl = document.getElementById("termsGrid");
+for (const [k, def] of Object.entries(ABOUT_TERMS)) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = "<dt>" + k + "</dt><dd>" + def + "</dd>";
+  termsGridEl.appendChild(wrap);
+}
+const termsBtnEl = document.getElementById("termsBtn");
+const termsDrawerEl = document.getElementById("termsDrawer");
+termsBtnEl.addEventListener("click", () => {
+  const open = termsDrawerEl.classList.toggle("open");
+  termsBtnEl.setAttribute("aria-expanded", String(open));
+});
 
 function fmtAge(sec) {
   if (sec === null || sec === undefined) return "never";
@@ -1138,7 +1329,93 @@ function renderInspector() {
     li.innerHTML = '<span class="mark">' + (done ? "✓" : "○") + "</span><span>" + label + "</span>";
     ul.appendChild(li);
   }
+  renderInspectDump();
 }
+
+function getInspectToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+}
+
+function renderInspectDump() {
+  const token = getInspectToken();
+  const input = document.getElementById("inspectTokenInput");
+  const unlockBtn = document.getElementById("inspectUnlockBtn");
+  const clearBtn = document.getElementById("inspectClearBtn");
+  const meta = document.getElementById("inspectMeta");
+  const dump = document.getElementById("inspectDump");
+  if (!token) {
+    input.style.display = "inline-block";
+    unlockBtn.style.display = "inline-block";
+    clearBtn.style.display = "none";
+    dump.style.display = "none";
+    meta.textContent = "Enter your runner token once (stored only in this browser) to inspect live Rex panes and inbox events.";
+    return;
+  }
+  input.style.display = "none";
+  unlockBtn.style.display = "none";
+  clearBtn.style.display = "inline-block";
+  if (!INSPECT) {
+    meta.textContent = "Fetching live Rex terminal snapshot…";
+    dump.style.display = "none";
+    return;
+  }
+  if (INSPECT.error) {
+    meta.textContent = "Inspect auth/fetch error: " + INSPECT.error;
+    dump.style.display = "none";
+    return;
+  }
+  const age = INSPECT.reported_at_ms ? fmtAge(Math.max(0, Math.floor((Date.now() - INSPECT.reported_at_ms) / 1000))) : "never";
+  if (SELECTED === "inbox") {
+    meta.textContent = "Recent inbox.jsonl events (updated " + age + ")";
+    const rows = (INSPECT.recent_inbox || []).map((e) => "[" + (e.created_at || "") + "] " + e.kind + (e.chat_id ? " chat=" + e.chat_id : "") + " — " + e.summary);
+    dump.textContent = rows.length ? rows.join("\\n") : "(inbox empty)";
+    dump.style.display = "block";
+    return;
+  }
+  let targetPane = null;
+  if (SELECTED === "fable" || SELECTED === "go_runner" || SELECTED === "worker") {
+    targetPane = (INSPECT.panes || []).find((p) => p.kind === "coordinator") || (INSPECT.panes || [])[0];
+  } else if (SELECTED.startsWith("builder_slot_")) {
+    const idx = Number(SELECTED.replace("builder_slot_", ""));
+    const builders = (INSPECT.panes || []).filter((p) => p.kind !== "coordinator");
+    targetPane = builders[idx] || null;
+  }
+  if (!targetPane) {
+    meta.textContent = "No live terminal capture for this node yet (snapshot " + age + "). Click Fable 5.2 or an active builder slot.";
+    dump.style.display = "none";
+    return;
+  }
+  meta.textContent = "Live Rex pane: " + targetPane.label + " [" + targetPane.status + "] · captured " + age;
+  dump.textContent = targetPane.capture || "(empty pane)";
+  dump.style.display = "block";
+}
+
+async function pollInspect() {
+  const token = getInspectToken();
+  if (!token) { INSPECT = null; renderInspectDump(); return; }
+  try {
+    const res = await fetch("/about/inspect", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (!res.ok) { INSPECT = { error: "HTTP " + res.status }; renderInspectDump(); return; }
+    INSPECT = await res.json();
+    renderInspectDump();
+  } catch (err) {
+    INSPECT = { error: err.message };
+    renderInspectDump();
+  }
+}
+
+document.getElementById("inspectUnlockBtn").addEventListener("click", () => {
+  const val = document.getElementById("inspectTokenInput").value.trim();
+  if (!val) return;
+  try { localStorage.setItem(TOKEN_KEY, val); } catch {}
+  document.getElementById("inspectTokenInput").value = "";
+  pollInspect();
+});
+document.getElementById("inspectClearBtn").addEventListener("click", () => {
+  try { localStorage.removeItem(TOKEN_KEY); } catch {}
+  INSPECT = null;
+  renderInspectDump();
+});
 
 function applyStatus(data) {
   LATEST = data;
@@ -1304,7 +1581,8 @@ document.getElementById("themeBtn").addEventListener("click", () => {
 
 renderInspector();
 pollStatus();
-setInterval(pollStatus, 10000);
+pollInspect();
+setInterval(() => { pollStatus(); pollInspect(); }, 10000);
 </script>
 </body>
 </html>

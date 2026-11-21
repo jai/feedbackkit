@@ -32,6 +32,10 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		case "/runner/rex-status":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/runner/rex-inspect":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/runner/agent":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
@@ -59,7 +63,23 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 		SessionActive:     true,
 		CoordinatorActive: true,
 		CoordinatorState:  "idle",
+		DaemonRunning:     true,
 	}); err != nil {
 		t.Fatalf("push rex status: %v", err)
+	}
+	if err := c.PushRexInspect(context.Background(), RexInspectPayload{
+		SessionName: "feedback-loop",
+		Panes:       []RexInspectPane{{ID: "fable-coordinator", Label: "Fable", Kind: "coordinator", Status: "idle", Capture: "ready"}},
+	}); err != nil {
+		t.Fatalf("push rex inspect: %v", err)
+	}
+	if err := c.PostAgent(context.Background(), AgentSidePayload{
+		App:       "prhub",
+		Login:     "jai",
+		Chat:      "fb-1",
+		Messages:  []AgentMessage{{ID: "r-1", Text: "On it!", At: time.Now().UTC().Format(time.RFC3339)}},
+		IsWorking: false,
+	}); err != nil {
+		t.Fatalf("post agent: %v", err)
 	}
 }

@@ -4,7 +4,7 @@
  * Per app, the config names who builds: an owner's feedback goes to a coding agent that ships, a builder's to one that
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
-import { aboutResponse, aboutStatusResponse, putRexStatus } from "./about.ts";
+import { aboutInspectResponse, aboutResponse, aboutStatusResponse, putRexInspect, putRexStatus } from "./about.ts";
 import { worldviewResponse } from "./worldview.ts";
 import {
   addFeedback,
@@ -507,9 +507,19 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
   if (pathname === "/about/status.json" && request.method === "GET") {
     return aboutStatusResponse(env, parseApps(env.APPS), Date.now());
   }
+  if (pathname === "/about/inspect" && request.method === "GET") {
+    return hasBearer(request, env.RUNNER_TOKEN) || hasBearer(request, env.ADMIN_TOKEN)
+      ? aboutInspectResponse(env)
+      : new Response("unauthorized\n", { status: 401 });
+  }
   if (pathname === "/runner/rex-status" && request.method === "POST") {
     return hasBearer(request, env.RUNNER_TOKEN)
       ? putRexStatus(request, env, Date.now())
+      : new Response("unauthorized\n", { status: 401 });
+  }
+  if (pathname === "/runner/rex-inspect" && request.method === "POST") {
+    return hasBearer(request, env.RUNNER_TOKEN)
+      ? putRexInspect(request, env, Date.now())
       : new Response("unauthorized\n", { status: 401 });
   }
   const image = IMAGE_PATH.exec(pathname);

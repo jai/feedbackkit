@@ -36,7 +36,7 @@ func TestSendPromptCallsSendAndReturn(t *testing.T) {
 	}
 	want := [][]string{
 		{"rex", "send", "-s", "session:1", "-b", "block:2"},
-		{"rex", "send-key", "-s", "session:1", "-b", "block:2", "Return"},
+		{"rex", "send-key", "-s", "session:1", "-b", "block:2", "enter"},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)

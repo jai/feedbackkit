@@ -194,7 +194,7 @@ func (c *Client) CloseWindow(ctx context.Context, sessionID, windowID string) er
 	return err
 }
 
-// SendPrompt types text into a Rex block and presses Return to submit it.
+// SendPrompt types text into a Rex block and presses Enter to submit it.
 func (c *Client) SendPrompt(ctx context.Context, sessionID, blockID, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("empty prompt text")
@@ -202,8 +202,17 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, blockID, text string
 	if _, err := c.Exec(ctx, []byte(text), c.Bin, "send", "-s", sessionID, "-b", blockID); err != nil {
 		return err
 	}
-	_, err := c.Exec(ctx, nil, c.Bin, "send-key", "-s", sessionID, "-b", blockID, "Return")
+	_, err := c.Exec(ctx, nil, c.Bin, "send-key", "-s", sessionID, "-b", blockID, "enter")
 	return err
+}
+
+// Capture returns the trimmed visible screen/scrollback text of one Rex terminal block.
+func (c *Client) Capture(ctx context.Context, sessionID, blockID string) (string, error) {
+	out, err := c.Exec(ctx, nil, c.Bin, "capture", "-s", sessionID, "-b", blockID, "--trim")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // ParseProgramStatusEvent extracts an OSC 7501 status change from one `rex events --json` line.
