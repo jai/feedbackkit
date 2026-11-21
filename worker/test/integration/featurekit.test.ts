@@ -129,3 +129,12 @@ test("the app may name its sender; the runner's work carries the name, and the l
     [[chat.id, { host: "borg-cube-03", id: "orca-codex:1" }]],
   );
 });
+
+test("GET /about serves the static architecture blueprint HTML without auth", async () => {
+  const res = await serveFeatureKit(new Request("https://kit.example/about"), env());
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("Content-Type") ?? "", /^text\/html/);
+  const html = await res.text();
+  assert.match(html, /Feedback Loop — Mathematical Tree/);
+  assert.match(html, /rex-runner/);
+});

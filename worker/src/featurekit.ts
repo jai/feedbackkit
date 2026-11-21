@@ -4,6 +4,7 @@
  * Per app, the config names who builds: an owner's feedback goes to a coding agent that ships, a builder's to one that
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
+import { aboutResponse } from "./about.ts";
 import {
   addFeedback,
   chatOfRef,
@@ -493,6 +494,9 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
         await work;
       };
   const { pathname } = new URL(request.url);
+  if (pathname === "/about" && request.method === "GET") {
+    return aboutResponse();
+  }
   const image = IMAGE_PATH.exec(pathname);
   if (image && request.method === "GET") {
     return imageRoute(image[1], env);
