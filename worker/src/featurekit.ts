@@ -82,6 +82,9 @@ export interface FeatureKitEnv {
   ACP_SECRET?: string;
   /** The runner's long poll (runner-wake.ts). Without it `/runner/wait` is `404` and the runner polls every 15 s. */
   RUNNER_WAKE?: DurableObjectNamespace;
+  /** Optional Cloudflare IDs used to render deep links on `/about`. */
+  CF_ACCOUNT_ID?: string;
+  D1_DATABASE_ID?: string;
 }
 
 export type Role = "owner" | "builder" | "issue";

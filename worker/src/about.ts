@@ -188,6 +188,18 @@ export async function aboutStatusResponse(
     builder_auto_report: "unbuilt",
   };
 
+  const cfAccount = safeSlug(env.CF_ACCOUNT_ID);
+  const d1Id = safeSlug(env.D1_DATABASE_ID);
+  const links = cfAccount
+    ? {
+        worker: `https://dash.cloudflare.com/${cfAccount}/workers/services/view/featurekit/production/metrics`,
+        d1: d1Id
+          ? `https://dash.cloudflare.com/${cfAccount}/workers/d1/databases/${d1Id}`
+          : `https://dash.cloudflare.com/${cfAccount}/workers/d1`,
+        r2: `https://dash.cloudflare.com/${cfAccount}/r2/default/buckets/featurekit`,
+      }
+    : null;
+
   return Response.json(
     {
       now_ms: now,
@@ -197,6 +209,7 @@ export async function aboutStatusResponse(
         pending_messages: pendingMessages,
         delivering_messages: deliveringMessages,
         failed_messages: failedMessages,
+        links,
       },
       orca: {
         online: orcaOnline,
@@ -521,6 +534,22 @@ const ABOUT_HTML = `<!doctype html>
   .node .n-metric { font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--text); }
   .node .chip-bg { rx: 3; }
   .node .chip-txt { font-family: var(--mono); font-size: 8.5px; font-weight: 650; }
+  .node a.cf-link rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; rx: 3; }
+  .node a.cf-link text { font-family: var(--mono); font-size: 9px; font-weight: 600; fill: var(--accent); }
+  .node a.cf-link:hover rect { fill: var(--accent); }
+  .node a.cf-link:hover text { fill: #ffffff; }
+  .cf-links-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .cf-links-bar a {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 2px 7px;
+    text-decoration: none;
+  }
+  .cf-links-bar a:hover { background: var(--accent); color: #ffffff; }
 
   .mode-flow .only-recovery { opacity: 0.16; }
   .mode-recovery .only-flow { opacity: 0.22; }
@@ -598,8 +627,8 @@ const ABOUT_HTML = `<!doctype html>
   </section>
 
   <div class="legend">
-    <span class="legend-item"><span class="swatch-box live"></span>Built &amp; live</span>
-    <span class="legend-item"><span class="swatch-box standby"></span>Built · standby / manual</span>
+    <span class="legend-item"><span class="swatch-box live"></span>Live (running, fresh heartbeat)</span>
+    <span class="legend-item"><span class="swatch-box standby"></span>Idle (built, not running right now)</span>
     <span class="legend-item"><span class="swatch-box unbuilt"></span>Unbuilt (greyed out)</span>
     <span class="legend-item" id="lastUpdated">Syncing…</span>
   </div>
@@ -658,7 +687,7 @@ const ABOUT_HTML = `<!doctype html>
         <!-- R1 -> R2 Go Rex Runner: claim edge (unbuilt/opt-in off) + live status push -->
         <path id="edgeWorkerRexClaim" class="edge edge-unbuilt" d="M 515 172 L 515 196 L 568 196 L 568 218" marker-end="url(#arr-unbuilt)"/>
         <path id="edgeRexPushStatus" class="edge edge-ret edge-live-flow" d="M 612 218 L 612 190 L 538 190 L 538 172" marker-end="url(#arr-live)"/>
-        <text id="lblWorkerRexClaim" class="edge-label unbuilt" x="454" y="212">claim (opt-in off)</text>
+        <text id="lblWorkerRexClaim" class="edge-label unbuilt" x="424" y="212">new chats: Orca (Rex off)</text>
         <text class="edge-label ret" x="622" y="193">POST /runner/rex-status</text>
 
         <!-- Orca lane R2 -> R3 -->
@@ -713,11 +742,25 @@ const ABOUT_HTML = `<!doctype html>
         </g>
 
         <!-- R1: Worker -->
-        <g class="node state-live is-selected" data-id="worker" transform="translate(290, 104)">
-          <rect class="box" width="340" height="68"/>
-          <text class="n-kicker" x="12" y="17">R1 · CLOUDFLARE WORKER</text>
-          <text class="n-title" x="12" y="36">featurekit Worker + D1 + R2</text>
-          <text class="n-metric" id="nodeWorkerMetric" x="12" y="55">Loading D1 telemetry…</text>
+        <g class="node state-live is-selected" data-id="worker" transform="translate(290, 96)">
+          <rect class="box" width="340" height="82"/>
+          <text class="n-kicker" x="12" y="16">R1 · CLOUDFLARE WORKER</text>
+          <text class="n-title" x="12" y="34">featurekit Worker + D1 + R2</text>
+          <text class="n-metric" id="nodeWorkerMetric" x="12" y="51">Loading D1 telemetry…</text>
+          <g id="nodeWorkerLinks" style="display:none">
+            <a id="svgLinkWorker" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
+              <rect x="12" y="59" width="66" height="16"/>
+              <text x="19" y="70">Worker ↗</text>
+            </a>
+            <a id="svgLinkD1" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
+              <rect x="84" y="59" width="44" height="16"/>
+              <text x="93" y="70">D1 ↗</text>
+            </a>
+            <a id="svgLinkR2" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
+              <rect x="134" y="59" width="44" height="16"/>
+              <text x="143" y="70">R2 ↗</text>
+            </a>
+          </g>
           <rect class="chip-bg" x="288" y="6" width="42" height="15" fill="var(--live-soft)"/>
           <text class="chip-txt" x="297" y="17" fill="var(--live)">LIVE</text>
         </g>
@@ -750,8 +793,8 @@ const ABOUT_HTML = `<!doctype html>
           <text class="n-title" x="12" y="36">rex-runner (Wake-up &amp; Bridge)</text>
           <text class="n-metric" id="nodeRexMetric" x="12" y="54">Checking Rex heartbeat…</text>
           <text class="n-sub" x="12" y="67">LaunchAgent daemon: UNBUILT</text>
-          <rect class="chip-bg" id="chipRexBg" x="248" y="6" width="58" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipRexTxt" x="255" y="17" fill="var(--standby)">STANDBY</text>
+          <rect class="chip-bg" id="chipRexBg" x="260" y="6" width="46" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipRexTxt" x="270" y="17" fill="var(--standby)">IDLE</text>
         </g>
 
         <!-- R3 Inside Rex: Inbox -->
@@ -762,6 +805,8 @@ const ABOUT_HTML = `<!doctype html>
           <text class="n-metric" id="nodeInboxMetric" x="10" y="54">0 pending</text>
           <text class="n-sub" x="10" y="70">inbox.jsonl + flock</text>
           <text class="n-sub" x="10" y="83">OSC 7501 gated drain</text>
+          <rect class="chip-bg" id="chipInboxBg" x="116" y="6" width="40" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipInboxTxt" x="124" y="17" fill="var(--standby)">IDLE</text>
         </g>
 
         <!-- R3 Inside Rex: Fable 5.2 -->
@@ -772,8 +817,8 @@ const ABOUT_HTML = `<!doctype html>
           <text class="n-metric" id="nodeFableMetric" x="10" y="54">Checking Tab 1…</text>
           <text class="n-sub" x="10" y="70">Pinned UUID · rotatable</text>
           <text class="n-sub" x="10" y="83">Strict coord &amp; validator</text>
-          <rect class="chip-bg" id="chipFableBg" x="130" y="6" width="54" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipFableTxt" x="138" y="17" fill="var(--standby)">WAIT</text>
+          <rect class="chip-bg" id="chipFableBg" x="142" y="6" width="44" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipFableTxt" x="151" y="17" fill="var(--standby)">IDLE</text>
         </g>
 
         <!-- R3 Inside Rex: Reaper -->
@@ -784,6 +829,8 @@ const ABOUT_HTML = `<!doctype html>
           <text class="n-sub" x="10" y="54">rex-runner reap</text>
           <text class="n-sub" x="10" y="69">Clean git check</text>
           <text class="n-sub" x="10" y="83">Built · manual</text>
+          <rect class="chip-bg" id="chipReaperBg" x="90" y="6" width="38" height="15" fill="var(--standby-soft)"/>
+          <text class="chip-txt" id="chipReaperTxt" x="97" y="17" fill="var(--standby)">IDLE</text>
         </g>
 
         <!-- R4 Inside Rex: 3 Builder Slots (greyed out when 0 active, light up dynamically from live runs) -->
@@ -832,6 +879,7 @@ const ABOUT_HTML = `<!doctype html>
       <div class="kv">
         <div class="kv-label">Live Telemetry</div>
         <div class="kv-val" id="insLive">Syncing…</div>
+        <div class="cf-links-bar" id="insLinks" style="display:none"></div>
       </div>
       <div class="kv">
         <div class="kv-label">Build Checklist (Built vs Unbuilt)</div>
@@ -862,10 +910,15 @@ function setNodeState(el, state) {
   el.classList.add("state-" + state);
 }
 
+function stateLabel(state) {
+  if (state === "standby") return "IDLE";
+  return state.toUpperCase();
+}
+
 function setPill(el, state, label) {
   if (!el) return;
   el.className = "pill " + state;
-  el.textContent = label || state.toUpperCase();
+  el.textContent = label || stateLabel(state);
 }
 
 function setChip(bgEl, txtEl, state, label) {
@@ -1055,7 +1108,24 @@ function renderInspector() {
   document.getElementById("insSummary").textContent = info.summary;
   document.getElementById("insLive").textContent = info.live;
   document.getElementById("insRecovery").textContent = info.recovery;
-  setPill(document.getElementById("insBadge"), info.state, info.state.toUpperCase());
+  setPill(document.getElementById("insBadge"), info.state, stateLabel(info.state));
+
+  const linksBar = document.getElementById("insLinks");
+  linksBar.innerHTML = "";
+  const cfLinks = SELECTED === "worker" && LATEST && LATEST.worker ? LATEST.worker.links : null;
+  if (cfLinks) {
+    linksBar.style.display = "flex";
+    for (const [label, url] of [["Cloudflare Worker ↗", cfLinks.worker], ["D1 (feedbackkit) ↗", cfLinks.d1], ["R2 (featurekit) ↗", cfLinks.r2]]) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = label;
+      linksBar.appendChild(a);
+    }
+  } else {
+    linksBar.style.display = "none";
+  }
 
   const ul = document.getElementById("insChecklist");
   ul.innerHTML = "";
@@ -1083,12 +1153,12 @@ function applyStatus(data) {
   document.getElementById("kpiOrcaVal").textContent = o.online ? "Online" : "Offline";
   document.getElementById("kpiOrcaSub").textContent = "last poll " + fmtAge(o.age_seconds);
 
-  setPill(document.getElementById("kpiRexPill"), c.go_runner, r.connected ? "LIVE" : "STANDBY");
-  document.getElementById("kpiRexVal").textContent = r.connected ? "Connected" : (r.reported_at_ms ? "Standby" : "No beat");
+  setPill(document.getElementById("kpiRexPill"), c.go_runner, r.connected ? "LIVE" : "IDLE");
+  document.getElementById("kpiRexVal").textContent = r.connected ? "Running" : (r.reported_at_ms ? "Idle" : "No beat");
   document.getElementById("kpiRexSub").textContent =
-    (r.reported_at_ms ? "beat " + fmtAge(r.age_seconds) : "awaiting push") + " · claim: " + (r.claim_apps.length ? r.claim_apps.join(",") : "off");
+    (r.reported_at_ms ? "beat " + fmtAge(r.age_seconds) : "awaiting daemon") + " · new chats: " + (r.claim_apps.length ? r.claim_apps.join(",") : "Orca");
 
-  setPill(document.getElementById("kpiFablePill"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "STANDBY") : "OFFLINE");
+  setPill(document.getElementById("kpiFablePill"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "IDLE") : "OFFLINE");
   document.getElementById("kpiFableVal").textContent = r.coordinator_active ? r.coordinator_state : "offline";
   document.getElementById("kpiFableSub").textContent = "inbox: " + r.inbox_pending + " pending";
 
@@ -1098,7 +1168,7 @@ function applyStatus(data) {
   const liveCount = keys.filter((k) => c[k] === "live").length;
   const pct = Math.round((builtCount / keys.length) * 100);
   document.getElementById("kpiBuildPct").textContent = pct + "%";
-  document.getElementById("kpiBuildVal").textContent = liveCount + " live · " + (builtCount - liveCount) + " standby · " + (keys.length - builtCount) + " unbuilt";
+  document.getElementById("kpiBuildVal").textContent = liveCount + " live · " + (builtCount - liveCount) + " idle · " + (keys.length - builtCount) + " unbuilt";
   document.getElementById("kpiBuildBar").style.width = pct + "%";
 
   // Node labels & live states
@@ -1106,6 +1176,16 @@ function applyStatus(data) {
     w.apps.map((a) => a.app + " (" + a.chats + ")").join(" · ") || "No apps configured";
   document.getElementById("nodeWorkerMetric").textContent =
     w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " active";
+
+  const linksGroup = document.getElementById("nodeWorkerLinks");
+  if (w.links) {
+    linksGroup.style.display = "inline";
+    document.getElementById("svgLinkWorker").setAttribute("href", w.links.worker);
+    document.getElementById("svgLinkD1").setAttribute("href", w.links.d1);
+    document.getElementById("svgLinkR2").setAttribute("href", w.links.r2);
+  } else {
+    linksGroup.style.display = "none";
+  }
 
   setNodeState(document.getElementById("nodeOrcaRunner"), c.orca_runner);
   setNodeState(document.getElementById("nodeOrcaWorktrees"), c.orca_worktrees);
@@ -1115,17 +1195,21 @@ function applyStatus(data) {
   setNodeState(document.getElementById("nodeGoRunner"), c.go_runner);
   document.getElementById("nodeRexMetric").textContent = r.reported_at_ms
     ? ("Beat " + fmtAge(r.age_seconds) + " · " + r.runs.length + " run(s)")
-    : "Built · awaiting heartbeat";
-  setChip(document.getElementById("chipRexBg"), document.getElementById("chipRexTxt"), c.go_runner, r.connected ? "LIVE" : "STANDBY");
+    : "Built · daemon not started";
+  setChip(document.getElementById("chipRexBg"), document.getElementById("chipRexTxt"), c.go_runner, r.connected ? "LIVE" : "IDLE");
 
   setNodeState(document.getElementById("nodeInbox"), c.inbox);
   document.getElementById("nodeInboxMetric").textContent = r.inbox_pending + " pending event(s)";
+  setChip(document.getElementById("chipInboxBg"), document.getElementById("chipInboxTxt"), c.inbox, c.inbox === "live" ? "LIVE" : "IDLE");
 
   setNodeState(document.getElementById("nodeFable"), c.fable);
   document.getElementById("nodeFableMetric").textContent = r.coordinator_active
     ? ("Tab 1 ACTIVE · " + r.coordinator_state)
     : "Tab 1 not detected";
-  setChip(document.getElementById("chipFableBg"), document.getElementById("chipFableTxt"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "STANDBY") : "OFF");
+  setChip(document.getElementById("chipFableBg"), document.getElementById("chipFableTxt"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "IDLE") : "OFF");
+
+  setNodeState(document.getElementById("nodeReaper"), c.reaper);
+  setChip(document.getElementById("chipReaperBg"), document.getElementById("chipReaperTxt"), c.reaper, c.reaper === "live" ? "LIVE" : "IDLE");
 
   document.getElementById("rexBoundaryTag").textContent =
     "REX SESSION: " + r.session_name + (r.session_active ? " (ACTIVE)" : " (OFFLINE)") + " · OSC 7501 STATUS";
@@ -1137,12 +1221,12 @@ function applyStatus(data) {
     claimEdge.setAttribute("class", "edge edge-fwd edge-live-flow");
     claimEdge.setAttribute("marker-end", "url(#arr-fwd)");
     claimLbl.setAttribute("class", "edge-label fwd");
-    claimLbl.textContent = "claim: " + r.claim_apps.join(",");
+    claimLbl.textContent = "new chats: " + r.claim_apps.join(",");
   } else {
     claimEdge.setAttribute("class", "edge edge-unbuilt");
     claimEdge.setAttribute("marker-end", "url(#arr-unbuilt)");
     claimLbl.setAttribute("class", "edge-label unbuilt");
-    claimLbl.textContent = "claim (opt-in off)";
+    claimLbl.textContent = "new chats: Orca (Rex off)";
   }
 
   // Dynamic R4 builder slots
@@ -1190,7 +1274,8 @@ async function pollStatus() {
 }
 
 document.querySelectorAll(".node").forEach((n) => {
-  n.addEventListener("click", () => {
+  n.addEventListener("click", (e) => {
+    if (e.target && e.target.closest && e.target.closest("a")) return;
     SELECTED = n.dataset.id;
     document.querySelectorAll(".node").forEach((x) => x.classList.toggle("is-selected", x.dataset.id === SELECTED));
     renderInspector();
