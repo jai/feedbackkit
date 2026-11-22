@@ -21,13 +21,12 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 		case "/runner/poll":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"work": []map[string]any{
-					{"chat": "fb-1", "message": "m-1", "app": "prhub", "login": "jai", "repo": "jai/prhub", "role": "owner"},
+					{"chat": "fb-1", "message": "m-1", "app": "prhub", "login": "jai", "repo": "jai/prhub", "role": "owner", "first": true},
 				},
 			})
 		case "/runner/claim":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"chat": "fb-1", "app": "prhub", "login": "jai", "repo": "jai/prhub", "role": "owner", "text": "Fix font",
-			})
+			// The Worker's claim answers the message only (docs/worker.md), not whose it is.
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "text": "Fix font", "first": true, "title": "Font"})
 		case "/runner/result":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		case "/runner/rex-status":
@@ -48,12 +47,15 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 		t.Fatalf("wait: seq=%d ok=%v err=%v", seq, ok, err)
 	}
 	work, err := c.Poll(context.Background(), true, "")
-	if err != nil || len(work) != 1 || work[0].Chat != "fb-1" {
+	if err != nil || len(work) != 1 || work[0].Chat != "fb-1" || !work[0].First {
 		t.Fatalf("poll: %+v err=%v", work, err)
 	}
 	claimed, err := c.Claim(context.Background(), work[0])
 	if err != nil || claimed == nil || claimed.Text != "Fix font" {
 		t.Fatalf("claim: %+v err=%v", claimed, err)
+	}
+	if claimed.Chat != "fb-1" || claimed.App != "prhub" || claimed.Login != "jai" || claimed.Repo != "jai/prhub" || claimed.Role != "owner" {
+		t.Fatalf("claim identity from the work item: %+v", claimed)
 	}
 	if err := c.Result(context.Background(), work[0], "delivered", ""); err != nil {
 		t.Fatalf("result: %v", err)

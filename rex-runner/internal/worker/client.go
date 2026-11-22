@@ -133,6 +133,14 @@ func (c *Client) Claim(ctx context.Context, item WorkItem) (*ClaimResponse, erro
 	if err != nil {
 		return nil, err
 	}
+	// The claim answers the message (text, title, ...), not whose it is: that comes from the work item.
+	resp.Chat, resp.App, resp.Login = item.Chat, item.App, item.Login
+	if resp.Repo == "" {
+		resp.Repo = item.Repo
+	}
+	if resp.Role == "" {
+		resp.Role = item.Role
+	}
 	return &resp, nil
 }
 
