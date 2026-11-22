@@ -65,8 +65,10 @@ final class FeedbackDemoUITests: XCTestCase {
 
     func testRowsAndChatsSayWhatTheFeedbackShipped() throws {
         // A row is one button: its accessories are in its label.
-        XCTAssertTrue(text("In Build 41").waitForExistence(timeout: 10), "the owner's shipped chat: its release")
-        XCTAssertTrue(text("Checks passed").exists)
+        let released = text("In Build 41")
+        XCTAssertTrue(released.waitForExistence(timeout: 10), "the owner's shipped chat: its release")
+        // A release ran its own tests, so its chip carries no checks mark (docs/api.md#shipped).
+        XCTAssertFalse(released.label.contains("Checks"), released.label)
         screenshot("shipped-row")
         open("Settings should follow dark mode")
         XCTAssertTrue(app.descendants(matching: .any)["feedback-shipped-header"].firstMatch.waitForExistence(timeout: 5))
@@ -77,7 +79,7 @@ final class FeedbackDemoUITests: XCTestCase {
         back()
         role("Builder")
         XCTAssertTrue(text("PR open").waitForExistence(timeout: 5), "the builder's chat: its pull request is open")
-        XCTAssertTrue(text("Pull request 57, open").exists)
+        XCTAssertTrue(text("Pull request 57, open, Checks running").exists, "an open pull request shows its checks")
     }
 
     func testASendingMessageShowsItsScreenshotAndOpensIt() throws {

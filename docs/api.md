@@ -164,6 +164,9 @@ hourly until each commit is in a release, its checks have finished and no pull r
 - **Release status**, as an app shows it: no commit and no pull request, nothing yet; a pull request open, "PR open";
   commits with no release, "on main"; else "in <release name>". An app releases a build by publishing a GitHub
   Release whose tag is on the build's commit (`v0.24.1`, `mac-556`); nothing else is asked of it.
+- **Checks**, as an app shows them: a pull request's and "on main"'s chips carry their `ci` (a failure turns the chip
+  red); a released chip is green with no checks mark, because the release ran its own tests and passed them, so a
+  commit's earlier failed run on `main` says nothing about it (Jai, 2026-11-20).
 - Every `url` is on `https://github.com/`.
 - Live mode carries it in the state's `extra.shipped`; a change moves the chat on, so a followed chat hears of it.
 

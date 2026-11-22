@@ -11,6 +11,7 @@ final class FeedbackMacShippedUITests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS %@", "Settings should follow dark mode")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("In Build 41"), row.label)
+        XCTAssertFalse(row.label.contains("Checks"), "a release's chip carries no checks mark: \(row.label)")
         row.click()
         XCTAssertTrue(app.descendants(matching: .any)["feedback-shipped-header"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["feedback-shipped-header-commit-4f2c9a1"].firstMatch.exists)
