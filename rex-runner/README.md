@@ -10,6 +10,14 @@ Nondestructive Go binary for the Superlogical Rex feedback loop. Runs in paralle
 - **Serialized FIFO inbox:** `rex-runner report` appends events to `inbox.jsonl` (file-locked). `rex-runner serve` watches Rex OSC 7501 `program_status_changed` events and drains into Fable only when Fable is `idle` or `done`.
 - **Deterministic reaper:** `rex-runner reap` checks idle TTL, clean `git status`, and zero unpushed commits before closing Rex tabs; dirty/unpushed folders are marked `kept` and reported to Fable.
 
+## Builder account
+
+A Claude builder runs on the default Claude account unless a config dir is set. Set `FEEDBACK_BUILDER_CONFIG_DIR`, or
+`"builder_config_dir"` in `<state dir>/config.json` (read at each spawn and resume, so `spawn` from any shell and the
+launchd `serve` agree). The builder then starts as `env CLAUDE_CONFIG_DIR=<dir> claude ...`. The environment variable
+wins. The coordinator's account is `FEEDBACK_COORD_LAUNCHER`, or `"coord_launcher"` in the same file (`cly`, `cw`, `cl1`,
+`clk` or `cla`).
+
 ## Build & Install
 
 ```sh

@@ -21,12 +21,15 @@ type Config struct {
 	CoordWindow   string
 	CoordDir      string
 	CoordLauncher string
-	RunsDir       string
-	StateDir      string
-	CredsPath     string
-	RexBinary     string
-	WorkerURL     string
-	RunnerToken   string
+	// BuilderConfigDir is passed to Claude builders as CLAUDE_CONFIG_DIR, so they run on that Claude account.
+	// Empty leaves the builder on the default account.
+	BuilderConfigDir string
+	RunsDir          string
+	StateDir         string
+	CredsPath        string
+	RexBinary        string
+	WorkerURL        string
+	RunnerToken      string
 	// ClaimApps restricts which apps rex-runner may claim from the Worker.
 	// Empty by default so rex-runner is strictly nondestructive to the existing Python/Orca runner.
 	ClaimApps map[string]bool
@@ -36,15 +39,16 @@ type Config struct {
 func Default() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		SessionName:   envOr("FEEDBACK_REX_SESSION", DefaultSessionName),
-		CoordWindow:   envOr("FEEDBACK_COORD_WINDOW", DefaultCoordWindow),
-		CoordDir:      envOr("FEEDBACK_COORD_DIR", filepath.Join(home, "Developer", "feedback-coordinator")),
-		CoordLauncher: envOr("FEEDBACK_COORD_LAUNCHER", DefaultCoordLauncher),
-		RunsDir:       envOr("FEEDBACK_RUNS_DIR", filepath.Join(home, "Developer", "feedback-runs")),
-		StateDir:      envOr("FEEDBACK_REX_STATE_DIR", filepath.Join(home, "Library", "Application Support", "feedbackkit-rex-runner")),
-		CredsPath:     envOr("FEEDBACK_CREDS_PATH", filepath.Join(home, ".credentials", "feedbackkit")),
-		RexBinary:     envOr("REX_BIN", "rex"),
-		ClaimApps:     map[string]bool{},
+		SessionName:      envOr("FEEDBACK_REX_SESSION", DefaultSessionName),
+		CoordWindow:      envOr("FEEDBACK_COORD_WINDOW", DefaultCoordWindow),
+		CoordDir:         envOr("FEEDBACK_COORD_DIR", filepath.Join(home, "Developer", "feedback-coordinator")),
+		CoordLauncher:    envOr("FEEDBACK_COORD_LAUNCHER", DefaultCoordLauncher),
+		BuilderConfigDir: envOr("FEEDBACK_BUILDER_CONFIG_DIR", ""),
+		RunsDir:          envOr("FEEDBACK_RUNS_DIR", filepath.Join(home, "Developer", "feedback-runs")),
+		StateDir:         envOr("FEEDBACK_REX_STATE_DIR", filepath.Join(home, "Library", "Application Support", "feedbackkit-rex-runner")),
+		CredsPath:        envOr("FEEDBACK_CREDS_PATH", filepath.Join(home, ".credentials", "feedbackkit")),
+		RexBinary:        envOr("REX_BIN", "rex"),
+		ClaimApps:        map[string]bool{},
 	}
 }
 
@@ -140,6 +144,45 @@ func LoadRuntimeClaimApps(stateDir string, base map[string]bool) map[string]bool
 		}
 	}
 	return out
+}
+
+// LoadRuntimeBuilderConfigDir returns the Claude config dir for builders: `FEEDBACK_BUILDER_CONFIG_DIR` (already in
+// base) wins, else `builder_config_dir` in `<stateDir>/config.json`, so `spawn` from any shell and the launchd
+// `serve` agree without sharing an environment.
+func LoadRuntimeBuilderConfigDir(stateDir, base string) string {
+	if base != "" {
+		return base
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "config.json"))
+	if err != nil {
+		return ""
+	}
+	var file struct {
+		BuilderConfigDir string `json:"builder_config_dir"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(file.BuilderConfigDir)
+}
+
+// LoadRuntimeCoordLauncher returns the coordinator's launcher: `FEEDBACK_COORD_LAUNCHER` wins, else `coord_launcher`
+// in `<stateDir>/config.json`, else base.
+func LoadRuntimeCoordLauncher(stateDir, base string) string {
+	if strings.TrimSpace(os.Getenv("FEEDBACK_COORD_LAUNCHER")) != "" {
+		return base
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "config.json"))
+	if err != nil {
+		return base
+	}
+	var file struct {
+		CoordLauncher string `json:"coord_launcher"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil || strings.TrimSpace(file.CoordLauncher) == "" {
+		return base
+	}
+	return strings.TrimSpace(file.CoordLauncher)
 }
 
 // ParseAppList parses a comma-separated list of app slugs into a lookup set.

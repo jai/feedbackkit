@@ -31,6 +31,7 @@ func main() {
 		os.Exit(2)
 	}
 	cfg := config.Default()
+	cfg.CoordLauncher = config.LoadRuntimeCoordLauncher(cfg.StateDir, cfg.CoordLauncher)
 	_ = cfg.LoadCredentials()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -349,10 +350,15 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 	return rc.NewWindow(ctx, sess.SessionID, cfg.CoordWindow, cfg.CoordDir, false, coordCmd)
 }
 
-func builderCommand(agent, model, sessionID, prompt string, resume bool) ([]string, error) {
+// builderCommand is the builder's command line. A Claude builder with a configDir runs under
+// `env CLAUDE_CONFIG_DIR=<configDir>`, which picks its Claude account.
+func builderCommand(agent, model, sessionID, prompt, configDir string, resume bool) ([]string, error) {
 	switch agent {
 	case "claude":
 		args := []string{"claude", "--dangerously-skip-permissions"}
+		if configDir != "" {
+			args = append([]string{"env", "CLAUDE_CONFIG_DIR=" + configDir}, args...)
+		}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
@@ -434,7 +440,7 @@ func cmdBoot(ctx context.Context, cfg config.Config, args []string) error {
 		if liveByID[m.RexWindowID] || (m.RexWindowLabel != "" && liveByLabel[m.RexWindowLabel]) {
 			continue
 		}
-		cmdArgs, err := builderCommand(m.Agent, m.Model, m.SessionID, "", true)
+		cmdArgs, err := builderCommand(m.Agent, m.Model, m.SessionID, "", config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), true)
 		if err != nil {
 			log.Printf("skip resume %s: %v", m.ChatID, err)
 			continue
@@ -481,7 +487,7 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 		runDir = filepath.Join(cfg.RunsDir, *chatID)
 	}
 	sessionID := newUUIDv4()
-	cmdArgs, err := builderCommand(*agent, *model, sessionID, *prompt, false)
+	cmdArgs, err := builderCommand(*agent, *model, sessionID, *prompt, config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), false)
 	if err != nil {
 		return err
 	}
