@@ -9,300 +9,315 @@ const WORLDVIEW_HTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FeedbackKit — 30-Second Mental Model</title>
 <style>
   :root {
-    --bg: #f7f8fb;
-    --grid: rgba(15, 23, 42, 0.045);
-    --surface: #ffffff;
-    --surface-2: #f1f5f9;
-    --border: #cbd5e1;
-    --border-strong: #64748b;
-    --text: #0f172a;
-    --text-dim: #475569;
-    --accent: #1d4ed8;
-    --accent-soft: rgba(29, 78, 216, 0.10);
-    --live: #059669;
-    --live-soft: rgba(5, 150, 105, 0.12);
-    --idle: #b45309;
-    --idle-soft: rgba(180, 83, 9, 0.12);
-    --unbuilt: #94a3b8;
-    --tip-bg: #0f172a;
-    --tip-fg: #f8fafc;
+    --bg: #f6f4ef;
+    --surface: #fffdf9;
+    --surface-2: #efece5;
+    --border: #d6d1c7;
+    --border-strong: #8a8378;
+    --text: #1f2328;
+    --text-dim: #4b5159;
+    --accent: #1f4fbf;
+    --accent-soft: rgba(31, 79, 191, 0.10);
+    --live: #1d6b4a;
+    --live-soft: rgba(29, 107, 74, 0.11);
+    --idle: #9a4a00;
+    --idle-soft: rgba(154, 74, 0, 0.11);
+    --unbuilt: #7a7368;
+    --tip-bg: #222529;
+    --tip-fg: #dcdfe3;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-    --sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0b1120;
-      --grid: rgba(148, 163, 184, 0.07);
-      --surface: #111827;
-      --surface-2: #1e293b;
-      --border: #334155;
-      --border-strong: #94a3b8;
-      --text: #f1f5f9;
-      --text-dim: #94a3b8;
-      --accent: #60a5fa;
-      --accent-soft: rgba(96, 165, 250, 0.14);
-      --live: #34d399;
-      --live-soft: rgba(52, 211, 153, 0.14);
-      --idle: #fbbf24;
-      --idle-soft: rgba(251, 191, 36, 0.14);
-      --unbuilt: #64748b;
-      --tip-bg: #f8fafc;
-      --tip-fg: #0f172a;
+      --bg: #1a1c1f;
+      --surface: #222529;
+      --surface-2: #2b2f34;
+      --border: #3a3f46;
+      --border-strong: #7d848d;
+      --text: #dcdfe3;
+      --text-dim: #aab0b8;
+      --accent: #8db4ff;
+      --accent-soft: rgba(141, 180, 255, 0.14);
+      --live: #7fd3a8;
+      --live-soft: rgba(127, 211, 168, 0.14);
+      --idle: #f0b35a;
+      --idle-soft: rgba(240, 179, 90, 0.14);
+      --unbuilt: #8e96a0;
+      --tip-bg: #efece5;
+      --tip-fg: #1f2328;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0b1120;
-    --grid: rgba(148, 163, 184, 0.07);
-    --surface: #111827;
-    --surface-2: #1e293b;
-    --border: #334155;
-    --border-strong: #94a3b8;
-    --text: #f1f5f9;
-    --text-dim: #94a3b8;
-    --accent: #60a5fa;
-    --accent-soft: rgba(96, 165, 250, 0.14);
-    --live: #34d399;
-    --live-soft: rgba(52, 211, 153, 0.14);
-    --idle: #fbbf24;
-    --idle-soft: rgba(251, 191, 36, 0.14);
-    --unbuilt: #64748b;
-    --tip-bg: #f8fafc;
-    --tip-fg: #0f172a;
+    --bg: #1a1c1f;
+    --surface: #222529;
+    --surface-2: #2b2f34;
+    --border: #3a3f46;
+    --border-strong: #7d848d;
+    --text: #dcdfe3;
+    --text-dim: #aab0b8;
+    --accent: #8db4ff;
+    --accent-soft: rgba(141, 180, 255, 0.14);
+    --live: #7fd3a8;
+    --live-soft: rgba(127, 211, 168, 0.14);
+    --idle: #f0b35a;
+    --idle-soft: rgba(240, 179, 90, 0.14);
+    --unbuilt: #8e96a0;
+    --tip-bg: #efece5;
+    --tip-fg: #1f2328;
   }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  :root[data-size="large"] { font-size: 118%; }
+  :root[data-size="huge"] { font-size: 136%; }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     font-family: var(--sans);
+    font-size: 1.125rem;
+    line-height: 1.6;
     color: var(--text);
     background-color: var(--bg);
-    background-image:
-      linear-gradient(to right, var(--grid) 1px, transparent 1px),
-      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
-    background-size: 24px 24px;
-    line-height: 1.4;
+    background-image: none;
+    -webkit-font-smoothing: antialiased;
   }
+  em, i { font-style: normal; font-weight: 600; }
+  p, li { max-width: 68ch; }
+  a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
   .page {
-    max-width: 1180px;
+    max-width: 72rem;
     margin: 0 auto;
-    padding: 16px 22px 24px;
+    padding: 1.2rem max(1.1rem, env(safe-area-inset-right, 0px)) 2rem max(1.1rem, env(safe-area-inset-left, 0px));
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    gap: 13px;
+    gap: 1rem;
   }
   header {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding-bottom: 10px;
+    gap: 0.85rem;
+    padding-bottom: 0.85rem;
     border-bottom: 1px solid var(--border);
   }
-  .title-wrap { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+  .title-wrap { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 1.55rem; font-weight: 650; line-height: 1.25; }
   .tag {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    padding: 2px 7px;
-    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
     border: 1px solid var(--accent);
     color: var(--accent);
     background: var(--accent-soft);
   }
-  .nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .nav { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .size-group {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .size-group button.btn {
+    border: none;
+    border-right: 1px solid var(--border);
+    border-radius: 0;
+    padding: 0.45rem 0.7rem;
+  }
+  .size-group button.btn:last-child { border-right: none; }
   a.btn, button.btn {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    padding: 6px 11px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    font-weight: 500;
+    min-height: 2.75rem;
+    padding: 0.45rem 0.9rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
     background: var(--surface);
     color: var(--text);
     text-decoration: none;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
   }
   a.btn:hover, button.btn:hover { border-color: var(--accent); color: var(--accent); }
-  button.btn.primary, button.btn[aria-expanded="true"] {
+  button.btn.primary, button.btn[aria-expanded="true"], button.btn[aria-pressed="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 650;
   }
 
   /* Inline hover/tap glossary terms */
   .term {
-    border-bottom: 1px dotted var(--accent);
+    border-bottom: 2px dotted var(--accent);
     cursor: help;
     color: var(--text);
     position: relative;
   }
-  .term:focus { outline: 1px solid var(--accent); border-radius: 2px; }
+  .term:focus { outline: 3px solid var(--accent); border-radius: 3px; }
   #termTip {
     position: fixed;
     z-index: 999;
-    max-width: 310px;
-    padding: 8px 11px;
-    border-radius: 6px;
+    max-width: 24rem;
+    padding: 0.75rem 0.95rem;
+    border-radius: 8px;
     background: var(--tip-bg);
     color: var(--tip-fg);
-    font-size: 12px;
-    line-height: 1.4;
+    font-size: 0.98rem;
+    line-height: 1.5;
     box-shadow: 0 8px 24px rgba(0,0,0,0.28);
     pointer-events: none;
     display: none;
   }
-  #termTip strong { display: block; font-family: var(--mono); font-size: 10.5px; margin-bottom: 2px; opacity: 0.85; }
+  #termTip strong { display: block; font-family: var(--mono); font-size: 0.92rem; margin-bottom: 0.2rem; }
 
   /* Collapsible Terms drawer */
   .terms-drawer {
     display: none;
     background: var(--surface);
     border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 12px 14px;
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
   }
   .terms-drawer.open { display: block; }
   .terms-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 8px 14px;
-    font-size: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+    gap: 0.8rem 1.2rem;
+    font-size: 0.98rem;
   }
-  .terms-grid dt { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); }
-  .terms-grid dd { margin: 2px 0 0; color: var(--text-dim); }
+  .terms-grid dt { font-family: var(--mono); font-size: 0.95rem; font-weight: 700; color: var(--accent); }
+  .terms-grid dd { margin: 0.2rem 0 0; color: var(--text-dim); }
 
   .band {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 16px;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
   }
   .band-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 10px;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
   }
   .band-label {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+    font-size: 1rem;
+    font-weight: 650;
+    color: var(--text);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.55rem;
   }
   .step-num {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 6px;
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 700;
-    font-size: 10px;
+    font-size: 0.95rem;
   }
-  .band-note { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); }
+  .band-note { font-size: 0.95rem; color: var(--text-dim); }
 
-  svg.spine { display: block; width: 100%; height: auto; }
-  .sp-box { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.4; rx: 6; }
+  .spine-wrap { overflow-x: auto; }
+  svg.spine { display: block; width: 100%; min-width: 680px; height: auto; }
+  .sp-box { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.8; rx: 7; }
   .sp-box.live { stroke: var(--live); fill: var(--live-soft); }
   .sp-box.idle { stroke: var(--idle); fill: var(--idle-soft); }
   .sp-box.unbuilt { stroke: var(--unbuilt); stroke-dasharray: 4 3; fill: var(--surface); }
-  .sp-title { font-family: var(--sans); font-size: 12.5px; font-weight: 650; fill: var(--text); }
-  .sp-sub { font-family: var(--mono); font-size: 9.5px; fill: var(--text-dim); }
-  .sp-arrow { stroke: var(--border-strong); stroke-width: 1.6; fill: none; }
+  .sp-title { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
+  .sp-sub { font-family: var(--sans); font-size: 11px; fill: var(--text-dim); }
+  .sp-arrow { stroke: var(--border-strong); stroke-width: 2; fill: none; }
   .sp-arrow.hot { stroke: var(--accent); }
   .sp-arrow.dim { stroke: var(--unbuilt); stroke-dasharray: 4 3; }
 
-  .laws { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  @media (max-width: 820px) { .laws { grid-template-columns: 1fr; } }
+  .laws { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+  @media (max-width: 860px) { .laws { grid-template-columns: 1fr; } }
   .law {
     border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 11px 13px;
+    border-radius: 8px;
+    padding: 0.95rem 1.05rem;
     background: var(--surface);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 0.5rem;
   }
-  .law-top { display: flex; align-items: baseline; gap: 8px; }
+  .law-top { display: flex; align-items: baseline; gap: 0.55rem; }
   .law-idx {
-    font-family: var(--mono);
-    font-size: 10px;
+    font-size: 0.88rem;
     font-weight: 700;
     color: var(--accent);
     background: var(--accent-soft);
-    padding: 1px 6px;
-    border-radius: 3px;
+    padding: 0.12rem 0.5rem;
+    border-radius: 5px;
+    flex-shrink: 0;
   }
-  .law h2 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .law h2 { margin: 0; font-size: 1.15rem; font-weight: 650; line-height: 1.3; }
   .mech {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 0.9rem;
     background: var(--surface-2);
-    border-radius: 5px;
-    padding: 6px 9px;
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
     color: var(--text);
     overflow-x: auto;
     white-space: nowrap;
   }
-  .mech .hi { color: var(--accent); font-weight: 600; }
-  .mech .ok { color: var(--live); font-weight: 600; }
-  .law p { margin: 0; font-size: 12.5px; color: var(--text-dim); }
-  .law code { font-family: var(--mono); font-size: 11px; background: var(--surface-2); padding: 1px 4px; border-radius: 3px; color: var(--text); }
+  .mech .hi { color: var(--accent); font-weight: 650; }
+  .mech .ok { color: var(--live); font-weight: 650; }
+  .law p { margin: 0; font-size: 1rem; color: var(--text-dim); }
+  .law code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2); padding: 0.08rem 0.35rem; border-radius: 4px; color: var(--text); }
 
-  .stack { display: grid; grid-template-columns: 1.15fr 1.2fr 1fr; gap: 10px; }
-  @media (max-width: 860px) { .stack { grid-template-columns: 1fr; } }
-  .col { border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; }
+  .stack { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.85rem; }
+  @media (max-width: 920px) { .stack { grid-template-columns: 1fr; } }
+  .col { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1rem; }
   .col.active { border-color: var(--accent); background: var(--accent-soft); }
   .col-title {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
+    font-size: 0.95rem;
+    font-weight: 650;
     color: var(--text-dim);
-    margin: 0 0 6px;
+    margin: 0 0 0.5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
-  .col.active .col-title { color: var(--accent); font-weight: 700; }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .col.active .col-title { color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; }
   .chip {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    padding: 2px 7px;
-    border-radius: 4px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--text);
   }
   .chip.done { border-color: var(--live); color: var(--live); background: var(--live-soft); }
-  .col p { margin: 0; font-size: 13px; }
-  .col code { font-family: var(--mono); font-size: 11px; background: var(--surface); padding: 1px 4px; border-radius: 3px; }
+  .col p { margin: 0; font-size: 1rem; }
+  .col code { font-family: var(--mono); font-size: 0.9em; background: var(--surface); padding: 0.08rem 0.35rem; border-radius: 4px; }
 
   footer {
     margin-top: auto;
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 8px;
-    font-family: var(--mono);
-    font-size: 10.5px;
+    gap: 0.6rem;
+    font-size: 0.92rem;
     color: var(--text-dim);
-    padding-top: 4px;
+    padding-top: 0.4rem;
   }
 </style>
 </head>
@@ -315,9 +330,15 @@ const WORLDVIEW_HTML = `<!doctype html>
       <span class="tag">Reorientation Snapshot</span>
     </div>
     <nav class="nav">
+      <a class="btn" href="https://systems-floorplan.pages.dev/">← Systems Home</a>
       <a class="btn" href="/about">← Live System Tree</a>
       <button class="btn" id="termsBtn" type="button" aria-expanded="false">Terms</button>
       <button class="btn primary" id="copyBtn" type="button">Copy Resume Prompt</button>
+      <div class="size-group" role="group" aria-label="Text size">
+        <button class="btn size-btn" data-size="normal" aria-pressed="true" type="button">A</button>
+        <button class="btn size-btn" data-size="large" aria-pressed="false" type="button">A+</button>
+        <button class="btn size-btn" data-size="huge" aria-pressed="false" type="button">A++</button>
+      </div>
       <button class="btn" id="themeBtn" type="button">Theme</button>
     </nav>
   </header>
@@ -332,6 +353,7 @@ const WORLDVIEW_HTML = `<!doctype html>
       <div class="band-label"><span class="step-num">1</span>What Is Here · Spatial Anchor</div>
       <span class="band-note" id="liveSummary">Syncing live status…</span>
     </div>
+    <div class="spine-wrap">
     <svg class="spine" viewBox="0 0 1120 112" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five-node spatial spine of the Feedback Loop">
       <defs>
         <marker id="a-hot" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -375,6 +397,7 @@ const WORLDVIEW_HTML = `<!doctype html>
       <text class="sp-title" x="948" y="76">Builder Tabs</text>
       <text class="sp-sub" id="spBuild" x="948" y="94">Subfolder + run.json (0)</text>
     </svg>
+    </div>
   </section>
 
   <!-- LEVEL 2: HOW THIS WORLD WORKS -->
@@ -391,9 +414,9 @@ const WORLDVIEW_HTML = `<!doctype html>
       </article>
 
       <article class="law">
-        <div class="law-top"><span class="law-idx">LAW 2</span><h2>One Worker queue, two isolated lanes</h2></div>
-        <div class="mech">D1 queue → <span class="ok">Orca Python (untouched)</span> | <span class="hi">Rex Go (config.json switch)</span></div>
-        <p>Whichever <span class="term" tabindex="0" data-term="runner">runner</span> calls <code>/runner/claim</code> first owns the message. Keep <code>claim_apps</code> empty while testing; flip Orca's Menu Bar "New chats" off + opt apps in to route new chats to <span class="term" tabindex="0" data-term="fable">Fable</span>.</p>
+        <div class="law-top"><span class="law-idx">Law 2</span><h2>One Worker queue, two non-racing lanes</h2></div>
+        <div class="mech">D1 queue → <span class="ok">Orca (skips rex-apps.json)</span> | <span class="hi">Rex Go (claim_apps)</span></div>
+        <p>Orca leaves new chats for apps listed in <code>rex-apps.json</code> to <span class="term" tabindex="0" data-term="fable">Fable</span> while keeping existing Orca chats untouched. No race on <code>/runner/claim</code>.</p>
       </article>
 
       <article class="law">
@@ -429,8 +452,8 @@ const WORLDVIEW_HTML = `<!doctype html>
       </div>
 
       <div class="col active">
-        <p class="col-title"><span>Ready Right Now (Next 1 Step)</span><span>ACTIVE GOAL</span></p>
-        <p>Flip <code>claim_apps</code> in <code>config.json</code> (e.g. <code>["agent-pager","prhub"]</code>) and toggle Orca "New chats" off in the Menu Bar, then send real feedback from your phone.</p>
+        <p class="col-title"><span>Live Right Now</span><span>Active</span></p>
+        <p>New chats for <code>agent-pager</code>, <code>prhub</code>, <code>trips</code>, and <code>feedbackkit-demo</code> route to <span class="term" tabindex="0" data-term="fable">Fable</span> on Rex; Orca skips them via <code>rex-apps.json</code>.</p>
       </div>
 
       <div class="col">
@@ -512,6 +535,19 @@ document.getElementById("copyBtn").addEventListener("click", async () => {
     window.prompt("Copy this resume prompt:", RESUME_PROMPT);
   }
 });
+
+const SIZE_KEY = "fk_text_size";
+function applySize(size) {
+  const valid = size === "large" || size === "huge" ? size : "normal";
+  if (valid === "normal") document.documentElement.removeAttribute("data-size");
+  else document.documentElement.setAttribute("data-size", valid);
+  document.querySelectorAll(".size-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.size === valid)));
+  try { localStorage.setItem(SIZE_KEY, valid); } catch {}
+}
+document.querySelectorAll(".size-btn").forEach((btn) => {
+  btn.addEventListener("click", () => applySize(btn.dataset.size));
+});
+try { applySize(localStorage.getItem(SIZE_KEY) || "normal"); } catch {}
 
 document.getElementById("themeBtn").addEventListener("click", () => {
   const root = document.documentElement;
