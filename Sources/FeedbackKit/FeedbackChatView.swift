@@ -41,8 +41,12 @@ struct FeedbackChatView: View {
         chat?.ended ?? thread.flatMap { id in model.list.threads.first { $0.id == id }?.ended } ?? false
     }
 
-    /// Once the first message created the feedback chat, the host's coding thread receives every follow-up.
-    var awaitsAgentThread: Bool { conversation != nil && thread != nil }
+    /// Once the first message created the feedback chat, the host's coding thread receives every follow-up, unless
+    /// its runner answers without one.
+    var awaitsAgentThread: Bool { conversation != nil && thread != nil && !answersWithoutThread }
+
+    /// The chat stays Feedback's own, and its follow-ups go through the Worker to the runner that started it.
+    var answersWithoutThread: Bool { chat?.answeredWithoutThread == true }
 
     private var messages: [FeedbackChat.Message] {
         let sent = chat?.messages ?? []
@@ -276,12 +280,15 @@ struct FeedbackChatView: View {
             return
         }
         isWriting = false
-        Task {
-            if conversation != nil {
-                await model.sendFirstMessage(route)
-            } else {
-                await model.send(route)
-            }
+        Task { await reply() }
+    }
+
+    /// The draft, through the Worker: to a hosted chat only to start its agent, else to the chat's runner.
+    func reply() async {
+        if conversation != nil, !answersWithoutThread {
+            await model.sendFirstMessage(route)
+        } else {
+            await model.send(route)
         }
     }
 }
