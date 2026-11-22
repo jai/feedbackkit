@@ -3,6 +3,7 @@ package rex
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,20 @@ func TestSendPromptCallsSendAndReturn(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestDialogMarker(t *testing.T) {
+	prompt := "some answer\n\n> \n  ? for shortcuts\n"
+	if got := DialogMarker(prompt); got != "" {
+		t.Fatalf("plain prompt: got %q", got)
+	}
+	dialog := "some answer\n\n Compact the conversation?\n > 1. Yes\n   2. No\n\n Enter to confirm · Esc not now\n"
+	if got := DialogMarker(dialog); got == "" {
+		t.Fatal("dialog footer not detected")
+	}
+	quoted := "the dialog said Esc not now\n" + strings.Repeat("more talk\n", 8) + "> \n"
+	if got := DialogMarker(quoted); got != "" {
+		t.Fatalf("words above the footer: got %q", got)
 	}
 }

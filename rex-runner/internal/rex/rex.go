@@ -215,6 +215,30 @@ func (c *Client) Capture(ctx context.Context, sessionID, blockID string) (string
 	return string(out), nil
 }
 
+// dialogMarkers are footer hints a terminal program prints while a dialog or menu holds the keyboard. Text typed
+// then goes to the dialog, not to the prompt.
+var dialogMarkers = []string{"esc not now", "enter to confirm", "esc to cancel", "enter to select"}
+
+// DialogMarker reports the footer hint that shows a dialog or menu is open in a captured screen, or "". Only the
+// last few lines count: the same words further up are conversation text.
+func DialogMarker(screen string) string {
+	var tail []string
+	lines := strings.Split(screen, "\n")
+	for i := len(lines) - 1; i >= 0 && len(tail) < 6; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			tail = append(tail, strings.ToLower(line))
+		}
+	}
+	for _, line := range tail {
+		for _, marker := range dialogMarkers {
+			if strings.Contains(line, marker) {
+				return marker
+			}
+		}
+	}
+	return ""
+}
+
 // ParseProgramStatusEvent extracts an OSC 7501 status change from one `rex events --json` line.
 func ParseProgramStatusEvent(line []byte) (*ProgramStatusEvent, bool) {
 	var envelope struct {

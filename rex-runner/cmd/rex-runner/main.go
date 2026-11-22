@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -594,6 +595,37 @@ func cmdReport(cfg config.Config, args []string) error {
 	return nil
 }
 
+var errCoordinatorDialog = errors.New("coordinator pane shows a dialog or menu")
+
+var (
+	alertMu   sync.Mutex
+	alertedAt time.Time
+)
+
+// alertBlockedDrain tells the person at the Mac that the inbox is held, at most once every 10 minutes:
+// `FEEDBACK_ALERT_CMD <message>` when set, else a macOS notification.
+func alertBlockedDrain(pending int, marker string) {
+	alertMu.Lock()
+	defer alertMu.Unlock()
+	if time.Since(alertedAt) < 10*time.Minute {
+		return
+	}
+	alertedAt = time.Now()
+	msg := fmt.Sprintf("Feedback coordinator pane shows a dialog (%q). %d inbox event(s) are held until it is dismissed.", marker, pending)
+	log.Printf("ALERT: %s", msg)
+	var cmd *exec.Cmd
+	if custom := strings.TrimSpace(os.Getenv("FEEDBACK_ALERT_CMD")); custom != "" {
+		cmd = exec.Command(custom, msg)
+	} else {
+		cmd = exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title %q", msg, "rex-runner"))
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("alert command failed: %v", err)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
+}
+
 func drainInbox(ctx context.Context, cfg config.Config, rc *rex.Client) (int, error) {
 	q := inbox.New(cfg.StateDir)
 	events, nextLine, err := q.Pending()
@@ -606,6 +638,15 @@ func drainInbox(ctx context.Context, cfg config.Config, rc *rex.Client) (int, er
 	}
 	if coord.BlockID == "" {
 		return 0, errors.New("coordinator Rex block ID is empty")
+	}
+	// A dialog or menu in the pane would swallow the text, so nothing is sent or acked while one is open.
+	screen, err := rc.Capture(ctx, coord.SessionID, coord.BlockID)
+	if err != nil {
+		return 0, fmt.Errorf("read coordinator pane before drain: %w", err)
+	}
+	if marker := rex.DialogMarker(screen); marker != "" {
+		alertBlockedDrain(len(events), marker)
+		return 0, fmt.Errorf("%w (%q on screen); %d event(s) kept", errCoordinatorDialog, marker, len(events))
 	}
 	msg := inbox.FormatBatch(events)
 	if err := rc.SendPrompt(ctx, coord.SessionID, coord.BlockID, msg); err != nil {

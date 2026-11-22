@@ -8,6 +8,10 @@ Nondestructive Go binary for the Superlogical Rex feedback loop. Runs in paralle
 - **Nondestructive by default:** `rex-runner serve` leaves `--claim-apps` empty by default so it never claims Worker messages belonging to the live Python Orca runner until apps are explicitly opted in.
 - **Per-run isolation & reboot recovery:** every spawned builder gets its own folder (`~/Developer/feedback-runs/<chat>/`) and `run.json` manifest (`chat_id`, `repo`, `agent`, `session_id`, `rex_window_id`, `status`). `rex-runner boot` restores the `feedback-loop` Rex session, Tab 1 Fable coordinator (`start.sh`), and any unfinished Claude, Codex, or Antigravity builder tabs.
 - **Serialized FIFO inbox:** `rex-runner report` appends events to `inbox.jsonl` (file-locked). `rex-runner serve` watches Rex OSC 7501 `program_status_changed` events and drains into Fable only when Fable is `idle` or `done`.
+- **Drain waits for the prompt:** before typing, drain reads the coordinator pane. If its last lines show a dialog or
+  menu (`Esc not now`, `Enter to confirm`, `Esc to cancel`, `Enter to select`), nothing is sent or acked; the events
+  stay queued and an alert goes out at most every 10 minutes (`FEEDBACK_ALERT_CMD <message>`, else a macOS
+  notification).
 - **Deterministic reaper:** `rex-runner reap` checks idle TTL, clean `git status`, and zero unpushed commits before closing Rex tabs; dirty/unpushed folders are marked `kept` and reported to Fable.
 
 ## Builder account
