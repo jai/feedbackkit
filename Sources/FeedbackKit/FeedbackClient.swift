@@ -179,6 +179,9 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
 
     public var hasUndeliveredMessages: Bool { delivery.values.contains { $0 != .delivered } }
 
+    /// Its runner answered and named no coding thread, as the Rex runner does: no thread is coming.
+    var answeredWithoutThread: Bool { thread == nil && messages.contains { !$0.isJai } }
+
     public init(
         id: String, messages: [Message], isWorking: Bool, activity: String?, problem: String?,
         costCents: Int?, builderOnline: Bool, screenshots: [String: Int] = [:], thread: FeedbackAgentThread? = nil,
