@@ -19,6 +19,7 @@ from feedbackkit_runner.runner import (
     ALL_OFF,
     BUILDERS_FILE,
     OLD_STATE_FILE,
+    REX_APPS_FILE,
     STARTING_SECONDS,
     STATE_FILE,
     THREAD_WAIT_SECONDS,
@@ -688,6 +689,57 @@ RELEASE: JsonObject = {
     "url": "https://github.com/jai/agent-pager/releases/tag/mac-557",
     "prerelease": False,
 }
+
+
+class RexAppsFileTests(RunnerCase):
+    """rex-apps.json names the apps the Rex runner takes: this runner leaves them alone except in its own chats."""
+
+    def write_rex_apps(self, raw: object) -> None:
+        text = raw if isinstance(raw, str) else json.dumps(raw)
+        (Path(self.folder.name) / REX_APPS_FILE).write_text(text, "utf-8")
+
+    def test_a_new_chat_of_a_rex_app_is_left_pending(self) -> None:
+        self.write_rex_apps({"apps": ["agent-pager"]})
+        self.first_message()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual(self.orca.launches + self.orca_04.launches, [])
+        self.assertEqual(self.api.results, [])
+        self.assertNotIn(CHAT, runner.state["chats"])
+
+    def test_a_reply_in_a_chat_it_did_not_start_is_left_to_rex(self) -> None:
+        self.write_rex_apps({"apps": ["agent-pager"]})
+        self.reply()
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual((self.delivered, self.api.results), ([], []))
+        self.assertNotIn(CHAT, runner.state["chats"])
+
+    def test_a_chat_it_started_keeps_getting_its_messages(self) -> None:
+        self.first_message()
+        self.runner().tick()
+        self.cube.row = {
+            "id": "orca-claude:s1",
+            "app": "orca-claude",
+            "session_id": "s1",
+            "cwd": WORKTREE,
+            "_transcript": "/t/s1.jsonl",
+        }
+        self.now += STARTING_SECONDS
+        self.write_rex_apps({"apps": ["agent-pager"]})
+        self.reply()
+        self.runner().tick()
+        self.assertEqual([job["session_id"] for job in self.delivered], ["s1"])
+        self.assertEqual(self.api.results[-1][1:3], ("m_2", "delivered"))
+
+    def test_other_apps_and_a_bad_file_change_nothing(self) -> None:
+        for raw in ({"apps": ["prhub"]}, "not json", {"apps": "agent-pager"}):
+            with self.subTest(raw=raw):
+                self.write_rex_apps(raw)
+                self.assertEqual(self.runner().rex_apps() & {"agent-pager"}, frozenset())
+        self.first_message()
+        self.runner().tick()
+        self.assertEqual(len(self.orca.launches), 1)
 
 
 class BuildersFileTests(RunnerCase):

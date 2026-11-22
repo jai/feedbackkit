@@ -67,6 +67,13 @@ read or is not that shape is ignored whole (every builder on, in `BUILDERS` orde
 `FEEDBACK_BUILDERS_CONFIG_BAD reason=…` once per change and `status.json` says why in `builders_config_error`. The file
 never moves a chat: a chat without a recorded builder is still `BUILDERS`' first.
 
+## Rex apps
+
+`rex-apps.json` beside `status.json`: `{"apps": ["agent-pager", "prhub"]}`, the apps whose new chats the Rex runner
+(`rex-runner/`, Fable coordinator on Borg Cube 03) takes. This runner leaves a listed app's message pending unless the
+chat is one it started; those chats keep getting their messages here. The Rex runner's own list is `claim_apps` in its
+`config.json`; the two lists should name the same apps. With no file, or one of another shape, no app is left.
+
 ## Install
 
 On the Mac mini, as jai:

@@ -55,6 +55,9 @@ BUILDERS = (
 )
 # Beside STATE_FILE, written by the menu bar app: {"order": [host, ...], "off": [host, ...]} (runner/README.md#builders).
 BUILDERS_FILE = "builders.json"
+# Beside STATE_FILE: {"apps": [app, ...]}, the apps whose new chats the Rex runner (rex-runner/) takes. This runner
+# leaves their messages alone except in chats it started, which keep coming here (runner/README.md#rex-apps).
+REX_APPS_FILE = "rex-apps.json"
 ALL_OFF = "every builder is turned off"
 ORCA = "/Applications/Orca.app/Contents/Resources/bin/orca"
 CLONES = "/Users/jai/Developer"
@@ -703,6 +706,7 @@ class Runner:
         # A chat with no host recorded is the first builder's whatever builders.json says: config never moves a chat.
         self.first_host = builders[0].host
         self.builders_path = state_path.with_name(BUILDERS_FILE)
+        self.rex_apps_path = state_path.with_name(REX_APPS_FILE)
         # builders.json as last read (its stat, None while there is none), what it says and why it was ignored.
         self.builders_seen: object = None
         self.config, self.config_error = resolve_builders(list(self.builders), None)
@@ -910,6 +914,15 @@ class Runner:
             return self.first_on(agents)
         return next((host for host, builder in self.builders.items() if builder.cube.thread(clone)), self.first_host)
 
+    def rex_apps(self) -> frozenset[str]:
+        """The apps in rex-apps.json; none while there is no such file or it is not {"apps": [app, ...]}."""
+        try:
+            config = json.loads(self.rex_apps_path.read_text("utf-8"))
+        except OSError, ValueError, RecursionError:
+            return frozenset()
+        apps = config.get("apps") if isinstance(config, dict) else None
+        return frozenset(app for app in apps if isinstance(app, str)) if isinstance(apps, list) else frozenset()
+
     def take(self, item: JsonObject, agents: dict[str, dict[str, JsonObject] | None]) -> str | None:
         chat, message = str(item.get("chat")), str(item.get("message"))
         key = f"{chat}/{message}"
@@ -919,6 +932,8 @@ class Runner:
         sender = sender_of(item)
         if sender is None:
             return f"FEEDBACK chat={chat} message={message} outcome=skipped reason=no-sender"
+        if not known and sender["app"] in self.rex_apps():
+            return None  # the Rex runner's: a new chat of an app it takes, or a reply in a chat it started
         clone = known["clone"] if known else clone_path(sender["repo"], chat)
         host = self.host_of(chat, clone, bool(item.get("first")), agents)
         if host is None or agents.get(host) is None:
