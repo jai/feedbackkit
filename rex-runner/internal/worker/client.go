@@ -21,6 +21,8 @@ type WorkItem struct {
 	Role    string `json:"role"`
 	Name    string `json:"name,omitempty"`
 	Echo    bool   `json:"echo,omitempty"`
+	// First is the chat's first message (a new chat); later ones go to whichever runner started it.
+	First bool `json:"first"`
 }
 
 // ClaimResponse holds the payload returned by `POST /runner/claim`.

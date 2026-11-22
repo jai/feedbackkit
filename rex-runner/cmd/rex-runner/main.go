@@ -764,6 +764,11 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 					if !activeApps[item.App] {
 						continue // Leave non-opted-in apps untouched for Python Orca runner.
 					}
+					if !item.First {
+						if _, err := state.LoadChat(cfg.StateDir, item.Chat); err != nil {
+							continue // A reply in a chat Orca started: Orca keeps it.
+						}
+					}
 					claimed, err := wc.Claim(ctx, item)
 					if err != nil || claimed == nil {
 						continue
