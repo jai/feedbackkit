@@ -4,7 +4,9 @@
  * Per app, the config names who builds: an owner's feedback goes to a coding agent that ships, a builder's to one that
  * opens a pull request, and anyone else's opens a public issue. The runner on Jai's Mac takes the agents' work.
  */
+import { hasDashboardAuth } from "./access.ts";
 import { aboutInspectResponse, aboutResponse, aboutStatusResponse, putRexInspect, putRexStatus } from "./about.ts";
+import { aboutThreadsHtmlResponse, aboutThreadsJsonResponse } from "./tracker.ts";
 import { worldviewResponse } from "./worldview.ts";
 import {
   addFeedback,
@@ -86,6 +88,9 @@ export interface FeatureKitEnv {
   /** Optional Cloudflare IDs used to render deep links on `/about`. */
   CF_ACCOUNT_ID?: string;
   D1_DATABASE_ID?: string;
+  /** Optional Cloudflare Access team & AUD so `/about/threads.json` and `/about/inspect` unlock automatically behind Access. */
+  CF_ACCESS_TEAM?: string;
+  CF_ACCESS_AUD?: string;
 }
 
 export type Role = "owner" | "builder" | "issue";
@@ -504,11 +509,19 @@ export async function serveFeatureKit(request: Request, env: FeatureKitEnv, ctx?
   if (pathname === "/about/worldview" && request.method === "GET") {
     return worldviewResponse();
   }
+  if (pathname === "/about/threads" && request.method === "GET") {
+    return aboutThreadsHtmlResponse();
+  }
   if (pathname === "/about/status.json" && request.method === "GET") {
     return aboutStatusResponse(env, parseApps(env.APPS), Date.now());
   }
+  if (pathname === "/about/threads.json" && request.method === "GET") {
+    return (await hasDashboardAuth(request, env, hasBearer))
+      ? aboutThreadsJsonResponse(env, parseApps(env.APPS), Date.now())
+      : new Response("unauthorized\n", { status: 401 });
+  }
   if (pathname === "/about/inspect" && request.method === "GET") {
-    return hasBearer(request, env.RUNNER_TOKEN) || hasBearer(request, env.ADMIN_TOKEN)
+    return (await hasDashboardAuth(request, env, hasBearer))
       ? aboutInspectResponse(env)
       : new Response("unauthorized\n", { status: 401 });
   }

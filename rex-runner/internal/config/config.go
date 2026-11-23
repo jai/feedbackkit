@@ -12,15 +12,18 @@ const (
 	DefaultSessionName   = "feedback-loop"
 	DefaultCoordWindow   = "fable-coordinator"
 	DefaultCoordLauncher = "cly"
+	DefaultCoordModel    = "claude-fable-5-2"
 	DefaultWorkerURL     = "https://featurekit.jai-f89.workers.dev"
 )
 
 // Config holds runtime paths and options for rex-runner.
 type Config struct {
-	SessionName   string
-	CoordWindow   string
-	CoordDir      string
-	CoordLauncher string
+	SessionName     string
+	CoordWindow     string
+	CoordDir        string
+	CoordLauncher   string
+	CoordModel      string
+	ClaudeSwitchBin string
 	// BuilderConfigDir is passed to Claude builders as CLAUDE_CONFIG_DIR, so they run on that Claude account.
 	// Empty leaves the builder on the default account.
 	BuilderConfigDir string
@@ -43,6 +46,8 @@ func Default() Config {
 		CoordWindow:      envOr("FEEDBACK_COORD_WINDOW", DefaultCoordWindow),
 		CoordDir:         envOr("FEEDBACK_COORD_DIR", filepath.Join(home, "Developer", "feedback-coordinator")),
 		CoordLauncher:    envOr("FEEDBACK_COORD_LAUNCHER", DefaultCoordLauncher),
+		CoordModel:       envOr("FABLE_MODEL", DefaultCoordModel),
+		ClaudeSwitchBin:  envOr("CLAUDE_SWITCH_BIN", ""),
 		BuilderConfigDir: envOr("FEEDBACK_BUILDER_CONFIG_DIR", ""),
 		RunsDir:          envOr("FEEDBACK_RUNS_DIR", filepath.Join(home, "Developer", "feedback-runs")),
 		StateDir:         envOr("FEEDBACK_REX_STATE_DIR", filepath.Join(home, "Library", "Application Support", "feedbackkit-rex-runner")),

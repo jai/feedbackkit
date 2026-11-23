@@ -221,4 +221,24 @@ test("GET /about serves the live architecture dashboard HTML and sanitized statu
   assert.equal(inspected.panes.length, 1);
   assert.equal(inspected.panes[0].capture, "Fable prompt ready");
   assert.equal(inspected.recent_inbox.length, 1);
+
+  const trackerPage = await serveFeatureKit(new Request("https://kit.example/about/threads"), e);
+  assert.equal(trackerPage.status, 200);
+  assert.match(await trackerPage.text(), /Live Feedback Threads by App/);
+
+  const unauthThreads = await serveFeatureKit(new Request("https://kit.example/about/threads.json"), e);
+  assert.equal(unauthThreads.status, 401);
+
+  const threadsRes = await serveFeatureKit(
+    new Request("https://kit.example/about/threads.json", { headers: { Authorization: "Bearer runner" } }),
+    e,
+  );
+  assert.equal(threadsRes.status, 200);
+  const tracker = await threadsRes.json();
+  const prhubGroup = tracker.apps.find((a: { app: string }) => a.app === "prhub");
+  assert.ok(prhubGroup);
+  assert.equal(prhubGroup.total, 1);
+  assert.equal(prhubGroup.threads[0].state, "queued");
+  assert.equal(prhubGroup.threads[0].messages.length, 1);
+  assert.match(prhubGroup.threads[0].messages[0].text, /Secret user message/);
 });

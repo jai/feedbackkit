@@ -15,6 +15,9 @@
     // Cloudflare dashboard links for the `/about` live architecture page (populated at deploy time).
     "CF_ACCOUNT_ID": "__CLOUDFLARE_ACCOUNT_ID__",
     "D1_DATABASE_ID": "__D1_DATABASE_ID__",
+    // Cloudflare Access verification for `/about/threads.json` and `/about/inspect` (populated at deploy time).
+    "CF_ACCESS_TEAM": "__CF_ACCESS_TEAM__",
+    "CF_ACCESS_AUD": "__CF_ACCESS_AUD__",
     // Per app: its repo, who ships (owners), who opens PRs (builders), whether everyone else files an issue, and how it
     // names a sender when its Worker does not say (names), and its bundle id for pushes (topic).
     "APPS": "{\"prhub\":{\"repo\":\"jai/prhub\",\"owners\":[\"jai\"],\"builders\":[\"poom\"],\"issues\":true,\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.prreview\"},\"agent-pager\":{\"repo\":\"jai/agent-pager\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"},\"topic\":\"com.jaigovindani.agentpager\"},\"trips\":{\"repo\":\"jai/trips\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"}},\"feedbackkit-demo\":{\"repo\":\"jai/feedbackkit\",\"owners\":[\"jai\"],\"names\":{\"jai\":\"Jai\"}},\"e2e\":{\"repo\":\"jai/feedbackkit\",\"owners\":[\"feedbackkit-e2e\"],\"echo\":true}}"

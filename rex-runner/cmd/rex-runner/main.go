@@ -356,8 +356,11 @@ func cmdStatus(ctx context.Context, cfg config.Config, args []string) error {
 }
 
 func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (rex.CreatedWindow, error) {
-	startScript := filepath.Join(cfg.CoordDir, "start.sh")
-	coordCmd := []string{startScript, cfg.CoordLauncher}
+	sessionID, err := ensureCoordSessionID(cfg.CoordDir)
+	if err != nil {
+		return rex.CreatedWindow{}, fmt.Errorf("coordinator session id: %w", err)
+	}
+	coordCmd := coordinatorCommand(cfg, sessionID, coordTranscriptExists(cfg.CoordDir, sessionID))
 
 	sess, err := findCoordSession(ctx, cfg, rc)
 	if err != nil {
@@ -834,31 +837,57 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 	}
 
 	// Stream Rex OSC 7501 events so inbox drains only when Fable is idle/done.
-	go func() {
-		for ctx.Err() == nil {
-			err := rc.StreamProgramStatus(ctx, coord.SessionID, func(ev rex.ProgramStatusEvent) {
-				if ev.BlockID != coord.BlockID {
+	// Rebound automatically whenever the coordinator watchdog recreates Tab 1.
+	var (
+		streamMu     sync.Mutex
+		streamCancel context.CancelFunc
+		activeCoord  = coord
+	)
+	startCoordStream := func(target rex.CreatedWindow) {
+		streamMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
+		}
+		activeCoord = target
+		sctx, scancel := context.WithCancel(ctx)
+		streamCancel = scancel
+		streamMu.Unlock()
+
+		go func(c rex.CreatedWindow) {
+			for sctx.Err() == nil {
+				err := rc.StreamProgramStatus(sctx, c.SessionID, func(ev rex.ProgramStatusEvent) {
+					if ev.BlockID != c.BlockID {
+						return
+					}
+					mu.Lock()
+					coordState = ev.State
+					mu.Unlock()
+					log.Printf("coordinator status: state=%s kind=%s", ev.State, ev.Kind)
+					if ev.State == "idle" || ev.State == "done" || ev.State == "clear" {
+						tryDrain()
+					}
+				})
+				if sctx.Err() != nil {
 					return
 				}
-				mu.Lock()
-				coordState = ev.State
-				mu.Unlock()
-				log.Printf("coordinator status: state=%s kind=%s", ev.State, ev.Kind)
-				if ev.State == "idle" || ev.State == "done" || ev.State == "clear" {
-					tryDrain()
+				log.Printf("rex events stream ended (%v); reconnecting in 3s", err)
+				select {
+				case <-sctx.Done():
+					return
+				case <-time.After(3 * time.Second):
 				}
-			})
-			if ctx.Err() != nil {
-				return
 			}
-			log.Printf("rex events stream ended (%v); reconnecting in 3s", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(3 * time.Second):
-			}
+		}(target)
+	}
+	startCoordStream(coord)
+	defer func() {
+		streamMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
 		}
+		streamMu.Unlock()
 	}()
+	watchdog := newCoordWatchdog()
 
 	// Worker wake-up loop (hot-reloads config.json claim_apps so switching apps needs no restart).
 	if cfg.WorkerURL != "" && cfg.RunnerToken != "" {
@@ -984,6 +1013,17 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 				}
 			}
 		case <-builderTicker.C:
+			streamMu.Lock()
+			curCoord := activeCoord
+			streamMu.Unlock()
+			if nextCoord, changed, err := watchdog.check(ctx, cfg, rc, curCoord); err != nil {
+				log.Printf("coordinator watchdog error: %v", err)
+			} else if changed {
+				mu.Lock()
+				coordState = "idle"
+				mu.Unlock()
+				startCoordStream(nextCoord)
+			}
 			checkBuilders(ctx, cfg, rc)
 		case <-reapTicker.C:
 			decisions, err := reaper.Sweep(ctx, reaper.Options{

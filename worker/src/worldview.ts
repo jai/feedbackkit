@@ -331,6 +331,7 @@ const WORLDVIEW_HTML = `<!doctype html>
     </div>
     <nav class="nav">
       <a class="btn" href="https://systems-floorplan.pages.dev/">← Systems Home</a>
+      <a class="btn primary" href="/about/threads">Live Threads →</a>
       <a class="btn" href="/about">← Live System Tree</a>
       <button class="btn" id="termsBtn" type="button" aria-expanded="false">Terms</button>
       <button class="btn primary" id="copyBtn" type="button">Copy Resume Prompt</button>

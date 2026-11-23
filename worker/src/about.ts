@@ -589,6 +589,47 @@ const ABOUT_HTML = `<!doctype html>
   }
   .progress-fill { height: 100%; background: var(--live); transition: width 250ms ease; }
 
+  .live-threads-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1.05rem;
+    margin: 0 0 1rem;
+  }
+  .live-threads-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.65rem;
+  }
+  .live-threads-head h2 { margin: 0; font-size: 1.15rem; font-weight: 650; }
+  .live-threads-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
+    gap: 0.65rem;
+  }
+  .mini-thread {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .mini-thread:hover { border-color: var(--accent); }
+  .mini-thread.st-needs_you { border-left-color: var(--standby); }
+  .mini-thread.st-working { border-left-color: var(--live); }
+  .mini-thread.st-queued { border-left-color: var(--accent); }
+  .mini-thread.st-failed { border-left-color: var(--offline); }
+  .mini-thread-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-dim); }
+  .mini-thread-title { font-size: 0.98rem; font-weight: 650; line-height: 1.3; }
+  .mini-thread-act { font-size: 0.88rem; color: var(--text-dim); }
   .legend {
     display: flex;
     flex-wrap: wrap;
@@ -828,7 +869,8 @@ const ABOUT_HTML = `<!doctype html>
     </div>
     <div class="controls">
       <a class="btn" href="https://systems-floorplan.pages.dev/">← Systems Home</a>
-      <a class="btn worldview" href="/about/worldview">Mental Model (30s) →</a>
+      <a class="btn worldview" href="/about/threads">Live Threads →</a>
+      <a class="btn" href="/about/worldview">Mental Model (30s) →</a>
       <button class="btn" id="openInspectorBtn" type="button">Inspector</button>
       <button class="btn" id="termsBtn" type="button" aria-expanded="false">Terms</button>
       <button class="btn mode-btn" data-mode="flow" aria-pressed="true">1 · Flow</button>
@@ -874,6 +916,14 @@ const ABOUT_HTML = `<!doctype html>
 
   <section class="terms-drawer" id="termsDrawer" aria-label="Glossary of system terms">
     <dl class="terms-grid" id="termsGrid"></dl>
+  </section>
+
+  <section class="live-threads-panel" id="liveThreadsPanel" aria-label="Live feedback threads by app">
+    <div class="live-threads-head">
+      <h2>Live Threads by App</h2>
+      <a class="btn worldview" href="/about/threads">Open Full Tracker →</a>
+    </div>
+    <div id="liveThreadsBody" class="subtitle">Loading live threads…</div>
   </section>
 
   <div class="legend">
@@ -1442,22 +1492,25 @@ function renderInspectDump() {
   const clearBtn = document.getElementById("inspectClearBtn");
   const meta = document.getElementById("inspectMeta");
   const dump = document.getElementById("inspectDump");
-  if (!token) {
-    input.style.display = "inline-block";
-    unlockBtn.style.display = "inline-block";
-    clearBtn.style.display = "none";
-    dump.style.display = "none";
-    meta.textContent = "Enter your runner token once (stored only in this browser) to inspect live Rex panes and inbox events.";
-    return;
-  }
-  input.style.display = "none";
-  unlockBtn.style.display = "none";
-  clearBtn.style.display = "inline-block";
   if (!INSPECT) {
+    input.style.display = token ? "none" : "inline-block";
+    unlockBtn.style.display = token ? "none" : "inline-block";
+    clearBtn.style.display = token ? "inline-block" : "none";
     meta.textContent = "Fetching live Rex terminal snapshot…";
     dump.style.display = "none";
     return;
   }
+  if (INSPECT.error === "HTTP 401") {
+    input.style.display = "inline-block";
+    unlockBtn.style.display = "inline-block";
+    clearBtn.style.display = token ? "inline-block" : "none";
+    dump.style.display = "none";
+    meta.textContent = "Sign in behind Cloudflare Access or enter your runner token once to inspect live Rex panes.";
+    return;
+  }
+  input.style.display = "none";
+  unlockBtn.style.display = "none";
+  clearBtn.style.display = token ? "inline-block" : "none";
   if (INSPECT.error) {
     meta.textContent = "Inspect auth/fetch error: " + INSPECT.error;
     dump.style.display = "none";
@@ -1491,15 +1544,65 @@ function renderInspectDump() {
 
 async function pollInspect() {
   const token = getInspectToken();
-  if (!token) { INSPECT = null; renderInspectDump(); return; }
+  const headers = token ? { Authorization: "Bearer " + token } : {};
   try {
-    const res = await fetch("/about/inspect", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    const res = await fetch("/about/inspect", { headers, cache: "no-store" });
     if (!res.ok) { INSPECT = { error: "HTTP " + res.status }; renderInspectDump(); return; }
     INSPECT = await res.json();
     renderInspectDump();
   } catch (err) {
     INSPECT = { error: err.message };
     renderInspectDump();
+  }
+}
+
+function escHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function pollThreads() {
+  const box = document.getElementById("liveThreadsBody");
+  const token = getInspectToken();
+  const headers = token ? { Authorization: "Bearer " + token } : {};
+  try {
+    const res = await fetch("/about/threads.json", { headers, cache: "no-store" });
+    if (res.status === 401) {
+      box.innerHTML = 'Sign in via Cloudflare Access or unlock with your runner token to view live threads. <a href="/about/threads">Open tracker →</a>';
+      return;
+    }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const active = [];
+    for (const g of data.apps || []) {
+      for (const t of g.threads || []) {
+        if (t.state === "needs_you" || t.state === "working" || t.state === "queued" || t.state === "failed") {
+          active.push(t);
+        }
+      }
+    }
+    if (active.length === 0) {
+      const total = (data.apps || []).reduce((n, g) => n + g.total, 0);
+      box.innerHTML = 'All quiet — 0 active or waiting threads (' + total + ' total across ' + (data.apps || []).length + ' apps). <a href="/about/threads">Browse all threads →</a>';
+      return;
+    }
+    let html = '<div class="live-threads-grid">';
+    for (const t of active.slice(0, 12)) {
+      const pillCls = t.state === "needs_you" ? "standby" : t.state === "working" ? "live" : t.state === "failed" ? "offline" : "live";
+      const label = t.state === "needs_you" ? (t.asks ? "Needs answer" : "Needs you") : t.state === "working" ? "Working" : t.state === "queued" ? "Queued" : "Failed";
+      const ageSec = Math.max(0, Math.floor((Date.now() - t.updated_at) / 1000));
+      html += '<a class="mini-thread st-' + escHtml(t.state) + '" href="/about/threads#chat=' + escHtml(t.id) + '">' +
+        '<div class="mini-thread-top"><span class="pill ' + pillCls + '">' + escHtml(label) + '</span><span>' + escHtml(t.app) + ' · ' + escHtml(t.lane) + '</span><span style="margin-left:auto">' + escHtml(fmtAge(ageSec)) + '</span></div>' +
+        '<div class="mini-thread-title">' + escHtml(t.title) + '</div>' +
+        (t.activity ? '<div class="mini-thread-act">' + escHtml(t.activity) + '</div>' : '') +
+        '</a>';
+    }
+    html += '</div>';
+    if (active.length > 12) {
+      html += '<p class="subtitle" style="margin-top:0.6rem">Showing 12 of ' + active.length + ' active threads. <a href="/about/threads">See all →</a></p>';
+    }
+    box.innerHTML = html;
+  } catch (err) {
+    box.textContent = "Live threads sync error: " + err.message;
   }
 }
 
@@ -1710,7 +1813,16 @@ document.getElementById("themeBtn").addEventListener("click", () => {
 renderInspector();
 pollStatus();
 pollInspect();
-setInterval(() => { pollStatus(); pollInspect(); }, 10000);
+pollThreads();
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { pollStatus(); pollInspect(); pollThreads(); }
+});
+setInterval(() => {
+  if (document.hidden) return;
+  pollStatus();
+  pollInspect();
+  pollThreads();
+}, 10000);
 </script>
 </body>
 </html>

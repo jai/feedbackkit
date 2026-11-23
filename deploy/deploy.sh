@@ -35,7 +35,9 @@ database_id=$(npx wrangler d1 list --json | node -e '
     console.log(found.uuid);
   });' "$DATABASE")
 sed -e "s/__CLOUDFLARE_ACCOUNT_ID__/$CLOUDFLARE_ACCOUNT_ID/" -e "s#__PUBLIC_URL__#$PUBLIC_URL#" \
-  -e "s/__D1_DATABASE_ID__/$database_id/" ../deploy/wrangler.template.jsonc >"../$config"
+  -e "s/__D1_DATABASE_ID__/$database_id/" \
+  -e "s/__CF_ACCESS_TEAM__/${CF_ACCESS_TEAM:-}/" \
+  -e "s/__CF_ACCESS_AUD__/${CF_ACCESS_AUD:-}/" ../deploy/wrangler.template.jsonc >"../$config"
 
 echo "deploy: tests"
 npm test >/dev/null 2>&1 || {
