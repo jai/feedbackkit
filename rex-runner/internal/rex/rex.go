@@ -101,6 +101,12 @@ func (c *Client) FindSessionByLabel(ctx context.Context, label string) (*Session
 	return nil, nil
 }
 
+// RenameSession sets a session's label.
+func (c *Client) RenameSession(ctx context.Context, sessionID, label string) error {
+	_, err := c.Exec(ctx, nil, c.Bin, "session", "rename", sessionID, label)
+	return err
+}
+
 func (c *Client) NewSession(ctx context.Context, label, windowLabel, cwd string, command []string) (CreatedWindow, error) {
 	args := []string{"new", label, "--window", windowLabel, "--keep-open", "--json"}
 	if cwd != "" {

@@ -108,7 +108,7 @@ func buildStatus(ctx context.Context, cfg config.Config, rc *rex.Client) (status
 		ClaimApps:      []string{},
 		GeneratedAtUTC: time.Now().UTC(),
 	}
-	if sess, err := rc.FindSessionByLabel(ctx, cfg.SessionName); err == nil && sess != nil {
+	if sess, err := findCoordSession(ctx, cfg, rc); err == nil && sess != nil {
 		snap.SessionID = sess.SessionID
 		if wins, err := rc.ListWindows(ctx, sess.SessionID); err == nil {
 			for _, w := range wins {
@@ -338,7 +338,7 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 	startScript := filepath.Join(cfg.CoordDir, "start.sh")
 	coordCmd := []string{startScript, cfg.CoordLauncher}
 
-	sess, err := rc.FindSessionByLabel(ctx, cfg.SessionName)
+	sess, err := findCoordSession(ctx, cfg, rc)
 	if err != nil {
 		return rex.CreatedWindow{}, err
 	}
@@ -359,6 +359,41 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 		}
 	}
 	return rc.NewWindow(ctx, sess.SessionID, cfg.CoordWindow, cfg.CoordDir, false, coordCmd)
+}
+
+// findCoordSession finds the coordinator's Rex session by label and remembers its ID. Agents in the session
+// rename it (Rex asks every agent to name its session); when the label is gone but the remembered session is
+// still there, it is renamed back and used, so a rename never starts a second coordinator.
+func findCoordSession(ctx context.Context, cfg config.Config, rc *rex.Client) (*rex.Session, error) {
+	sessions, err := rc.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	saved := filepath.Join(cfg.StateDir, "coordinator-session")
+	for i := range sessions {
+		if sessions[i].Label == cfg.SessionName {
+			if raw, _ := os.ReadFile(saved); strings.TrimSpace(string(raw)) != sessions[i].SessionID {
+				_ = os.WriteFile(saved, []byte(sessions[i].SessionID+"\n"), 0o600)
+			}
+			return &sessions[i], nil
+		}
+	}
+	raw, _ := os.ReadFile(saved)
+	id := strings.TrimSpace(string(raw))
+	if id == "" {
+		return nil, nil
+	}
+	for i := range sessions {
+		if sessions[i].SessionID == id {
+			log.Printf("coordinator session %s was renamed to %q; renaming back to %q", id, sessions[i].Label, cfg.SessionName)
+			if err := rc.RenameSession(ctx, id, cfg.SessionName); err != nil {
+				log.Printf("rename back failed: %v", err)
+			}
+			sessions[i].Label = cfg.SessionName
+			return &sessions[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // builderCommand is the builder's command line. A Claude builder with a configDir runs under
