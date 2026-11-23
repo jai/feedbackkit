@@ -36,7 +36,9 @@ var transcriptExists = func(sessionID string) bool {
 
 // stuckReason says why an active builder is not working, from its screen and age; "" when it looks fine.
 func stuckReason(m state.RunManifest, screen string, now time.Time) string {
-	if marker := rex.DialogMarker(screen); marker != "" {
+	// A permission prompt with Claude Code's countdown blocks itself and the builder carries on: not stuck.
+	selfClearing := strings.Contains(screen, "will automatically block this request")
+	if marker := rex.DialogMarker(screen); marker != "" && !selfClearing {
 		return fmt.Sprintf("the builder pane is waiting at a prompt (%q on screen)", marker)
 	}
 	if m.Agent == "claude" && m.SessionID != "" && !m.CreatedAt.IsZero() &&

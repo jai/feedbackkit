@@ -23,6 +23,11 @@ func TestStuckReason(t *testing.T) {
 		t.Fatalf("healthy pane: %q", got)
 	}
 
+	countdown := "⚠ Claude Code will automatically block this request in 1:41\nDo you want to proceed?\n❯ 1. Yes\n Esc to cancel · Tab to amend\n"
+	if got := stuckReason(m, countdown, now); got != "" {
+		t.Fatalf("self-clearing prompt: %q", got)
+	}
+
 	transcriptExists = func(string) bool { return false }
 	if got := stuckReason(m, "$ \n", now); !strings.Contains(got, "no transcript") {
 		t.Fatalf("no transcript: %q", got)
