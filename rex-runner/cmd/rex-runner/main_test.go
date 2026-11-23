@@ -11,7 +11,7 @@ func TestBuilderCommandPassesClaudeConfigDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"env", "CLAUDE_CONFIG_DIR=/tmp/claude-two", "claude", "--dangerously-skip-permissions",
+		"env", "REX_SESSION_NAMING=false", "CLAUDE_CONFIG_DIR=/tmp/claude-two", "claude", "--dangerously-skip-permissions",
 		"--session-id", "sid", "do it",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -24,7 +24,7 @@ func TestBuilderCommandWithoutConfigDirIsPlainClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--dangerously-skip-permissions", "--resume", "sid"}
+	want := []string{"env", "REX_SESSION_NAMING=false", "claude", "--dangerously-skip-permissions", "--resume", "sid"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}

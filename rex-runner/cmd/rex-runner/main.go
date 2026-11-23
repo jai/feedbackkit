@@ -397,14 +397,16 @@ func findCoordSession(ctx context.Context, cfg config.Config, rc *rex.Client) (*
 }
 
 // builderCommand is the builder's command line. A Claude builder with a configDir runs under
-// `env CLAUDE_CONFIG_DIR=<configDir>`, which picks its Claude account.
+// `env CLAUDE_CONFIG_DIR=<configDir>`, which picks its Claude account. REX_SESSION_NAMING=false is read by the Rex
+// SessionStart hook in that home: builders share one Rex session, so they must not be told to name it.
 func builderCommand(agent, model, sessionID, prompt, configDir string, resume bool) ([]string, error) {
 	switch agent {
 	case "claude":
-		args := []string{"claude", "--dangerously-skip-permissions"}
+		args := []string{"env", "REX_SESSION_NAMING=false"}
 		if configDir != "" {
-			args = append([]string{"env", "CLAUDE_CONFIG_DIR=" + configDir}, args...)
+			args = append(args, "CLAUDE_CONFIG_DIR="+configDir)
 		}
+		args = append(args, "claude", "--dangerously-skip-permissions")
 		if model != "" {
 			args = append(args, "--model", model)
 		}
