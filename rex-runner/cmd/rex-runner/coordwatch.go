@@ -319,6 +319,15 @@ func (w *coordWatchdog) check(ctx context.Context, cfg config.Config, rc *rex.Cl
 	if err != nil {
 		return updated, rebound, err
 	}
+	// Auto-dismiss non-destructive Claude Code nag modals (e.g. "We recommend compacting earlier · esc not now")
+	// so the coordinator never stalls overnight waiting for Escape.
+	if rex.DialogMarker(screen) == "esc not now" {
+		log.Printf("coordinator watchdog: dismissing %q modal via Escape in %s", "esc not now", updated.BlockID)
+		if err := rc.SendKey(ctx, updated.SessionID, updated.BlockID, "escape"); err != nil {
+			log.Printf("coordinator watchdog: send escape failed: %v", err)
+		}
+		return updated, rebound, nil
+	}
 	reason := coordinatorDownReason(screen)
 	if reason == "" {
 		return updated, rebound, nil

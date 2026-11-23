@@ -188,3 +188,38 @@ func TestCoordWatchdogRelaunchesExitedPaneAndHonorsCooldown(t *testing.T) {
 		t.Fatalf("expected cooldown block + alert: changed2=%v created=%d alerts=%v", changed2, created, alerts)
 	}
 }
+
+func TestCoordWatchdogDismissesEscNotNowNagModal(t *testing.T) {
+	tmp := t.TempDir()
+	var sentKey string
+	rc := &rex.Client{
+		Bin: "rex",
+		Exec: func(_ context.Context, _ []byte, _ string, args ...string) ([]byte, error) {
+			joined := strings.Join(args, " ")
+			switch {
+			case joined == "ls --json":
+				return []byte(`{"sessions":[{"session_id":"sess-1","label":"feedback-loop"}]}`), nil
+			case strings.HasPrefix(joined, "window ls"):
+				return []byte(`{"windows":[{"window_id":"win-1","label":"fable-coordinator","focused_block_id":"blk-1"}]}`), nil
+			case strings.HasPrefix(joined, "capture "):
+				return []byte("We recommend compacting earlier\n↑/↓ choose · enter confirm · esc not now\n"), nil
+			case strings.HasPrefix(joined, "send-key "):
+				sentKey = args[len(args)-1]
+				return nil, nil
+			default:
+				t.Fatalf("unexpected rex call: %v", args)
+				return nil, nil
+			}
+		},
+	}
+	wd := newCoordWatchdog()
+	cfg := config.Config{SessionName: "feedback-loop", CoordWindow: "fable-coordinator", StateDir: tmp}
+	cur := rex.CreatedWindow{SessionID: "sess-1", WindowID: "win-1", BlockID: "blk-1"}
+	next, changed, err := wd.check(context.Background(), cfg, rc, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || next != cur || sentKey != "escape" {
+		t.Fatalf("expected escape dismiss without restart: next=%+v changed=%v sentKey=%q", next, changed, sentKey)
+	}
+}

@@ -212,6 +212,12 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, blockID, text string
 	return err
 }
 
+// SendKey sends one named key (e.g. "escape", "enter") to a Rex block.
+func (c *Client) SendKey(ctx context.Context, sessionID, blockID, key string) error {
+	_, err := c.Exec(ctx, nil, c.Bin, "send-key", "-s", sessionID, "-b", blockID, key)
+	return err
+}
+
 // Capture returns the trimmed visible screen/scrollback text of one Rex terminal block.
 func (c *Client) Capture(ctx context.Context, sessionID, blockID string) (string, error) {
 	out, err := c.Exec(ctx, nil, c.Bin, "capture", "-s", sessionID, "-b", blockID, "--trim")
