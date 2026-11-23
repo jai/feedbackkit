@@ -241,6 +241,8 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 	login := fs.String("login", "", "sender GitHub login (auto-resolved from chat record if omitted)")
 	working := fs.Bool("working", false, "whether the agent is still actively working")
 	activity := fs.String("activity", "", "optional short working status line (<=80 chars)")
+	var ships shipFlags
+	fs.Var(&ships, "ship", "what the chat shipped: owner/repo@sha[@release-tag]; repeatable. Sets the chat's status to On main / Released; kept for later replies")
 	_ = fs.Parse(args)
 
 	if *chatID == "" {
@@ -273,6 +275,13 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 			At:   now.Format(time.RFC3339),
 		})
 	}
+	if len(ships) > 0 {
+		landed, err := resolveShipped(ships)
+		if err != nil {
+			return err
+		}
+		rec.Shipped = landed
+	}
 	if err := state.SaveChat(cfg.StateDir, rec); err != nil {
 		return err
 	}
@@ -293,6 +302,7 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 		IsWorking: *working,
 		Activity:  act,
 		Thread:    nil,
+		Shipped:   rec.Shipped,
 	}); err != nil {
 		return err
 	}

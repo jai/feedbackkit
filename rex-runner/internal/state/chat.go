@@ -18,14 +18,16 @@ type ChatReply struct {
 // ChatRecord persists sender routing metadata and agent reply history for one FeedbackKit chat
 // so `rex-runner reply` can post incremental replies back to the user's phone/app.
 type ChatRecord struct {
-	ChatID    string      `json:"chat_id"`
-	App       string      `json:"app"`
-	Login     string      `json:"login"`
-	Repo      string      `json:"repo,omitempty"`
-	Role      string      `json:"role,omitempty"`
-	Title     string      `json:"title,omitempty"`
-	Messages  []ChatReply `json:"messages"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ChatID   string      `json:"chat_id"`
+	App      string      `json:"app"`
+	Login    string      `json:"login"`
+	Repo     string      `json:"repo,omitempty"`
+	Role     string      `json:"role,omitempty"`
+	Title    string      `json:"title,omitempty"`
+	Messages []ChatReply `json:"messages"`
+	// Shipped is the last `shipped` object sent for this chat; every reply resends it, as the Worker replaces the side.
+	Shipped   json.RawMessage `json:"shipped,omitempty"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 func chatPath(stateDir, chatID string) string {
