@@ -533,6 +533,9 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 		runDir = filepath.Join(cfg.RunsDir, *chatID)
 	}
 	sessionID := newUUIDv4()
+	if strings.TrimSpace(*prompt) != "" {
+		*prompt += builderRules
+	}
 	cmdArgs, err := builderCommand(*agent, *model, sessionID, *prompt, config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), false)
 	if err != nil {
 		return err
@@ -590,6 +593,17 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 		return err
 	}
 	fmt.Printf("spawned %s: window=%s block=%s dir=%s\n", m.ChatID, created.WindowID, created.BlockID, m.Dir)
+	// Look at the new pane once it has drawn: a builder waiting at a prompt (folder trust, login) never starts.
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(8 * time.Second):
+	}
+	if saved, err := state.Load(m.Dir); err == nil {
+		if reason, _ := checkBuilder(ctx, cfg, rc, saved, time.Now()); reason != "" {
+			fmt.Printf("WARNING: %s is not working: %s\n", m.ChatID, reason)
+		}
+	}
 	return nil
 }
 
@@ -917,6 +931,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 	defer drainTicker.Stop()
 	statusTicker := time.NewTicker(15 * time.Second)
 	defer statusTicker.Stop()
+	builderTicker := time.NewTicker(30 * time.Second)
+	defer builderTicker.Stop()
 	reapTicker := time.NewTicker(*reapEvery)
 	defer reapTicker.Stop()
 
@@ -942,6 +958,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 					log.Printf("push-status error: %v", err)
 				}
 			}
+		case <-builderTicker.C:
+			checkBuilders(ctx, cfg, rc)
 		case <-reapTicker.C:
 			decisions, err := reaper.Sweep(ctx, reaper.Options{
 				RunsDir:     cfg.RunsDir,

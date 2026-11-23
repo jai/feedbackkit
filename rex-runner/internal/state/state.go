@@ -44,8 +44,10 @@ type RunManifest struct {
 	Summary        string    `json:"summary,omitempty"`
 	PR             string    `json:"pr,omitempty"`
 	KeptReason     string    `json:"kept_reason,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// StuckReason is why the runner last found this active builder not working; empty when it looked fine.
+	StuckReason string    `json:"stuck_reason,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // IsTerminal reports whether the run no longer needs resuming on reboot.
