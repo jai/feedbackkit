@@ -2,14 +2,15 @@ import AgentChatKit
 import SwiftUI
 
 /// Where a feedback chat stands, as its row says it: queued, building, needs you, PR open, on main, checks failed,
-/// released or idle. The agent's work comes first (queued, building); then what it shipped; then whether it waits on
-/// the sender. An agent that stopped after it shipped is done, not waiting.
+/// released or idle. The agent's work comes first (queued, building); then a question it asked the sender, whatever it
+/// shipped; then what it shipped; then whether it waits on the sender. An agent that stopped after it shipped without
+/// asking is done, not waiting.
 public enum FeedbackStatus: Equatable, Sendable {
     /// A message waits for the runner or the agent's next turn.
     case queued
     /// The agent is working on it.
     case building(activity: String?)
-    /// The agent spoke last and stopped, and nothing shipped.
+    /// The agent asked the sender a question; or it spoke last and stopped, and nothing shipped.
     case needsYou
     case pullRequestOpen
     /// Its commits are on main and in no release yet.
@@ -23,6 +24,10 @@ public enum FeedbackStatus: Equatable, Sendable {
     public init?(agent: FeedbackThreadAgent?, shipped: FeedbackShipped?) {
         if let agent, agent.state == .working {
             self = agent.isQueued ? .queued : .building(activity: agent.activity)
+            return
+        }
+        if let agent, agent.state == .needsYou, agent.asks {
+            self = .needsYou
             return
         }
         if let shipped = shipped.flatMap(Self.init(shipped:)) {

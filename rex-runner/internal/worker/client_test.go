@@ -85,3 +85,24 @@ func TestWorkerClientPollWaitClaimResult(t *testing.T) {
 		t.Fatalf("post agent: %v", err)
 	}
 }
+
+func TestAgentSideSaysItAsksOnlyWhenItDoes(t *testing.T) {
+	side := func(asks bool) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(AgentSidePayload{App: "prhub", Login: "jai", Chat: "fb-1", Messages: []AgentMessage{}, Asks: asks})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := side(true); got["asks"] != true {
+		t.Fatalf("a question: %v", got)
+	}
+	if _, sent := side(false)["asks"]; sent {
+		t.Fatal("no question: the key is left out, as a Worker before `asks` expects")
+	}
+}

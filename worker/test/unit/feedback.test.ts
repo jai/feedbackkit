@@ -102,3 +102,38 @@ test("a thread's state on the list: queued, working, needs you or idle", () => {
   // The sender spoke last and the agent has seen it but said nothing: idle.
   assert.deepEqual(threadAgentState(side(false, 3000), 2000, 1500, false), { state: "idle", activity: null });
 });
+
+test("an open question needs the sender until they answer, even while the agent works", () => {
+  const asking = (isWorking: boolean, updatedAt: number) => ({
+    messages: [],
+    isWorking,
+    activity: isWorking ? "Building" : null,
+    thread: null,
+    updatedAt,
+    asks: true as const,
+  });
+  const needsYou = { state: "needs_you", activity: null, asks: true };
+  assert.deepEqual(threadAgentState(asking(false, 3000), 1000, 2500, false), needsYou);
+  assert.deepEqual(threadAgentState(asking(true, 3000), 1000, 2500, false), needsYou, "asking beats working");
+  assert.deepEqual(threadAgentState(asking(true, 3000), null, null, false), needsYou, "no message of either side");
+  // The sender answered: the agent's work shows again, or the answer waits for its turn.
+  assert.deepEqual(threadAgentState(asking(true, 3000), 4000, 2500, false), { state: "working", activity: "Building" });
+  assert.deepEqual(threadAgentState(asking(false, 3000), 4000, 2500, false), {
+    state: "working",
+    activity: null,
+    queued: true,
+  });
+  assert.deepEqual(threadAgentState(asking(false, 3000), 2000, 2500, true), {
+    state: "working",
+    activity: null,
+    queued: true,
+  });
+});
+
+test("the runner says an agent asks with a boolean, kept only when true", () => {
+  const side = { messages: [], isWorking: true, activity: null };
+  assert.equal(parseAgentSide({ ...side, asks: true }, 7)?.asks, true);
+  assert.equal("asks" in parseAgentSide({ ...side, asks: false }, 7)!, false);
+  assert.equal("asks" in parseAgentSide(side, 7)!, false, "a runner before questions");
+  assert.equal(parseAgentSide({ ...side, asks: "yes" }, 7), null);
+});

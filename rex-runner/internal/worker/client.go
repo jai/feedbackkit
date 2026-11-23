@@ -224,6 +224,8 @@ type AgentSidePayload struct {
 	Thread    any            `json:"thread"`
 	// Shipped is the Worker's `shipped` object (worker/src/shipped.ts); omitted until the chat shipped something.
 	Shipped json.RawMessage `json:"shipped,omitempty"`
+	// Asks says the agent's last word is a question for the sender: the chat's row shows Needs you until they answer.
+	Asks bool `json:"asks,omitempty"`
 }
 
 // PostAgent pushes the agent's messages and working status to `POST /runner/agent`.

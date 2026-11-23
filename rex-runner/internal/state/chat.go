@@ -26,8 +26,11 @@ type ChatRecord struct {
 	Title    string      `json:"title,omitempty"`
 	Messages []ChatReply `json:"messages"`
 	// Shipped is the last `shipped` object sent for this chat; every reply resends it, as the Worker replaces the side.
-	Shipped   json.RawMessage `json:"shipped,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	Shipped json.RawMessage `json:"shipped,omitempty"`
+	// Asks is whether the last reply asked the sender a question (`reply --ask`); each reply sets it anew, and a message
+	// of the sender's clears it.
+	Asks      bool      `json:"asks,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func chatPath(stateDir, chatID string) string {

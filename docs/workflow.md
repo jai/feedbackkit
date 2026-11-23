@@ -122,7 +122,7 @@ Release validation uses the candidate workflow; host capacity and cordons remain
   `FeedbackKitIntegrationTests`: 16 tests of real preferences and local ACP/REST interactions.
   `FeedbackKitRenderingTests`: two macOS pixel-rendering UI checks, run in the macOS UI lane before the app plan. Shared chat
   delivery tick rendering, generic controls and screenshot viewer gestures belong to AgentChatKit.
-- Worker: 14 pure units with network disabled and shuffled order; 56 local integration declarations use actual
+- Worker: 16 pure units with network disabled and shuffled order; 57 local integration declarations use actual
   SQLite/migrations or server/adapter contracts (one ACP capability skip). SQLite in memory remains integration.
 - Sample Worker: 2 isolated authentication/config units, network disabled and shuffled.
 - Python runner: 45 isolated units with sockets disabled and shuffled; 98 filesystem/Git/process integrations.

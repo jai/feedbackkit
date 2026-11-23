@@ -2,7 +2,8 @@
 import Foundation
 import Testing
 
-/// A row's one status: the agent's work first, then what shipped, then whether it waits on the sender.
+/// A row's one status: the agent's work first, then a question it asked, then what shipped, then whether it waits on
+/// the sender.
 struct FeedbackStatusTests {
     private let url = URL(string: "https://github.com/acme/app")!
 
@@ -11,12 +12,13 @@ struct FeedbackStatusTests {
               release: released ? .init(tag: "ios-v1.3.0", name: "ios-v1.3.0", url: url) : nil)
     }
 
-    private enum Agent { case queued, working, needsYou, idle }
+    private enum Agent { case queued, working, asks, needsYou, idle }
 
     private func status(_ state: Agent?, _ shipped: FeedbackShipped? = nil) -> FeedbackStatus? {
         let agent: FeedbackThreadAgent? = switch state {
         case .queued: FeedbackThreadAgent(state: .working, activity: nil, isQueued: true)
         case .working: FeedbackThreadAgent(state: .working, activity: "Running tests")
+        case .asks: FeedbackThreadAgent(state: .needsYou, activity: nil, isQueued: false, asks: true)
         case .needsYou: FeedbackThreadAgent(state: .needsYou)
         case .idle: FeedbackThreadAgent(state: .idle)
         case nil: nil
@@ -39,6 +41,14 @@ struct FeedbackStatusTests {
         #expect(status(.idle, failedButReleased)?.key == "released", "a release outranks a failed check")
         let pr = FeedbackShipped.PullRequest(number: 7, title: "Clock", url: url, state: .open, checks: nil)
         #expect(status(.needsYou, FeedbackShipped(commits: [], prs: [pr])) == .pullRequestOpen)
+    }
+
+    @Test func aQuestionTheAgentAskedNeedsTheSenderWhateverShipped() {
+        let released = FeedbackShipped(commits: [commit(released: true)], prs: [])
+        #expect(status(.asks, released) == .needsYou)
+        #expect(status(.asks, FeedbackShipped(commits: [commit(checks: .failure)], prs: [])) == .needsYou)
+        #expect(status(.asks) == .needsYou)
+        #expect(status(.needsYou, released)?.key == "released", "it stopped without asking: done")
     }
 
     @Test func nothingShippedSaysWhetherItWaitsOnTheSender() {
@@ -65,6 +75,16 @@ struct FeedbackStatusTests {
         }
         #expect(try agent(#"{"state": "working", "activity": null, "queued": true}"#)?.isQueued == true)
         #expect(try agent(#"{"state": "working", "activity": "Building"}"#)?.isQueued == false, "an older Worker")
+    }
+
+    @Test func anOpenQuestionFromTheWorkerDecodes() throws {
+        func agent(_ json: String) throws -> FeedbackThreadAgent? {
+            let row = #"{"id": "fb_1", "title": "Clock", "createdAt": "2026-11-15T00:00:00Z", "agent": \#(json)}"#
+            return try JSONDecoder().decode(FeedbackThread.self, from: Data(row.utf8)).agent
+        }
+        #expect(try agent(#"{"state": "needs_you", "activity": null, "asks": true}"#)?.asks == true)
+        #expect(try agent(#"{"state": "needs_you", "activity": null}"#)?.asks == false, "an older Worker")
+        #expect(try agent(#"{"state": "needs_you", "activity": null, "asks": "yes"}"#)?.asks == false)
     }
 
     @Test func aReleaseNoteOnlyOnceEverythingIsReleased() {

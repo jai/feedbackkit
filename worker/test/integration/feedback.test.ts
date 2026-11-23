@@ -249,3 +249,38 @@ test("a tidied chat is read-only, and its failed reply never leaves the row queu
   assert.equal((await feedbackChat(store, chat, 90_000_005))!.ended, true);
   assert.equal(parseAgentSide({ ...done, activity: null, ended: "yes" }, 0), null, "ended is a boolean");
 });
+
+test("a question the agent asks shows as needs you until the sender answers or the agent takes it back", async () => {
+  const store = memoryStore();
+  const chat = (await addFeedback(store, null, parseFeedbackInput({ text: "Bigger clock" })!, 1_000))!;
+  const [work] = await runnerPoll(store, true, 2_000);
+  await runnerClaim(store, chat, work.message, 3_000);
+  await runnerResult(store, chat, work.message, true, null);
+  const row = async (now: number) => (await feedbackList(store, now)).threads[0].agent;
+  const chatSeq = async () =>
+    (await store.db.prepare("SELECT seq FROM chats WHERE id = ?").bind(chat).first<{ seq: number }>())!.seq;
+  const question = { id: "a1", text: "Which screen?", at: new Date(4_000).toISOString() };
+  const working = { messages: [question], isWorking: true, activity: "Building" };
+
+  // Asked while the builder works on: the row needs the sender, the open chat still says working.
+  await runnerAgent(store, chat, parseAgentSide({ ...working, asks: true }, 5_000)!);
+  assert.deepEqual(await row(6_000), { state: "needs_you", activity: null, asks: true });
+  assert.equal((await feedbackChat(store, chat, 6_000))!.isWorking, true);
+
+  // The sender answers: the question is closed, though the runner has not posted since.
+  const seq = await chatSeq();
+  await addFeedback(store, chat, parseFeedbackInput({ text: "The lock screen" })!, 7_000);
+  assert.deepEqual(await row(8_000), { state: "working", activity: "Building" });
+  const [answer] = await runnerPoll(store, true, 9_000);
+  await runnerClaim(store, chat, answer.message, 10_000);
+  await runnerResult(store, chat, answer.message, true, null);
+
+  // A new question, then a post without one: the latest post decides, and each change moves the chat on.
+  await runnerAgent(store, chat, parseAgentSide({ ...working, isWorking: false, activity: null, asks: true }, 11_000)!);
+  assert.deepEqual(await row(12_000), { state: "needs_you", activity: null, asks: true });
+  const asked = await chatSeq();
+  assert.ok(asked > seq);
+  await runnerAgent(store, chat, parseAgentSide(working, 13_000)!);
+  assert.deepEqual(await row(14_000), { state: "working", activity: "Building" });
+  assert.ok((await chatSeq()) > asked, "taking a question back is a change");
+});

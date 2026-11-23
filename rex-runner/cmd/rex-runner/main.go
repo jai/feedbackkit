@@ -243,6 +243,7 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 	activity := fs.String("activity", "", "optional short working status line (<=80 chars)")
 	var ships shipFlags
 	fs.Var(&ships, "ship", "what the chat shipped: owner/repo@sha[@release-tag]; repeatable. Sets the chat's status to On main / Released; kept for later replies")
+	ask := fs.Bool("ask", false, "this reply asks the sender a question: the chat shows Needs you until they answer, also with --working or after a release. A later reply without --ask clears it")
 	_ = fs.Parse(args)
 
 	if *chatID == "" {
@@ -251,37 +252,56 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 	if cfg.WorkerURL == "" || cfg.RunnerToken == "" {
 		return errors.New("FEEDBACKKIT_URL and FEEDBACKKIT_RUNNER_TOKEN are required")
 	}
-	rec, err := state.LoadChat(cfg.StateDir, *chatID)
+	return postReply(ctx, cfg, replyInput{
+		ChatID: *chatID, Text: *text, App: *app, Login: *login,
+		Working: *working, Activity: *activity, Ships: ships, Ask: *ask,
+	})
+}
+
+// replyInput is one `rex-runner reply`: its flags, parsed.
+type replyInput struct {
+	ChatID, Text, App, Login string
+	Working                  bool
+	Activity                 string
+	Ships                    []string
+	Ask                      bool
+}
+
+// postReply records the reply on the chat's record and posts the chat's whole agent side to the Worker.
+func postReply(ctx context.Context, cfg config.Config, in replyInput) error {
+	rec, err := state.LoadChat(cfg.StateDir, in.ChatID)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		rec = state.ChatRecord{ChatID: *chatID}
+		rec = state.ChatRecord{ChatID: in.ChatID}
 	}
-	if *app != "" {
-		rec.App = *app
+	if in.App != "" {
+		rec.App = in.App
 	}
-	if *login != "" {
-		rec.Login = *login
+	if in.Login != "" {
+		rec.Login = in.Login
 	}
 	if rec.App == "" || rec.Login == "" {
 		return errors.New("chat app/login unknown; pass --app and --login")
 	}
-	if strings.TrimSpace(*text) != "" {
+	if strings.TrimSpace(in.Text) != "" {
 		now := time.Now().UTC()
 		rec.Messages = append(rec.Messages, state.ChatReply{
 			ID:   fmt.Sprintf("rex-%d", now.UnixNano()),
-			Text: strings.TrimSpace(*text),
+			Text: strings.TrimSpace(in.Text),
 			At:   now.Format(time.RFC3339),
 		})
 	}
-	if len(ships) > 0 {
-		landed, err := resolveShipped(ships)
+	if len(in.Ships) > 0 {
+		landed, err := resolveShipped(in.Ships)
 		if err != nil {
 			return err
 		}
 		rec.Shipped = landed
 	}
+	// The latest reply says whether a question is open.
+	rec.Asks = in.Ask
 	if err := state.SaveChat(cfg.StateDir, rec); err != nil {
 		return err
 	}
@@ -290,8 +310,8 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 		msgs = append(msgs, worker.AgentMessage{ID: m.ID, Text: m.Text, At: m.At})
 	}
 	var act *string
-	if strings.TrimSpace(*activity) != "" {
-		s := truncate(*activity, 80)
+	if strings.TrimSpace(in.Activity) != "" {
+		s := truncate(in.Activity, 80)
 		act = &s
 	}
 	if err := worker.NewClient(cfg.WorkerURL, cfg.RunnerToken).PostAgent(ctx, worker.AgentSidePayload{
@@ -299,14 +319,15 @@ func cmdReply(ctx context.Context, cfg config.Config, args []string) error {
 		Login:     rec.Login,
 		Chat:      rec.ChatID,
 		Messages:  msgs,
-		IsWorking: *working,
+		IsWorking: in.Working,
 		Activity:  act,
 		Thread:    nil,
 		Shipped:   rec.Shipped,
+		Asks:      rec.Asks,
 	}); err != nil {
 		return err
 	}
-	fmt.Printf("replied to %s (%s/%s): %d message(s) working=%v\n", rec.ChatID, rec.App, rec.Login, len(msgs), *working)
+	fmt.Printf("replied to %s (%s/%s): %d message(s) working=%v asks=%v\n", rec.ChatID, rec.App, rec.Login, len(msgs), in.Working, rec.Asks)
 	return nil
 }
 
@@ -895,6 +916,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 							Title:  claimed.Title,
 						}
 					}
+					// The sender wrote: a question the agent had open is answered.
+					rec.Asks = false
 					_ = state.SaveChat(cfg.StateDir, rec)
 					act := "Coordinator reviewing"
 					msgs := make([]worker.AgentMessage, 0, len(rec.Messages))
@@ -915,7 +938,7 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 						App:    claimed.App,
 						Repo:   claimed.Repo,
 						Summary: fmt.Sprintf(
-							"%s (%s): %s | Reply via: rex-runner reply --chat %s --text \"...\"",
+							"%s (%s): %s | Reply via: rex-runner reply --chat %s --text \"...\" (add --ask when the reply asks them a question)",
 							claimed.Login, claimed.Role, truncate(claimed.Text, 240), claimed.Chat,
 						),
 					})

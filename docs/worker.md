@@ -52,7 +52,7 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
 | `/runner/claim` | `{chat, message}` | `{ok, text, build, first, title, images, videos}`; `409` not pending; `404` |
 | `/runner/media` | `{chat, message, index}` | the message's `index`th attachment, its bytes with their `Content-Type`; `404` |
 | `/runner/result` | `{chat, message, status: "delivered" \| "failed", detail?}` | `{ok}`; `409` not claimed |
-| `/runner/agent` | `{chat, messages: [{id, text, at}], isWorking, activity, thread, shipped?, ended?}` | `{ok}`; `404` no chat; `400` a bad side |
+| `/runner/agent` | `{chat, messages: [{id, text, at}], isWorking, activity, thread, shipped?, ended?, asks?}` | `{ok}`; `404` no chat; `400` a bad side |
 | `/runner/wait` | `{since, ms}`: the wake count the runner last saw, and how long to hold (at most 25,000) | `{seq}`; `404` no long poll |
 
 - A message is `pending` → `delivering` (claim) → `delivered` or `failed` (result). A claim is a compare-and-swap on
@@ -65,7 +65,9 @@ bodies carry the item's `app` and `login`; a claim answers them back with `repo`
 - `agent` replaces the agent's side of the chat: all its messages so far (at most 500, 20,000 characters each), and
   `shipped` ([api.md](api.md#shipped), `worker/src/shipped.ts`): kept with the side, `null` when absent. A `shipped` that
   is not as described refuses the whole side. `ended: true` says a reply can't reach the agent any more; the app then
-  shows the chat read-only.
+  shows the chat read-only. `asks: true` says the agent's last word is a question for the sender (rex-runner's
+  `reply --ask`): the row needs them until they send a message, even while `isWorking`. Each post says it anew, so a
+  post without `asks` takes the question back.
 - A claim's `images` are the message's screenshots inline (`{media_type, data}`); its `videos`
   (`[{index, media_type, size, duration_ms}]`) are only named, and `media` fetches each one's bytes.
 - Storage ([below](#storage)): a message is in D1 before its send answers.

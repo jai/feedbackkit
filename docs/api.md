@@ -28,14 +28,15 @@ App routes, on the app's backend with the app's own auth:
   Neither: `400`. A repeat `client_ref` keeps the message once.
 - `isWorking` from a send until the agent's turn ends; `problem` says why the last message was not passed on.
   Each row's `thread` is the existing coding thread `{host, id}`, or `null` until the runner names it. A host can use it to draw live status and accessories without opening every conversation.
-  Each row's `agent` is `{state, activity, queued?}`: `working` (with `activity`) while the agent works, and with
-  `queued: true` while a message waits for the runner or the agent's next turn; `needs_you` when it spoke last and
-  stopped; else `idle`. A failed message waits for nothing, so it never makes a row queued.
+  Each row's `agent` is `{state, activity, queued?, asks?}`: `needs_you` with `asks: true` while a question the agent
+  asked has no answer (the sender sent nothing since), even while it works on; `working` (with `activity`) while the
+  agent works, and with `queued: true` while a message waits for the runner or the agent's next turn; `needs_you` when
+  it spoke last and stopped; else `idle`. A failed message waits for nothing, so it never makes a row queued.
 - `ended: true`, on a chat and its row, once the runner tidied its agent's chat away (or it is gone from Orca): a reply
   can't reach it. FeedbackKit greys the row out and shows a note in place of the reply box. Absent: not ended.
-- **A row's status**, as FeedbackKit shows it (`FeedbackStatus`): Queued, Building (the agent works), then what shipped
-  (Released, Checks failed, On main, PR open), then Needs you or Idle. An ended chat is Read-only unless it shipped. An agent that stopped after it shipped is done,
-  not waiting. A released chat ends with the release that carries it (`FeedbackReleaseNote`); a host that shows its own
+- **A row's status**, as FeedbackKit shows it (`FeedbackStatus`): Queued, Building (the agent works), then Needs you for
+  an open question (`asks`), then what shipped (Released, Checks failed, On main, PR open), then Needs you or Idle. An
+  ended chat is Read-only unless it shipped. An agent that stopped after it shipped without asking is done, not waiting. A released chat ends with the release that carries it (`FeedbackReleaseNote`); a host that shows its own
   conversation gets `shipped` in `FeedbackConversation`.
 
   `builderOnline`: the runner polled in the last 90 seconds and said its Mac answers. `notice`, when sending opens a public issue, says so;

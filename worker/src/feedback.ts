@@ -63,17 +63,20 @@ export interface FeedbackThread {
 
 /**
  * An agent chat's state on the list: working (with what at), waiting on the sender, or idle. `queued`, while working:
- * a message waits for the runner or the agent's next turn (an older app shows it as working).
+ * a message waits for the runner or the agent's next turn (an older app shows it as working). `asks`, while it needs
+ * you: the agent asked the sender a question and has no answer yet, whatever it shipped and even while it works on.
  */
 export interface ThreadAgentState {
   state: "working" | "needs_you" | "idle";
   activity: string | null;
   queued?: true;
+  asks?: true;
 }
 
 /**
- * Working while the agent says so; queued while a message of the sender's waits for the runner or has not reached the
- * agent's last look; needs you when the agent spoke last and stopped; else idle.
+ * Needs you, with `asks`, while a question of the agent's has no answer: the sender sent nothing since the runner said
+ * so. Else working while the agent says so; queued while a message of the sender's waits for the runner or has not
+ * reached the agent's last look; needs you when the agent spoke last and stopped; else idle.
  */
 export function threadAgentState(
   agent: AgentSide | null,
@@ -82,6 +85,9 @@ export function threadAgentState(
   waiting: boolean,
 ): ThreadAgentState {
   const unseen = lastSentAt !== null && (agent?.updatedAt ?? 0) < lastSentAt;
+  if (agent?.asks && !waiting && !unseen) {
+    return { state: "needs_you", activity: null, asks: true };
+  }
   if (agent?.isWorking) {
     return { state: "working", activity: agent.activity ?? "Working" };
   }
@@ -149,6 +155,8 @@ export interface AgentSide {
   shipped?: Shipped | null;
   /** The runner tidied the agent's chat away, or it is gone: a reply can't reach it. */
   ended?: true;
+  /** The agent's last word asks the sender a question; a message of the sender's after `updatedAt` answers it. */
+  asks?: true;
 }
 
 /**
@@ -518,7 +526,10 @@ export async function feedbackChat(store: FeedbackStore, chat: string, now: numb
   return chatView(chat, mine, row.agent ? (JSON.parse(row.agent) as AgentSide) : null, online, now);
 }
 
-/** Jai's messages and the agent's, in time order; working from a send until the agent's turn is over. */
+/**
+ * Jai's messages and the agent's, in time order; working from a send until the agent's turn is over. An agent that asks
+ * a question and works on is still working here: only the list's row says it needs the sender.
+ */
 export function chatView(
   id: string,
   mine: StoredMessage[],
@@ -990,7 +1001,7 @@ export async function runnerResult(
 
 /** The runner's look at the agent: its messages so far, whether it is working, and where it runs. */
 export function parseAgentSide(body: unknown, now: number): AgentSide | null {
-  const { messages, isWorking, activity, thread, shipped, ended } = (body ?? {}) as Record<string, unknown>;
+  const { messages, isWorking, activity, thread, shipped, ended, asks } = (body ?? {}) as Record<string, unknown>;
   const landed = shipped === undefined || shipped === null ? null : parseShipped(shipped);
   if (landed === undefined) {
     return null;
@@ -1000,6 +1011,7 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
     messages.length > MAX_AGENT_MESSAGES ||
     typeof isWorking !== "boolean" ||
     (ended !== undefined && typeof ended !== "boolean") ||
+    (asks !== undefined && typeof asks !== "boolean") ||
     (activity !== null && (typeof activity !== "string" || activity.length > 80))
   ) {
     return null;
@@ -1036,6 +1048,7 @@ export function parseAgentSide(body: unknown, now: number): AgentSide | null {
     updatedAt: now,
     ...(landed ? { shipped: landed } : {}),
     ...(ended === true ? { ended: true as const } : {}),
+    ...(asks === true ? { asks: true as const } : {}),
   };
 }
 
@@ -1125,6 +1138,7 @@ export async function runnerAgent(store: FeedbackStore, chat: string, agent: Age
     !was ||
     was.isWorking !== agent.isWorking ||
     was.activity !== agent.activity ||
+    (was.asks ?? false) !== (agent.asks ?? false) ||
     was.thread?.host !== agent.thread?.host ||
     was.thread?.id !== agent.thread?.id ||
     JSON.stringify(was.shipped ?? null) !== JSON.stringify(agent.shipped ?? null);

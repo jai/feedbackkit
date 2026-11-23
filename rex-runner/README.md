@@ -37,6 +37,7 @@ rex-runner status --json
 rex-runner boot
 rex-runner spawn --chat fb-1a2b3c4d --app prhub --repo jai/prhub --agent claude --prompt "Fix font size"
 rex-runner report --chat fb-1a2b3c4d --status done --summary "Merged fix and verified CI"
+rex-runner reply --chat fb-1a2b3c4d --text "Which screen do you mean?" --ask   # the chat shows Needs you until the sender answers
 rex-runner drain
 rex-runner reap --dry-run
 rex-runner serve --claim-apps ""   # observe/local Rex loop only; add app slugs to opt into Worker claiming
