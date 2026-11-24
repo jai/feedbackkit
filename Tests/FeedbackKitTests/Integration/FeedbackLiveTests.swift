@@ -65,7 +65,7 @@ struct FeedbackLiveTests {
         let reopened = Task { await model.follow(route) }
         defer { reopened.cancel() }
         try await eventually { model.live(for: route)?.phase == .live }
-        #expect(await rest.requests.count == 1)
+        #expect(await rest.chatReads == 1)
     }
 
     @Test func lateAgentUpdatesAndWorkingToIdleUseOneCachedModelWithoutRESTPolling() async throws {
@@ -86,7 +86,7 @@ struct FeedbackLiveTests {
             && model.chat(for: route)?.isWorking == false
         }
         #expect(model.chats["chat-1"]?.messages.isEmpty == true, "REST snapshot is not a stream-fed copy")
-        #expect(await rest.requests.map { $0.url!.path } == ["/v2/feedback/chat-1"])
+        #expect(await rest.requests.map { $0.url!.path }.filter { $0 != "/v2/feedback" } == ["/v2/feedback/chat-1"])
         following.cancel()
         await following.value
         #expect(first.phase == .idle)
@@ -96,7 +96,34 @@ struct FeedbackLiveTests {
         #expect(model.controls(for: route) === controls)
         reopened.cancel()
         await reopened.value
-        #expect(await rest.requests.count == 1)
+        #expect(await rest.chatReads == 1)
+    }
+
+    /// The live room says nothing of a question, so a chat that gains a message or whose agent starts or stops reads
+    /// the list, and the count of chats that need the sender follows the open chat. What the agent is doing, said
+    /// again in other words, reads nothing.
+    @Test func anOpenLiveChatsNewMessageReadsTheListAndItsActivityReadsNothing() async throws {
+        let rest = DirectHTTP(list: #"{"threads":[{"id":"chat-1","title":"Clock","createdAt":"2026-11-05T09:00:00Z","#
+            + #""agent":{"state":"needs_you","activity":null,"asks":true}}],"builderOnline":true}"#)
+        let server = LiveDevHost()
+        let model = model(rest, server)
+        let following = Task { await model.follow(route) }
+        defer { following.cancel() }
+        try await eventually { model.live(for: route)?.phase == .live }
+        await model.listReads.task?.value
+        #expect(await rest.listReads == 0 && model.needsAttentionCount == 0, "opening a chat reads no list")
+
+        await server.setState(.running, activity: "Reading")
+        try await eventually { await rest.listReads == 1 }
+        await server.setState(.running, activity: "Editing")
+        try await eventually { model.chat(for: route)?.activity == "Editing" }
+        await model.listReads.task?.value
+        #expect(await rest.listReads == 1)
+
+        await server.agentSays("ask", "Which clock?")
+        try await eventually { await rest.listReads == 2 }
+        try await eventually { model.needsAttentionCount == 1 }
+        #expect(await rest.chatReads == 1, "the chat itself is still read once, at its opening")
     }
 
     @Test func streamFailureReconnectsWithoutFallingBackToREST() async throws {
@@ -108,11 +135,11 @@ struct FeedbackLiveTests {
         try await eventually { model.live(for: route)?.phase == .live }
         await server.setDown(true)
         try await eventually { model.live(for: route)?.phase == .reconnecting }
-        #expect(await rest.requests.count == 1)
+        #expect(await rest.chatReads == 1)
         await server.agentSays("late", "While disconnected")
         await server.setDown(false)
         try await eventually { model.chat(for: route)?.messages.last?.id == "late" }
-        #expect(await rest.requests.count == 1)
+        #expect(await rest.chatReads == 1)
     }
 
     @Test func foregroundAndHostedLifecycleDoNotOpenHiddenStreams() async throws {

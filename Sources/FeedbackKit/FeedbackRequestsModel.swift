@@ -55,15 +55,15 @@ public final class FeedbackRequestsModel {
     /// way, else slower.
     static func pollDelay(working: Bool) -> Duration { working ? pollInterval : idlePollInterval }
 
-    private(set) var list = FeedbackList(threads: [], builderOnline: false)
+    var list = FeedbackList(threads: [], builderOnline: false)
     /// The list has been read since launch. Until then it is what the device kept, or nothing: whether the builder is
     /// taking work is not known yet, so the list does not say it is offline.
-    private(set) var hasReadList = false
-    @ObservationIgnored private let keep: FeedbackKeep?
+    var hasReadList = false
+    @ObservationIgnored let keep: FeedbackKeep?
     /// The write of the list just read, for a test to wait on.
-    @ObservationIgnored private(set) var keeping: Task<Void, Never>?
+    @ObservationIgnored var keeping: Task<Void, Never>?
     private(set) var chats: [String: FeedbackChat] = [:]
-    private(set) var error: String?
+    var error: String?
     /// Unsent words, one box per conversation (`FeedbackRoute.box`).
     var drafts: [String: String] = [:]
     /// The words on their way, by box, shown as sent until the chat has them.
@@ -80,7 +80,9 @@ public final class FeedbackRequestsModel {
     /// Cached state, not a second stream-fed transcript. REST chats are bootstrap/legacy snapshots only.
     private(set) var liveChats: [String: LiveChatModel] = [:]
     private(set) var liveControls: [String: LiveChatControls] = [:]
-    @ObservationIgnored private var followers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored var followers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    /// What reads the list and when, beside the screen's own reads (FeedbackListReads.swift).
+    @ObservationIgnored var listReads = ListReads()
     @ObservationIgnored private var bootstrapped: Set<String> = []
     @ObservationIgnored private var attempted: [String: FeedbackMessage] = [:]
 
@@ -189,29 +191,6 @@ public final class FeedbackRequestsModel {
         Binding(get: { self.drafts[box] ?? "" }, set: { self.drafts[box] = $0.isEmpty ? nil : $0 })
     }
 
-    func refresh() async {
-        if let samples = client.samples {
-            if list.threads.isEmpty {
-                list = samples.list
-            }
-            hasReadList = true
-            return
-        }
-        do {
-            let read = try await client.list()
-            let isNew = read != list || !hasReadList
-            list = read
-            hasReadList = true
-            error = nil
-            if isNew, let keep {
-                // Off the main actor: the encode and the write.
-                keeping = Task.detached(priority: .utility) { keep.keep(read) }
-            }
-        } catch {
-            self.error = client.direct == nil ? error.localizedDescription : "Could not load feedback. Try again."
-        }
-    }
-
     /// The conversation's draft, to its thread, or as a new request before it has one: that makes the thread.
     func send(_ route: FeedbackRoute) async {
         let box = route.box
@@ -243,6 +222,7 @@ public final class FeedbackRequestsModel {
             if let samples = client.samples {
                 try await sendSample(message, thread: thread, route: route, answer: samples.answer)
                 attempted[box] = nil
+                thread.map(answered)
                 return
             }
             let chat = try await client.send(message, to: thread)
@@ -252,6 +232,8 @@ public final class FeedbackRequestsModel {
             if case .new(let id) = route, thread == nil {
                 started[id] = chat.id
                 await refresh()
+            } else {
+                answered(chat.id)
             }
         } catch {
             drafts[box] = text
@@ -281,8 +263,10 @@ public final class FeedbackRequestsModel {
         }
         while !Task.isCancelled {
             do {
-                chats[thread] = try await client.chat(thread)
+                let chat = try await client.chat(thread)
+                chats[thread] = chat
                 error = nil
+                chatShows(thread, messages: chat.messages.count, isWorking: chat.isWorking)
             } catch {
                 self.error = error.localizedDescription
             }
@@ -327,6 +311,7 @@ public final class FeedbackRequestsModel {
         }
         finished.onTermination = { _ in task.cancel() }
         followers[thread] = (id, task)
+        watch(live, thread: thread, follower: id)
         for await _ in completion {}
         await task.value
         if followers[thread]?.id == id { followers[thread] = nil }
