@@ -8,9 +8,15 @@ final class FeedbackRowSurfaceUITests: XCTestCase {
 
     override func setUp() async throws {
         continueAfterFailure = false
+    }
+
+    /// The demo in one appearance, by its own switch (`FEEDBACKKIT_DEMO_APPEARANCE`): a test's change of the
+    /// simulator's appearance did not reach the app on CI ("the screen never turned dark", release run 45484120191).
+    private func launch(appearance: String) {
         app = XCUIApplication()
         // The mock, whatever the hidden setting says on this simulator, and no chat archived by an earlier run.
         app.launchArguments += ["-liveWorkerEnabled", "NO", "-FeedbackKit.archivedThreads", "()"]
+        app.launchEnvironment["FEEDBACKKIT_DEMO_APPEARANCE"] = appearance
         app.launch()
     }
 
@@ -19,19 +25,20 @@ final class FeedbackRowSurfaceUITests: XCTestCase {
     /// the row's words alone, so the insets and the chevron's column were the page's (Jai, Agent Pager on the phone,
     /// 2026-11-24: "the coloring, the rows, the black bar on the right, it's all fucked up").
     func testARowIsOneSurfaceFromEdgeToEdgeWithItsChevronOnIt() throws {
-        // The simulator is left light, as the other tests expect it.
-        defer { XCUIDevice.shared.appearance = .light }
-        for appearance in [XCUIDevice.Appearance.light, .dark] {
-            XCUIDevice.shared.appearance = appearance
+        for appearance in ["light", "dark"] {
+            launch(appearance: appearance)
             let title = app.staticTexts["Export my notes as CSV"].firstMatch
             XCTAssertTrue(title.waitForExistence(timeout: 10))
-            let shot = try settled(dark: appearance == .dark, in: app.windows.firstMatch.frame)
+            let shot = XCUIScreen.main.screenshot()
             let attachment = XCTAttachment(screenshot: shot)
-            attachment.name = "rows-\(appearance == .dark ? "dark" : "light")"
+            attachment.name = "rows-\(appearance)"
             attachment.lifetime = .keepAlways
             add(attachment)
             let words = title.frame
             let screen = app.windows.firstMatch.frame
+            // The page behind the bars says which appearance the app drew: the measurement is of that one.
+            let corner = try colour(shot, at: CGPoint(x: screen.minX + 2, y: screen.minY + 2), in: screen)
+            XCTAssertEqual(corner.reduce(0, +) < 3 * 128, appearance == "dark", "\(appearance): the app drew the other one")
             // Just past the title, between it and the row's status: the row's own ground, before and after.
             let card = try colour(shot, at: CGPoint(x: words.maxX + 3, y: words.midY), in: screen)
             let places = [
@@ -47,22 +54,7 @@ final class FeedbackRowSurfaceUITests: XCTestCase {
                 try colour(shot, at: CGPoint(x: screen.minX + 2, y: words.minY - CGFloat(step)), in: screen)
             }
             XCTAssertTrue(above.contains { !same($0, card) }, "\(appearance): no page shows between the rows")
-        }
-    }
-
-    /// The screen once it has taken the appearance asked for: its top corner, the ground behind the bars, is dark or
-    /// light. A loaded simulator takes longer than a fixed second to change.
-    private func settled(dark: Bool, in screen: CGRect) throws -> XCUIScreenshot {
-        let end = Date().addingTimeInterval(30)
-        while true {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            let shot = XCUIScreen.main.screenshot()
-            let corner = try colour(shot, at: CGPoint(x: screen.minX + 2, y: screen.minY + 2), in: screen)
-            let isDark = corner.reduce(0, +) < 3 * 128
-            if isDark == dark || Date() > end {
-                XCTAssertEqual(isDark, dark, "the screen never turned \(dark ? "dark" : "light")")
-                return shot
-            }
+            app.terminate()
         }
     }
 
