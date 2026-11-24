@@ -247,6 +247,7 @@ private struct FeedbackListView: View {
             }
             if let unsent {
                 row(route: unsent, title: "New feedback", date: nil, isSelected: true)
+                    .unsentRow()
                     .transition(.opacity)
             }
             if model.visibleThreads.isEmpty, unsent == nil {
@@ -365,8 +366,7 @@ private struct FeedbackListView: View {
                 .environment(\.chatTheme, thread?.ended == true ? theme.readOnly : theme)
             }
         }
-        .background(theme.groundCard)
-        .selected(isSelected && !isStacked)
+        .rowGround(isSelected: isSelected && !isStacked)
         .contentShape(.rect)
     }
 }

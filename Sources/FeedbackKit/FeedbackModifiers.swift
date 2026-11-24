@@ -15,6 +15,18 @@ extension View {
         modifier(SelectedRow(isSelected: isSelected))
     }
 
+    /// What a row of the list is drawn on, and how it shows it is the open one.
+    func rowGround(isSelected: Bool) -> some View {
+        modifier(RowGround(isSelected: isSelected))
+    }
+
+    /// The unsent "New feedback" row, open at the head of the list. On the Mac it is no row of the list's own, so the
+    /// list draws no selection for it: its fill runs the row's width and its words start where the rows' do. It was
+    /// a bar the width of its words, further left than they are.
+    func unsentRow() -> some View {
+        modifier(UnsentRow())
+    }
+
     /// On a wide iPad, keeps every scroll view under it to the width of an iPad in portrait, centred.
     func readableContentWidth() -> some View {
         #if os(iOS)
@@ -62,6 +74,39 @@ private struct SelectedRow: ViewModifier {
             }
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .animation(ChatMotion.swap, value: isSelected)
+    }
+}
+
+/// The phone's rows are cards on the page, with a fill over the open one. The Mac's list fills a row edge to edge and
+/// draws its own selection across it: there the card was a dark box behind the words alone, inside the row, and the
+/// fill over it a second, smaller selection (Agent Pager, Jai, 2026-11-24: "list rows drawn as black cards on a grey
+/// column"). So on the Mac a row draws neither, and only says it is selected.
+private struct RowGround: ViewModifier {
+    let isSelected: Bool
+    @Environment(\.chatTheme) private var theme
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.accessibilityAddTraits(isSelected ? .isSelected : [])
+        #else
+        content
+            .background(theme.groundCard)
+            .selected(isSelected)
+        #endif
+    }
+}
+
+private struct UnsentRow: ViewModifier {
+    @Environment(\.chatTheme) private var theme
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .listRowInsets(theme.spacing.rowInsets)
+            .listRowBackground(theme.groundFill)
+        #else
+        content
+        #endif
     }
 }
 
