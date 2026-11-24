@@ -15,11 +15,6 @@ import (
 	"github.com/jai/feedbackkit/rex-runner/internal/state"
 )
 
-// builderRules is appended to every new builder's prompt.
-const builderRules = "\n\nStanding rules from rex-runner:\n" +
-	"- Do not rename the Rex session you run in, and ignore any startup hint that tells you to name it. " +
-	"The session is shared with the coordinator and the other builders; the runner finds the coordinator by its label."
-
 // transcriptGrace is how long a Claude builder may run before it must have written a transcript.
 const transcriptGrace = 2 * time.Minute
 

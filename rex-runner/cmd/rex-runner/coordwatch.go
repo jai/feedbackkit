@@ -79,7 +79,7 @@ var coordTranscriptExists = func(coordDir, sessionID string) bool {
 
 // coordinatorCommand builds the pure-Go `claude-switch` command that launches or resumes the
 // feedback coordinator inside Rex without any wrapper shell script.
-func coordinatorCommand(cfg config.Config, sessionID string, hasTranscript bool) []string {
+func coordinatorCommand(cfg config.Config, sessionID, promptFile string, hasTranscript bool) []string {
 	bin := resolveClaudeSwitchBin(cfg.ClaudeSwitchBin)
 	model := strings.TrimSpace(cfg.CoordModel)
 	if model == "" {
@@ -89,18 +89,20 @@ func coordinatorCommand(cfg config.Config, sessionID string, hasTranscript bool)
 	if launcher == "" {
 		launcher = config.DefaultCoordLauncher
 	}
+	standing := systemPromptArgs(promptFile)
 	if hasTranscript && sessionID != "" {
-		return []string{
+		return append([]string{
 			"env", "REX_SESSION_NAMING=false",
 			bin, "resume", sessionID, "--next", "--",
 			"--dangerously-skip-permissions", "--model", model,
-		}
+		}, standing...)
 	}
 	args := []string{
 		"env", "REX_SESSION_NAMING=false",
 		bin, "run", "--account", launcher, "--",
 		"--dangerously-skip-permissions", "--model", model,
 	}
+	args = append(args, standing...)
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}

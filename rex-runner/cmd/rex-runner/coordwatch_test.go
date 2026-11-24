@@ -19,11 +19,12 @@ func TestCoordinatorCommandUsesClaudeSwitchResumeWhenTranscriptExists(t *testing
 	defer func() { resolveClaudeSwitchBin = orig }()
 
 	cfg := config.Config{CoordLauncher: "cl1", CoordModel: "claude-fable-5-2"}
-	got := coordinatorCommand(cfg, "939b1574-4e17-47f5-abd4-b667d7d6da06", true)
+	got := coordinatorCommand(cfg, "939b1574-4e17-47f5-abd4-b667d7d6da06", "/state/prompts/coordinator.md", true)
 	want := []string{
 		"env", "REX_SESSION_NAMING=false",
 		"/opt/mise/claude-switch", "resume", "939b1574-4e17-47f5-abd4-b667d7d6da06", "--next", "--",
 		"--dangerously-skip-permissions", "--model", "claude-fable-5-2",
+		"--append-system-prompt-file", "/state/prompts/coordinator.md", "--system-prompt-snapshot", "off",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -36,11 +37,12 @@ func TestCoordinatorCommandUsesClaudeSwitchRunForNewSession(t *testing.T) {
 	defer func() { resolveClaudeSwitchBin = orig }()
 
 	cfg := config.Config{CoordLauncher: "cly", CoordModel: "claude-fable-5-2"}
-	got := coordinatorCommand(cfg, "11111111-2222-4333-8444-555555555555", false)
+	got := coordinatorCommand(cfg, "11111111-2222-4333-8444-555555555555", "/state/prompts/coordinator.md", false)
 	want := []string{
 		"env", "REX_SESSION_NAMING=false",
 		"/opt/mise/claude-switch", "run", "--account", "cly", "--",
 		"--dangerously-skip-permissions", "--model", "claude-fable-5-2",
+		"--append-system-prompt-file", "/state/prompts/coordinator.md", "--system-prompt-snapshot", "off",
 		"--session-id", "11111111-2222-4333-8444-555555555555",
 		"--name", "feedback-coordinator",
 	}

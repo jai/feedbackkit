@@ -6,7 +6,7 @@ Nondestructive Go binary for the Superlogical Rex feedback loop. Runs in paralle
 
 - **Zero external dependencies:** standard library Go (`go 1.25+`), compiled to a single binary (`~/.local/bin/rex-runner`).
 - **Nondestructive by default:** `rex-runner serve` leaves `--claim-apps` empty by default so it never claims Worker messages belonging to the live Python Orca runner until apps are explicitly opted in.
-- **Per-run isolation & reboot recovery:** every spawned builder gets its own folder (`~/Developer/feedback-runs/<chat>/`) and `run.json` manifest (`chat_id`, `repo`, `agent`, `session_id`, `rex_window_id`, `status`). `rex-runner boot` restores the `feedback-loop` Rex session, Tab 1 Fable coordinator (`start.sh`), and any unfinished Claude, Codex, or Antigravity builder tabs.
+- **Per-run isolation & reboot recovery:** every spawned builder gets its own folder (`~/Developer/feedback-runs/<chat>/`) and `run.json` manifest (`chat_id`, `repo`, `agent`, `session_id`, `rex_window_id`, `status`). `rex-runner boot` restores the `feedback-loop` Rex session, Tab 1 Fable coordinator, and any unfinished Claude, Codex, or Antigravity builder tabs.
 - **Serialized FIFO inbox:** `rex-runner report` appends events to `inbox.jsonl` (file-locked). `rex-runner serve` watches Rex OSC 7501 `program_status_changed` events and drains into Fable only when Fable is `idle` or `done`.
 - **Drain waits for the prompt:** before typing, drain reads the coordinator pane. If its last lines show a dialog or
   menu (`Esc not now`, `Enter to confirm`, `Esc to cancel`, `Enter to select`), nothing is sent or acked; the events
@@ -21,6 +21,12 @@ A Claude builder runs on the default Claude account unless a config dir is set. 
 launchd `serve` agree). The builder then starts as `env CLAUDE_CONFIG_DIR=<dir> claude ...`. The environment variable
 wins. The coordinator's account is `FEEDBACK_COORD_LAUNCHER`, or `"coord_launcher"` in the same file (`cly`, `cw`, `cl1`,
 `clk` or `cla`).
+
+## Standing prompts
+
+[`prompts/coordinator.md`](prompts/coordinator.md) (the manager) and [`prompts/builder.md`](prompts/builder.md) are the
+standing rules each agent starts with. They are built into the binary, so a change takes effect after `make install` and
+the agent's next start or resume. Change them only with Jai's approval.
 
 ## Build & Install
 
