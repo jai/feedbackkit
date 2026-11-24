@@ -94,6 +94,17 @@ test("the runner's claim, result and the agent's reply push to the sender's devi
       activity: null,
       thread,
     });
+    await runner("agent", {
+      ...whose,
+      messages: [
+        { id: "a1", text: "Done: bigger clock.", at: null },
+        { id: "a2", text: "Bigger on the widget too?", at: null },
+      ],
+      isWorking: false,
+      activity: null,
+      thread,
+      asks: true,
+    });
   } finally {
     globalThis.fetch = real;
   }
@@ -104,8 +115,14 @@ test("the runner's claim, result and the agent's reply push to the sender's devi
       ["aa", "background", "status", "delivered"],
       ["aa", "alert", "taken", null],
       ["aa", "alert", "reply", null],
+      ["aa", "alert", "reply", null],
     ],
     "hubot's device gets nothing, and the resent side pushes nothing",
   );
   assert.deepEqual(pushes[3].body.aps.alert, { title: "Bigger clock", body: "Done: bigger clock." });
+  assert.deepEqual(
+    [pushes[4].body.aps.alert, pushes[4].body.aps["interruption-level"], pushes[4].body.feedbackkit.asks],
+    [{ title: "Bigger clock", subtitle: "Needs you", body: "Bigger on the widget too?" }, "time-sensitive", true],
+    "a question says so",
+  );
 });

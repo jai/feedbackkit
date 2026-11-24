@@ -19,9 +19,9 @@ export interface Device {
 
 export interface Push {
   /** Visible: a title and body the phone shows. Silent: only the data, and the app refreshes. */
-  alert: { title: string; body: string } | null;
-  /** Under `feedbackkit` in the payload: the chat, the app and why. */
-  data: { chat: string; app: string; kind: "taken" | "reply" | "status"; status?: string };
+  alert: { title: string; subtitle?: string; body: string } | null;
+  /** Under `feedbackkit` in the payload: the chat, the app and why. `asks`: the reply is a question for the sender. */
+  data: { chat: string; app: string; kind: "taken" | "reply" | "status"; status?: string; asks?: true };
 }
 
 const HOSTS = { production: "https://api.push.apple.com", sandbox: "https://api.sandbox.push.apple.com" };
@@ -66,12 +66,33 @@ export async function providerToken(key: ApnsKey, now: number): Promise<string> 
   return token;
 }
 
-/** The APNs payload: an alert grouped by chat, or only `content-available`; the data under `feedbackkit`. */
+/** Under a question's title, as the list's row says it. */
+export const ASKS_SUBTITLE = "Needs you";
+
+/**
+ * The APNs payload: an alert grouped by chat, or only `content-available`; the data under `feedbackkit`. A question is
+ * time-sensitive, so it shows through a Focus that lets such notifications in (an app without the entitlement shows
+ * it as an ordinary alert).
+ */
 export function payload(push: Push): Record<string, unknown> {
   const aps = push.alert
-    ? { alert: push.alert, sound: "default", "thread-id": push.data.chat, "mutable-content": 1 }
+    ? {
+        alert: push.alert,
+        sound: "default",
+        "thread-id": push.data.chat,
+        "mutable-content": 1,
+        ...(push.data.asks ? { "interruption-level": "time-sensitive" } : {}),
+      }
     : { "content-available": 1 };
   return { aps, feedbackkit: push.data };
+}
+
+/**
+ * What a later push of the chat replaces on the phone. A question has its own, so the progress reply after it does
+ * not take it off the Lock Screen.
+ */
+export function collapseId(push: Push): string {
+  return `${push.data.chat}-${push.data.asks ? "ask" : push.data.kind}`.slice(0, 64);
 }
 
 export function clip(text: string): string {
@@ -113,7 +134,7 @@ export async function sendPush(
             "apns-topic": topic,
             "apns-push-type": push.alert ? "alert" : "background",
             "apns-priority": push.alert ? "10" : "5",
-            "apns-collapse-id": `${push.data.chat}-${push.data.kind}`.slice(0, 64),
+            "apns-collapse-id": collapseId(push),
           },
           body,
         });
@@ -134,18 +155,24 @@ export async function sendPush(
   return gone;
 }
 
-/** What to tell the sender about a new agent side, against the one before: taken, a new reply, or nothing. */
+/**
+ * What to tell the sender about a new agent side, against the one before: taken, a new reply, or nothing. A reply the
+ * agent sent as a question (`asks`) says "Needs you" under the chat's title.
+ */
 export function agentPush(
   app: string,
   chat: string,
   title: string,
   before: { messages: Array<{ id: string }>; thread: unknown } | null,
-  after: { messages: Array<{ id: string; text: string }>; thread: unknown },
+  after: { messages: Array<{ id: string; text: string }>; thread: unknown; asks?: boolean },
 ): Push | null {
   const seen = new Set((before?.messages ?? []).map((one) => one.id));
   const fresh = after.messages.filter((one) => !seen.has(one.id));
   if (fresh.length > 0) {
-    return { alert: { title, body: clip(fresh.at(-1)!.text) }, data: { chat, app, kind: "reply" } };
+    const body = clip(fresh.at(-1)!.text);
+    return after.asks
+      ? { alert: { title, subtitle: ASKS_SUBTITLE, body }, data: { chat, app, kind: "reply", asks: true } }
+      : { alert: { title, body }, data: { chat, app, kind: "reply" } };
   }
   if (!before?.thread && after.thread) {
     return { alert: { title, body: "An agent has taken this and is starting." }, data: { chat, app, kind: "taken" } };
