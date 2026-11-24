@@ -106,3 +106,49 @@ func TestAgentSideSaysItAsksOnlyWhenItDoes(t *testing.T) {
 		t.Fatal("no question: the key is left out, as a Worker before `asks` expects")
 	}
 }
+
+// A claim's screenshots come inline and its videos by name; Media asks for one video's bytes by its index.
+func TestClaimKeepsScreenshotsAndVideosAndMediaFetchesAVideo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runner/claim":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "text": "", "first": false, "title": "Video",
+				"images": []map[string]any{{"media_type": "image/jpeg", "data": "YQ=="}},
+				"videos": []map[string]any{{"index": 1, "media_type": "video/quicktime", "size": 3, "duration_ms": 1500}},
+			})
+		case "/runner/media":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["index"] != float64(1) || body["chat"] != "fb-1" || body["message"] != "m-1" || body["app"] != "prhub" {
+				http.Error(w, "no such media", http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte("mov"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok")
+	item := WorkItem{Chat: "fb-1", Message: "m-1", App: "prhub", Login: "jai"}
+	claimed, err := c.Claim(context.Background(), item)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %+v err=%v", claimed, err)
+	}
+	if len(claimed.Images) != 1 || claimed.Images[0].MediaType != "image/jpeg" || claimed.Images[0].Data != "YQ==" {
+		t.Fatalf("screenshots: %+v", claimed.Images)
+	}
+	if len(claimed.Videos) != 1 || claimed.Videos[0].Index != 1 || claimed.Videos[0].MediaType != "video/quicktime" ||
+		claimed.Videos[0].DurationMs == nil || *claimed.Videos[0].DurationMs != 1500 {
+		t.Fatalf("videos: %+v", claimed.Videos)
+	}
+	data, err := c.Media(context.Background(), item, 1)
+	if err != nil || string(data) != "mov" {
+		t.Fatalf("media: %q err=%v", data, err)
+	}
+	if _, err := c.Media(context.Background(), item, 9); err == nil {
+		t.Fatalf("a video the Worker does not have is an error")
+	}
+}

@@ -12,6 +12,12 @@ Nondestructive Go binary for the Superlogical Rex feedback loop. Runs in paralle
   menu (`Esc not now`, `Enter to confirm`, `Esc to cancel`, `Enter to select`), nothing is sent or acked; the events
   stay queued and an alert goes out at most every 10 minutes (`FEEDBACK_ALERT_CMD <message>`, else a macOS
   notification).
+- **Attachments reach the builders:** a claim is the one time the Worker hands over a message's screenshots (inline)
+  and names its videos. `serve` saves both under `<runs dir>/_shots/<chat>/` (`<message>-<n>.jpg`,
+  `<message>-video-<n>.mp4|mov`, each video fetched with `/runner/media`, and `frames.swift` to make stills from one)
+  and the inbox event's `attached:` line lists the paths, a video's length and how to look at it. The coordinator
+  passes those paths to its builders. One that could not be saved is named there too; the message is delivered
+  either way.
 - **Deterministic reaper:** `rex-runner reap` checks idle TTL, clean `git status`, and zero unpushed commits before closing Rex tabs; dirty/unpushed folders are marked `kept` and reported to Fable.
 
 ## Builder account

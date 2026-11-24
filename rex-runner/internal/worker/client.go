@@ -35,7 +35,33 @@ type ClaimResponse struct {
 	Text  string `json:"text"`
 	Build string `json:"build,omitempty"`
 	Title string `json:"title,omitempty"`
+	// Images are the message's screenshots, inline; Videos are only named, and Media fetches each one's bytes
+	// (docs/worker.md). Dropped here, a builder was told of neither.
+	Images []ClaimImage `json:"images,omitempty"`
+	Videos []ClaimVideo `json:"videos,omitempty"`
 }
+
+// ClaimImage is one screenshot on a claimed message: its bytes in base64.
+type ClaimImage struct {
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+// ClaimVideo names one video on a claimed message; Index is what Media asks for.
+type ClaimVideo struct {
+	Index      int    `json:"index"`
+	MediaType  string `json:"media_type"`
+	Size       *int64 `json:"size"`
+	DurationMs *int64 `json:"duration_ms"`
+}
+
+// The Worker's most for one video (MAX_VIDEO_BYTES), and time to fetch it.
+const (
+	MediaLimitBytes = 50 << 20
+	mediaTimeout    = 120 * time.Second
+	// A claim carries up to four screenshots inline, each up to 1.5 MB before base64.
+	answerLimitBytes = 32 << 20
+)
 
 // Client speaks FeedbackKit Worker's `/runner/*` HTTP API.
 type Client struct {
@@ -70,7 +96,7 @@ func (c *Client) postJSON(ctx context.Context, route string, body any, out any) 
 		return 0, err
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, answerLimitBytes))
 	if err != nil {
 		return resp.StatusCode, err
 	}
@@ -142,6 +168,43 @@ func (c *Client) Claim(ctx context.Context, item WorkItem) (*ClaimResponse, erro
 		resp.Role = item.Role
 	}
 	return &resp, nil
+}
+
+// Media fetches one attachment of a claimed message by its index (`POST /runner/media`): a video's bytes, which the
+// claim leaves out.
+func (c *Client) Media(ctx context.Context, item WorkItem, index int) ([]byte, error) {
+	raw, err := json.Marshal(map[string]any{
+		"app": item.App, "login": item.Login, "chat": item.Chat, "message": item.Message, "index": index,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/runner/media", bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "feedbackkit-rex-runner")
+	// Its own client: the shared one gives a request 60 seconds, and a video may need longer.
+	resp, err := (&http.Client{Timeout: mediaTimeout, Transport: c.HTTP.Transport}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MediaLimitBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK || len(data) == 0 {
+		return nil, fmt.Errorf("worker /runner/media status %d", resp.StatusCode)
+	}
+	if len(data) > MediaLimitBytes {
+		return nil, fmt.Errorf("worker /runner/media answered more than %d bytes", MediaLimitBytes)
+	}
+	return data, nil
 }
 
 // RexRunSummary is the sanitized run payload pushed to the `/about` live dashboard.

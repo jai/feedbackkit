@@ -970,6 +970,8 @@ func cmdServe(ctx context.Context, cfg config.Config, args []string) error {
 							"%s (%s): %s | Reply via: rex-runner reply --chat %s --text \"...\" (add --ask when the reply asks them a question)",
 							claimed.Login, claimed.Role, truncate(claimed.Text, 240), claimed.Chat,
 						),
+						// The claim is the one time the Worker hands these over: saved now, or never seen.
+						Attachments: claimedAttachments(ctx, cfg.RunsDir, wc, item, claimed),
 					})
 					_ = wc.Result(ctx, item, "delivered", "queued for Fable coordinator")
 					tryDrain()

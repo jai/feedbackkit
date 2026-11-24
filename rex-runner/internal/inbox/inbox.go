@@ -28,6 +28,9 @@ type Event struct {
 	RunDir    string    `json:"run_dir,omitempty"`
 	RexWindow string    `json:"rex_window,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Attachments is what the sender attached, saved on this Mac: each file's path, and how to look at a video.
+	Attachments string `json:"attachments,omitempty"`
 }
 
 type cursorFile struct {
@@ -209,6 +212,9 @@ func FormatBatch(events []Event) string {
 		b.WriteString("\n")
 		if ev.Summary != "" {
 			fmt.Fprintf(&b, "   %s\n", strings.TrimSpace(ev.Summary))
+		}
+		if ev.Attachments != "" {
+			fmt.Fprintf(&b, "   attached: %s\n", strings.TrimSpace(ev.Attachments))
 		}
 		if ev.RunDir != "" {
 			fmt.Fprintf(&b, "   dir: %s\n", ev.RunDir)
