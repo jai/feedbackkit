@@ -100,11 +100,17 @@ Each entry names the parts involved, the symbols to search for, and the tests th
 ### Screenshots and videos
 
 - Parts: SDK (attachments), Worker (R2, uploads), runner (saves them on the builder).
+- The SDK sends a video as a video only on the direct path to an owner's or a builder's agent (`sendsVideos`): it
+  keeps it as one attachment, makes it smaller when it is over 50 MB, puts it up, names it in `videos`, and plays the
+  sent one. Through a host's own backend, and to an issue, a video is four stills from across it.
 - Search for: `parseImages`, `newUpload`, `putUpload`, `messageImage`, `Cube.save_images`, `Runner.save_videos`,
-  `video_note`, `FRAMES_SCRIPT`.
+  `video_note`, `FRAMES_SCRIPT`, `FeedbackVideoFile`, `FeedbackDirect.upload`, `loadVideo`; in rex-runner
+  `media.Save`, `claimedAttachments`.
 - Tests:
   - `worker/test/integration/videos.test.ts`
   - `testASendingMessageShowsItsScreenshotAndOpensIt` (`FeedbackDemoUITests`)
+  - `FeedbackVideoSendTests`, `FeedbackVideoTests`
+  - `rex-runner/internal/media/media_test.go`, `rex-runner/cmd/rex-runner/attachments_test.go`
 
 ### What a chat shipped: commits, pull requests, checks, releases
 

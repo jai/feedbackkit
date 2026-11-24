@@ -53,11 +53,25 @@ public actor DirectHTTP: HTTPTransport, StreamingTransport {
     private var statuses: [Int]
     private let fails: Bool
     private let list: String
-    /// `list`: what `GET /v2/feedback` answers, instead of no chats.
-    public init(statuses: [Int] = [], fails: Bool = false, list: String = #"{"threads":[],"builderOnline":true}"#) {
+    private let chat: String
+    private let media: Data
+    private var tickets = 0
+    /// `list`: what `GET /v2/feedback` answers, instead of no chats. `chat`: what a chat's routes and a send answer,
+    /// instead of a chat with no messages. `media`: the bytes of a message's attachment.
+    public init(
+        statuses: [Int] = [], fails: Bool = false, list: String = #"{"threads":[],"builderOnline":true}"#,
+        chat: String = #"{"id":"chat-1","messages":[],"isWorking":false,"builderOnline":true}"#, media: Data = Data()
+    ) {
         self.statuses = statuses
         self.fails = fails
         self.list = list
+        self.chat = chat
+        self.media = media
+    }
+
+    /// The requests of one method to one path, in order.
+    public func requests(_ method: String, _ path: String) -> [URLRequest] {
+        requests.filter { ($0.httpMethod ?? "GET") == method && $0.url!.path == path }
     }
 
     /// How many times the list was read, and how many times a chat was.
@@ -68,11 +82,23 @@ public actor DirectHTTP: HTTPTransport, StreamingTransport {
         requests.append(request)
         if fails { throw URLError(.networkConnectionLost) }
         let status = statuses.isEmpty ? 200 : statuses.removeFirst()
-        let body = request.url!.path == "/v2/feedback" && request.httpMethod != "POST"
-            ? list
-            : #"{"id":"chat-1","messages":[],"isWorking":false,"builderOnline":true}"#
-        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status,
-                                                 httpVersion: nil, headerFields: nil)!)
+        let path = request.url!.path
+        let body: Data
+        if path == "/v2/feedback", request.httpMethod != "POST" {
+            body = Data(list.utf8)
+        } else if path == "/v2/feedback/uploads" {
+            // A video's upload ticket (docs/api.md#videos): where to PUT it, and the uri its message names.
+            tickets += 1
+            body = Data(#"{"uploadUrl":"/v2/feedback/uploads/up_\#(tickets)","uri":"/v2/feedback/uploads/up_\#(tickets)","#
+                .utf8) + Data(#""headers":{"Content-Type":"video/quicktime"}}"#.utf8)
+        } else if path.hasPrefix("/v2/feedback/uploads/") {
+            body = Data(#"{"ok":true}"#.utf8)
+        } else if path.contains("/images/") {
+            body = media
+        } else {
+            body = Data(chat.utf8)
+        }
+        return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
     public func open(_ request: URLRequest) async throws -> LineStream {
         throw URLError(.unsupportedURL)

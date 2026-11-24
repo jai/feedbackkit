@@ -11,6 +11,8 @@ struct PendingMessage: Equatable, Sendable {
     var clientRef: String? = nil
     /// The screenshots' JPEGs, shown in the message while it sends.
     var images: [Data] = []
+    /// Its videos, shown after the screenshots as the sent message has them.
+    var videos: [PendingVideo] = []
 }
 
 /// A conversation open on the screen: one started here and not sent yet (or just sent), or one in the list. A new one
@@ -85,6 +87,15 @@ public final class FeedbackRequestsModel {
     @ObservationIgnored var listReads = ListReads()
     @ObservationIgnored private var bootstrapped: Set<String> = []
     @ObservationIgnored private var attempted: [String: FeedbackMessage] = [:]
+    /// The videos already up for a box's message, by their file: a send tried again names them, and does not put them
+    /// up a second time.
+    @ObservationIgnored var uploaded: [String: [URL: MessageVideo]] = [:]
+    /// Puts a video where the Worker says and answers the `uri` its message names; a test's own stands in.
+    @ObservationIgnored var uploadVideo: (@Sendable (FeedbackVideoFile, String) async throws -> String)?
+    /// Makes a video's file ready for the Worker (`FeedbackVideoFile.prepared`).
+    @ObservationIgnored var prepareVideo: @Sendable (URL) async throws -> FeedbackVideoFile = {
+        try await FeedbackVideoFile.prepared($0)
+    }
 
     func live(for route: FeedbackRoute) -> LiveChatModel? { thread(for: route).flatMap { liveChats[$0] } }
     func controls(for route: FeedbackRoute) -> LiveChatControls? { thread(for: route).flatMap { liveControls[$0] } }
@@ -179,11 +190,10 @@ public final class FeedbackRequestsModel {
     }
 
     func attachments(for box: String) -> ComposerAttachments {
-        if let attachments = attachmentBoxes[box] {
-            return attachments
-        }
-        let attachments = ComposerAttachments()
+        let attachments = attachmentBoxes[box] ?? ComposerAttachments()
         attachmentBoxes[box] = attachments
+        attachments.keepsVideos = sendsVideos
+        attachments.videoLimit = FeedbackVideoFile.perMessage
         return attachments
     }
 
@@ -202,19 +212,21 @@ public final class FeedbackRequestsModel {
         }
         sending.insert(box)
         error = nil
-        let screenshots = attachments.take()
-        pending[box] = PendingMessage(text: text, screenshots: screenshots.count, images: screenshots.map(\.jpeg))
+        let taken = attachments.take()
+        let outgoing = PendingMessage(text: text, attachments: taken)
+        pending[box] = outgoing
         drafts[box] = nil
         defer {
             sending.remove(box)
             pending[box] = nil
         }
         do {
-            let images = screenshots.map { MessageImage(jpeg: $0.jpeg) }
+            let images = outgoing.images.map { MessageImage(jpeg: $0) }
+            let videos = try await upload(outgoing.videos.map(\.clip), for: box)
             let previous = attempted[box]
             let message = FeedbackMessage(
-                text: text, build: previous?.build ?? build, images: images,
-                client_ref: previous.flatMap { $0.text == text && $0.images == images ? $0.client_ref : nil }
+                text: text, build: previous?.build ?? build, images: images, videos: videos.isEmpty ? nil : videos,
+                client_ref: previous.flatMap { $0.repeats(text, images, videos) ? $0.client_ref : nil }
                     ?? UUID().uuidString
             )
             attempted[box] = message
@@ -222,6 +234,7 @@ public final class FeedbackRequestsModel {
             if let samples = client.samples {
                 try await sendSample(message, thread: thread, route: route, answer: samples.answer)
                 attempted[box] = nil
+                videosSent(box, taken, in: nil, message)
                 thread.map(answered)
                 return
             }
@@ -229,6 +242,7 @@ public final class FeedbackRequestsModel {
             // Once ACP has a snapshot, REST writes must not replace the visible transcript.
             if liveChats[chat.id]?.chat.cursor == nil { chats[chat.id] = chat }
             attempted[box] = nil
+            videosSent(box, taken, in: chat, message)
             if case .new(let id) = route, thread == nil {
                 started[id] = chat.id
                 await refresh()
@@ -237,8 +251,8 @@ public final class FeedbackRequestsModel {
             }
         } catch {
             drafts[box] = text
-            attachments.restore(screenshots)
-            self.error = client.direct == nil ? error.localizedDescription : "Could not send feedback. Try again."
+            attachments.restore(taken)
+            self.error = sendProblem(error)
         }
     }
 
@@ -341,8 +355,9 @@ extension FeedbackRequestsModel {
         )
         let sent = "\(chat.messages.count + 1)"
         chat.messages.append(.init(id: sent, role: "you", text: message.text, anchor: nil))
-        if !message.images.isEmpty {
-            chat.screenshots[sent] = message.images.count
+        let attached = message.images.count + (message.videos?.count ?? 0)
+        if attached > 0 {
+            chat.screenshots[sent] = attached
         }
         chat.isWorking = true
         chat.activity = "Reading the app"

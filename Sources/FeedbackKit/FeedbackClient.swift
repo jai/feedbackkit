@@ -256,12 +256,14 @@ public struct FeedbackChat: Decodable, Equatable, Sendable {
     }
 }
 
-/// What goes to the builder: the words, the screenshots and the build the sender is on. `client_ref` makes a retry send
-/// it once.
+/// What goes to the builder: the words, the screenshots, the videos already put up (`FeedbackDirect.upload`) and the
+/// build the sender is on. `client_ref` makes a retry send it once. A message with no video has no `videos` at all, as
+/// a host's own backend and an older Worker expect.
 struct FeedbackMessage: Encodable, Sendable {
     let text: String
     let build: String?
     let images: [MessageImage]
+    var videos: [MessageVideo]?
     // swiftlint:disable:next identifier_name
     let client_ref: String
 }

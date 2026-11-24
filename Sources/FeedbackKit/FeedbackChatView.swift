@@ -111,11 +111,10 @@ struct FeedbackChatView: View {
             messages: displayedMessages, emptyText: model.list.notice ?? FeedbackList.agentNotice,
             sent: displayedMessages.count(where: { $0.role == .mine }), readsEnd: $readsEnd, focus: $isWriting,
             extras: { message in
-                if message.id == Self.pendingID, !pendingImages.isEmpty {
-                    // The screenshots going out with this message, as the sent ones show: tap to view.
-                    SentScreenshotStrip(key: "sending", identifiers: identifiers.screenshots) { [pendingImages] _ in
-                        .success(pendingImages)
-                    }
+                if message.id == Self.pendingID, !pendingMedia.isEmpty {
+                    // The screenshots and videos going out with this message, as the sent ones show: tap to view.
+                    SentScreenshotStrip(key: "sending", identifiers: identifiers.screenshots,
+                                        loadMedia: { [pendingMedia] _ in .success(pendingMedia) })
                 } else if let live, let controls = model.controls(for: route),
                           live.chat.message(message.id) != nil {
                     LiveReplyStatus(controls: controls, messageID: message.id,
@@ -123,6 +122,7 @@ struct FeedbackChatView: View {
                     if let direct = model.client.direct {
                         LiveScreenshotStrip(live: live, messageID: message.id,
                                             identifiers: identifiers.screenshots, load: direct.loadScreenshot)
+                            .loadsVideos(direct.loadVideo)
                     }
                 } else if message.role == .mine, let state = delivery(for: message.id) {
                     SentReplyStatus(state: state.replyState, text: state.statusText, about: message.text)
@@ -186,7 +186,7 @@ struct FeedbackChatView: View {
     /// The message on its way: its words, and its screenshots as thumbnails under them (the count when there are none
     /// to draw).
     private func pendingRow(_ pending: PendingMessage) -> ChatMessage {
-        pending.images.isEmpty
+        pending.media.isEmpty
             ? ChatMessage(id: Self.pendingID, role: .mine,
                           text: ScreenshotLine.bubbleText(pending.text, screenshots: pending.screenshots))
             : ChatMessage(id: Self.pendingID, role: .mine,
@@ -195,7 +195,7 @@ struct FeedbackChatView: View {
                           hasExtras: true)
     }
 
-    private var pendingImages: [Data] { model.pending[box]?.images ?? [] }
+    private var pendingMedia: [SentMedia] { model.pending[box]?.media ?? [] }
 
     private func delivery(for messageID: String) -> FeedbackMessageDelivery? {
         if messageID == Self.pendingID { return nil }
