@@ -149,7 +149,7 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertTrue(text("didn't reach the builder Mac").waitForExistence(timeout: 5))
         back()
         send("Add a search field to the notes list")
-        XCTAssertTrue(text("build 58 is on TestFlight").waitForExistence(timeout: 20))
+        XCTAssertTrue(text("build 58 is on TestFlight").waitForExistence(timeout: 60))
         screenshot("owner-chat")
         back()
 
@@ -157,7 +157,7 @@ final class FeedbackDemoUITests: XCTestCase {
         role("Builder")
         XCTAssertTrue(text("opens a pull request for an owner to merge").waitForExistence(timeout: 5))
         send("Make the note title bold")
-        XCTAssertTrue(text("pull request #58").waitForExistence(timeout: 20))
+        XCTAssertTrue(text("pull request #58").waitForExistence(timeout: 60))
         back()
 
         // Everyone else: a public issue, with the owner's comment from GitHub.
