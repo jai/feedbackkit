@@ -206,6 +206,11 @@ team's key, to the app's bundle id (`topic` in `APPS`; an app without one gets n
 - **Nothing is pushed until the app registers its device.** In Swift: `FeedbackDirect.registerDevice(token:environment:)`
   at each launch and whenever the system gives a new APNs token; `FeedbackPush(userInfo:)` reads a notification, and
   `FeedbackRequestsView.opening(FeedbackOpenRequest(chat:))` opens its chat when it is tapped.
+- **The badge.** `FeedbackRequestsModel.needsAttentionCount` counts the listed rows whose `agent` is `needs_you`
+  with `asks: true` and that have not `ended` (less the chats archived on the device): the list carries everything
+  it needs, so there is no count route. `received(FeedbackPush)` counts a question's push at once and reads the list;
+  a silent `status` push reads nothing. The live room's state says nothing of a question, so an open chat reads the
+  list when it gains a message or its agent starts or stops.
 
 ### Swift direct client
 

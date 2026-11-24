@@ -72,6 +72,30 @@ FeedbackRequestsView(model: feedback)   // the list and New; a chat pushed on iP
 - Custom thread rows and actions, and the direct `/v2` path with live chats, are in
   [SDK host integration](docs/architecture/sdk-integration.md).
 
+### 🔔 A badge for chats that need you
+
+`feedback.needsAttentionCount` is how many chats wait on the sender: each has a question its agent asked that they
+have not answered (the rows that say **Needs you** for a question). It is observable and needs no Feedback screen:
+
+```swift
+TabView {
+    Tab("Feedback", systemImage: "bubble.left.and.bubble.right") { FeedbackRequestsView(model: feedback) }
+        .badge(feedback.needsAttentionCount)        // nothing shows for 0
+}
+.feedbackAttention(feedback)                        // reads at launch, at each foreground, then every 5 minutes
+
+Label("Feedback", systemImage: "bubble.left").feedbackBadge(feedback)   // a list row or a sidebar item
+```
+
+- It starts from the list the device kept, so the badge is there at launch, then follows each read of the list.
+- A push: `if let push = FeedbackPush(userInfo: userInfo) { await feedback.received(push) }` in the notification
+  delegate. A question counts at once, and the list is read again.
+- An open chat reads the list when it gains a message or its agent starts or stops, and the sender's answer takes
+  its chat off the count at once.
+- Left out: chats that ended, chats archived on this device, and replies that are no question. FeedbackKit keeps no
+  record of what the sender has read, so there is no unread count.
+- `await feedback.refresh()` reads the list where the host knows more, and outside SwiftUI.
+
 ## 📱 Try the demo
 
 `Demo/` is an iPhone and Mac app that runs on a mock Worker inside the app, so no data leaves the device. A switch at
