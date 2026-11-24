@@ -111,6 +111,29 @@ final class FeedbackDemoUITests: XCTestCase {
         XCTAssertTrue(viewer.waitForNonExistence(timeout: 5))
     }
 
+    /// In a host with its own thread page, a delivered message nobody answered yet leaves Send ready for the next one
+    /// (Jai, 2026-11-24: "I can't send another message").
+    func testAFollowUpSendsWhileTheAgentStarts() throws {
+        app.terminate()
+        app.launchArguments += ["-DemoHostedChat"]
+        app.launch()
+        send("Bigger clock")
+        let working = app.descendants(matching: .any)["feedback-working"].firstMatch
+        XCTAssertTrue(working.waitForExistence(timeout: 10))
+        XCTAssertTrue(text("Delivered").waitForExistence(timeout: 10), "the first message reached the runner")
+        XCTAssertTrue(working.label.contains("Starting the agent"), working.label)
+
+        let field = app.textViews["sessionReplyField"]
+        field.tap()
+        field.typeText("And the badge")
+        screenshot("follow-up-while-starting")
+        XCTAssertTrue(app.buttons["sessionReplySend"].isEnabled, "Send is ready while the agent starts")
+        app.buttons["sessionReplySend"].tap()
+        XCTAssertTrue(app.staticTexts["And the badge"].waitForExistence(timeout: 10), "the follow-up is in the chat")
+        XCTAssertEqual(field.value as? String ?? "", "", "the box is empty for the next one")
+        XCTAssertTrue(working.exists, "the chat still waits for its agent")
+    }
+
     func testMainFlows() throws {
         XCTAssertEqual(app.staticTexts["demo-badge"].label, "Demo")
         // Owner: the agent working, a message that failed, and new feedback answered.

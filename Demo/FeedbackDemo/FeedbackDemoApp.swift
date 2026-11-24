@@ -22,6 +22,12 @@ struct DemoRootView: View {
     @State private var showsWorkerSetting = false
     @State private var lastThreadAction = ""
     private var isFixture: Bool { ProcessInfo.processInfo.environment["FEEDBACKKIT_LIVE_FIXTURE"] != nil }
+    /// As in an app with its own thread page (Agent Pager), whose thread is not there yet.
+    private var isHosted: Bool { ProcessInfo.processInfo.arguments.contains("-DemoHostedChat") }
+    private var feedback: FeedbackRequestsView {
+        isHosted ? FeedbackRequestsView(model: demo.model) { _ in nil } : FeedbackRequestsView(model: demo.model)
+    }
+
     private var showsThreadControls: Bool { ProcessInfo.processInfo.arguments.contains("-DemoThreadControls") }
 
     private var captureScheme: ColorScheme? {
@@ -48,7 +54,7 @@ struct DemoRootView: View {
                 }
                 Spacer()
             } else {
-                FeedbackRequestsView(model: demo.model)
+                feedback
                     .threadRows(label: { thread in
                         guard showsThreadControls || isFixture else { return nil }
                         return AnyView(ChatThreadRow(title: thread.title, context: "Demo agent", about: "Shared conversation row") {

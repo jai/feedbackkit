@@ -41,12 +41,18 @@ struct FeedbackChatView: View {
         chat?.ended ?? thread.flatMap { id in model.list.threads.first { $0.id == id }?.ended } ?? false
     }
 
-    /// Once the first message created the feedback chat, the host's coding thread receives every follow-up, unless
-    /// its runner answers without one.
+    /// Its first message made the feedback chat, and neither the host's coding thread nor an answer without one has come.
+    /// A follow-up meanwhile goes through the Worker, which keeps the chat's messages in order for its runner.
     var awaitsAgentThread: Bool { conversation != nil && thread != nil && !answersWithoutThread }
 
     /// The chat stays Feedback's own, and its follow-ups go through the Worker to the runner that started it.
     var answersWithoutThread: Bool { chat?.answeredWithoutThread == true }
+
+    /// The box sends nothing: a message is on its way to the Worker, or one failed before the chat had its agent
+    /// (`handoffProblem` says what to do).
+    var holdsReply: Bool { model.isSending(box) || failedBeforeHandoff }
+
+    private var failedBeforeHandoff: Bool { awaitsAgentThread && chat?.delivery.values.contains(.failed) == true }
 
     private var messages: [FeedbackChat.Message] {
         let sent = chat?.messages ?? []
@@ -232,7 +238,7 @@ struct FeedbackChatView: View {
         if let problem = chat?.problem {
             return problem
         }
-        if awaitsAgentThread, chat?.delivery.values.contains(.failed) == true {
+        if failedBeforeHandoff {
             return "An earlier message did not reach the agent. Start new feedback to continue."
         }
         return nil
@@ -266,7 +272,7 @@ struct FeedbackChatView: View {
                     .transition(.opacity)
             }
             SessionComposer(
-                draft: model.binding(for: box), isSending: model.isSending(box) || awaitsAgentThread, send: send,
+                draft: model.binding(for: box), isSending: holdsReply, send: send,
                 placeholder: thread == nil ? "What should change?" : "Reply", focused: $isWriting,
                 attachments: model.attachments(for: box)
             )
@@ -276,20 +282,16 @@ struct FeedbackChatView: View {
     }
 
     private func send() {
-        guard !awaitsAgentThread else {
+        guard !holdsReply else {
             return
         }
         isWriting = false
         Task { await reply() }
     }
 
-    /// The draft, through the Worker: to a hosted chat only to start its agent, else to the chat's runner.
+    /// The draft, through the Worker to the chat's runner.
     func reply() async {
-        if conversation != nil, !answersWithoutThread {
-            await model.sendFirstMessage(route)
-        } else {
-            await model.send(route)
-        }
+        await model.send(route)
     }
 }
 

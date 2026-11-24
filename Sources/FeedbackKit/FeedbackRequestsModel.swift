@@ -178,14 +178,6 @@ public final class FeedbackRequestsModel {
         }
     }
 
-    /// A host with its own coding-thread chat uses Feedback only to start the agent. Later drafts stay for the host.
-    func sendFirstMessage(_ route: FeedbackRoute) async {
-        guard thread(for: route) == nil else {
-            return
-        }
-        await send(route)
-    }
-
     /// The conversation's draft, to its thread, or as a new request before it has one: that makes the thread.
     func send(_ route: FeedbackRoute) async {
         let box = route.box

@@ -119,7 +119,7 @@ Release validation uses the candidate workflow; host capacity and cordons remain
 ## Test boundaries and ownership
 
 - Swift `FeedbackKitTests`: isolated request/delivery/sample logic, scripted HTTP, injected clock/build/preferences.
-  `FeedbackKitIntegrationTests`: 16 tests of real preferences and local ACP/REST interactions.
+  `FeedbackKitIntegrationTests`: 18 tests of real preferences and local ACP/REST interactions.
   `FeedbackKitRenderingTests`: two macOS pixel-rendering UI checks, run in the macOS UI lane before the app plan. Shared chat
   delivery tick rendering, generic controls and screenshot viewer gestures belong to AgentChatKit.
 - Worker: 16 pure units with network disabled and shuffled order; 57 local integration declarations use actual

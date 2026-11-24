@@ -15,7 +15,7 @@ struct FeedbackRequestsModelTests {
         let model = FeedbackRequestsModel(client: client(Worker()), defaults: nil)
         let route = model.compose(reusing: nil)
         model.binding(for: route.box).wrappedValue = "Start this feedback"
-        await model.sendFirstMessage(route)
+        await model.send(route)
         let id = try #require(model.thread(for: route))
         model.binding(for: route.box).wrappedValue = "Keep these follow-up words"
         let selected = try #require(model.route(for: id, keeping: route))
@@ -79,21 +79,6 @@ struct FeedbackRequestsModelTests {
         let thread = FeedbackAgentThread(host: "builder", id: "codex:session-1")
         chat.thread = thread
         #expect(chat.thread == thread)
-    }
-
-    @Test func aHostStartsTheAgentThroughFeedbackAndKeepsLaterDraftsForItsThread() async {
-        let worker = Worker()
-        let model = FeedbackRequestsModel(client: client(worker), defaults: nil)
-        let route = model.compose(reusing: nil)
-        model.drafts[route.box] = "Bigger clock"
-        await model.sendFirstMessage(route)
-        #expect(model.thread(for: route) == "sesn_1")
-        #expect(worker.requests == ["POST /feedback", "GET /feedback"])
-
-        model.drafts[route.box] = "Keep this for the thread"
-        await model.sendFirstMessage(route)
-        #expect(model.draft(for: route.box) == "Keep this for the thread")
-        #expect(worker.requests == ["POST /feedback", "GET /feedback"])
     }
 
     /// The first message of a new conversation makes the thread; the conversation keeps its route and goes on there.

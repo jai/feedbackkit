@@ -79,6 +79,10 @@ actor DemoWorker: FeedbackConnection {
             try? await Task.sleep(for: step * 0.6)
             update(id) { $0.delivery[message] = .delivered }
         }
+        // `-DemoHostedChat`: a runner that takes minutes to answer, so a UI test meets the chat before it does.
+        if ProcessInfo.processInfo.arguments.contains("-DemoHostedChat") {
+            return
+        }
         for activity in script.steps {
             update(id) { $0.activity = activity }
             try? await Task.sleep(for: step)

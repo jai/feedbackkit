@@ -81,7 +81,7 @@ struct FeedbackConversationIntegrationTests {
         #expect(view.handoffProblem == "An earlier message did not reach the agent. Start new feedback to continue.")
     }
 
-    @Test func onlyAHostedChatThatHasStartedBlocksTheFeedbackComposer() async {
+    @Test func onlyAHostedChatThatHasStartedWaitsForItsAgent() async {
         let model = await model()
         let hosted: (FeedbackConversation) -> AnyView? = { _ in nil }
         let first = FeedbackChatView(model: model, route: .new(UUID()), conversation: hosted)
@@ -119,16 +119,44 @@ struct FeedbackConversationIntegrationTests {
         #expect(model.draft(for: route.box).isEmpty)
     }
 
-    @Test func aHostedChatNobodyAnsweredYetStillWaitsForItsAgent() async {
-        let model = await model(messages: [FeedbackChat.Message(id: "e1", role: "you", text: "Bigger clock")],
-                                threadless: true)
+    /// Jai's report (2026-11-24): the first message was delivered and the agent had not answered, and the box would not
+    /// send. The chat still waits for its agent, and a follow-up goes through the Worker to its runner.
+    @Test func aHostedChatNobodyAnsweredYetTakesAFollowUp() async {
+        let model = await model(
+            delivery: ["e1": .delivered], messages: [FeedbackChat.Message(id: "e1", role: "you", text: "Bigger clock")],
+            threadless: true
+        )
         let view = FeedbackChatView(model: model, route: route, conversation: { _ in AnyView(EmptyView()) })
 
         #expect(!view.answersWithoutThread)
         #expect(view.awaitsAgentThread)
 
-        model.drafts[route.box] = "Keep this for the thread"
+        #expect(!view.holdsReply)
+        model.drafts[route.box] = "And the badge"
         await view.reply()
-        #expect(model.draft(for: route.box) == "Keep this for the thread")
+        #expect(model.chat(for: route)?.messages.last { $0.isJai }?.text == "And the badge")
+        #expect(model.draft(for: route.box).isEmpty)
+        #expect(model.error == nil)
+    }
+
+    /// Its thread has a name and the host does not draw it yet: a follow-up need not wait for that either.
+    @Test func aFollowUpGoesWhileTheHostDoesNotDrawTheThreadYet() async {
+        let model = await model(delivery: ["e1": .delivered])
+        let view = FeedbackChatView(model: model, route: route, conversation: { _ in nil })
+
+        #expect(view.awaitsAgentThread)
+        #expect(!view.holdsReply)
+        model.drafts[route.box] = "And the badge"
+        await view.reply()
+        #expect(model.chat(for: route)?.messages.last { $0.isJai }?.text == "And the badge")
+    }
+
+    /// A message that failed still says to start new feedback, and the chat takes no more until it does.
+    @Test func aFailedMessageStillHoldsTheBoxWhileTheChatWaitsForItsAgent() async {
+        let model = await model(delivery: ["e1": .failed], threadless: true)
+        let view = FeedbackChatView(model: model, route: route, conversation: { _ in nil })
+
+        #expect(view.holdsReply)
+        #expect(!FeedbackChatView(model: model, route: route, conversation: nil).holdsReply)
     }
 }
