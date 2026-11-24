@@ -233,8 +233,17 @@ private struct FeedbackListView: View {
     }
 
     var body: some View {
-        ChatThreadList(items: model.visibleThreads, title: \.title, actions: rowActions,
-                       selection: threadSelection, open: { open(.thread($0.id)) }) { thread in
+        threads
+            .animation(ChatMotion.fold, value: model.list)
+            .animation(ChatMotion.fold, value: model.archived)
+            .animation(ChatMotion.fold, value: unsent)
+            .refreshable { await model.refresh() }
+    }
+
+    /// The rows, each on its card across the list's width on the phone and the iPad; the Mac's list draws its own.
+    private var threads: some View {
+        let list = ChatThreadList(items: model.visibleThreads, title: \.title, actions: rowActions,
+                                  selection: threadSelection, open: { open(.thread($0.id)) }) { thread in
             row(
                 route: .thread(thread.id), title: thread.title,
                 date: try? Date(thread.createdAt, strategy: .iso8601), isSelected: selectedThread == thread.id,
@@ -243,7 +252,7 @@ private struct FeedbackListView: View {
         } header: {
             // Only once this launch has read it: a kept list, or none yet, does not know.
             if model.hasReadList, !model.list.builderOnline {
-                BuilderNote().padding(.bottom, ChatSpace.xs)
+                BuilderNote().padding(.bottom, ChatSpace.xs).onPage()
             }
             if let unsent {
                 row(route: unsent, title: "New feedback", date: nil, isSelected: true)
@@ -256,20 +265,25 @@ private struct FeedbackListView: View {
                     .foregroundStyle(theme.inkQuiet)
                     .padding(.horizontal, ChatSpace.lg)
                     .accessibilityIdentifier("feedback-empty")
+                    .onPage()
             }
         } footer: {
-            archivedSection
+            archivedSection.onPage()
             if let error = model.error {
                 Text(error)
                     .font(theme.font(.footnote))
                     .foregroundStyle(theme.toneBad)
                     .padding(.horizontal, ChatSpace.lg)
+                    .onPage()
             }
         }
-        .animation(ChatMotion.fold, value: model.list)
-        .animation(ChatMotion.fold, value: model.archived)
-        .animation(ChatMotion.fold, value: unsent)
-        .refreshable { await model.refresh() }
+        #if os(iOS)
+        return list.rowBackground { thread in
+            FeedbackRowCard(isSelected: !isStacked && selectedThread == thread.id)
+        }
+        #else
+        return list
+        #endif
     }
 
     /// The host's actions, with Archive on this device when the host brings none.
@@ -368,30 +382,5 @@ private struct FeedbackListView: View {
         }
         .rowGround(isSelected: isSelected && !isStacked)
         .contentShape(.rect)
-    }
-}
-
-/// Without the builder Mac polling, feedback waits in the queue. It says so, so a silent chat isn't a mystery.
-struct BuilderNote: View {
-    @Environment(\.chatTheme) private var theme
-    var body: some View {
-        Label {
-            Text("The builder Mac is offline. Feedback waits until it is back.")
-        } icon: {
-            Image(systemName: theme.symbols.paused)
-        }
-        .font(theme.font(.caption))
-        .foregroundStyle(theme.toneWaiting)
-        .padding(.horizontal, ChatSpace.lg)
-        .accessibilityIdentifier("feedback-builder-offline")
-    }
-}
-
-extension ChatTheme {
-    /// A read-only chat's row: its title in the quiet ink.
-    var readOnly: ChatTheme {
-        var theme = self
-        theme.ink = inkQuiet
-        return theme
     }
 }
