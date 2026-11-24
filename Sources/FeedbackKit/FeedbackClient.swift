@@ -53,7 +53,7 @@ public struct FeedbackThread: Decodable, Equatable, Identifiable, Hashable, Send
 /// a message waits for the runner or the agent's next turn. Needs you and `asks`: the agent asked a question the sender
 /// has not answered.
 public struct FeedbackThreadAgent: Decodable, Equatable, Hashable, Sendable {
-    public enum State: String, Decodable, Sendable {
+    public enum State: String, Codable, Sendable {
         case working
         case needsYou = "needs_you"
         case idle
@@ -93,7 +93,7 @@ public struct FeedbackThreadAgent: Decodable, Equatable, Hashable, Sendable {
 }
 
 /// The requests and whether the builder Mac is taking work.
-public struct FeedbackList: Decodable, Equatable, Sendable {
+public struct FeedbackList: Codable, Equatable, Sendable {
     public var threads: [FeedbackThread]
     public var builderOnline: Bool
     /// What sending does, when the Worker says (an issue Worker: a public GitHub issue); nil is the coding agent.
@@ -328,5 +328,31 @@ public struct FeedbackClient: Sendable {
     /// To the thread, or as a new request when there is none: that makes the thread.
     func send(_ message: FeedbackMessage, to thread: String?) async throws -> FeedbackChat {
         try await connection.send(thread.map { "\(Self.root)/\($0)" } ?? Self.root, message, as: FeedbackChat.self)
+    }
+}
+
+// The list as the Worker sends it, written back with the Worker's own names (`FeedbackKeep`), so a kept list is read
+// by the same decoders as a fresh one.
+
+extension FeedbackThread: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(id, forKey: .id)
+        try fields.encode(title, forKey: .title)
+        try fields.encode(createdAt, forKey: .createdAt)
+        try fields.encodeIfPresent(thread, forKey: .thread)
+        try fields.encodeIfPresent(agent, forKey: .agent)
+        try fields.encodeIfPresent(shipped, forKey: .shipped)
+        try fields.encode(ended, forKey: .ended)
+    }
+}
+
+extension FeedbackThreadAgent: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(state, forKey: .state)
+        try fields.encodeIfPresent(activity, forKey: .activity)
+        try fields.encode(isQueued, forKey: .queued)
+        try fields.encode(asks, forKey: .asks)
     }
 }

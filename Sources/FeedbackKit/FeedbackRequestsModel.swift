@@ -56,6 +56,12 @@ public final class FeedbackRequestsModel {
     static func pollDelay(working: Bool) -> Duration { working ? pollInterval : idlePollInterval }
 
     private(set) var list = FeedbackList(threads: [], builderOnline: false)
+    /// The list has been read since launch. Until then it is what the device kept, or nothing: whether the builder is
+    /// taking work is not known yet, so the list does not say it is offline.
+    private(set) var hasReadList = false
+    @ObservationIgnored private let keep: FeedbackKeep?
+    /// The write of the list just read, for a test to wait on.
+    @ObservationIgnored private(set) var keeping: Task<Void, Never>?
     private(set) var chats: [String: FeedbackChat] = [:]
     private(set) var error: String?
     /// Unsent words, one box per conversation (`FeedbackRoute.box`).
@@ -97,12 +103,19 @@ public final class FeedbackRequestsModel {
     static let archivedKey = "FeedbackKit.archivedThreads"
 
     public convenience init(client: FeedbackClient) {
+        self.init(client: client, keep: .standard())
+    }
+
+    /// `keep` is where the list waits for the next launch; nil keeps nothing. A host with more than one account gives
+    /// each its own (`FeedbackKeep.standard(named:)`).
+    public convenience init(client: FeedbackClient, keep: FeedbackKeep?) {
         self.init(client: client, defaults: .standard,
-                  build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+                  build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+                  keep: client.samples == nil ? keep : nil)
     }
 
     init(
-        client: FeedbackClient, defaults: UserDefaults?, build: String? = nil,
+        client: FeedbackClient, defaults: UserDefaults?, build: String? = nil, keep: FeedbackKeep? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         wait: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
@@ -111,7 +124,12 @@ public final class FeedbackRequestsModel {
         self.build = build
         self.now = now
         self.wait = wait
+        self.keep = keep
         archived = Set(defaults?.stringArray(forKey: Self.archivedKey) ?? [])
+        // The requests it last had, on screen at once; `refresh` reads again behind them.
+        if let kept = keep?.list() {
+            list = kept
+        }
     }
 
     func draft(for box: String) -> String { drafts[box] ?? "" }
@@ -168,11 +186,19 @@ public final class FeedbackRequestsModel {
             if list.threads.isEmpty {
                 list = samples.list
             }
+            hasReadList = true
             return
         }
         do {
-            list = try await client.list()
+            let read = try await client.list()
+            let isNew = read != list || !hasReadList
+            list = read
+            hasReadList = true
             error = nil
+            if isNew, let keep {
+                // Off the main actor: the encode and the write.
+                keeping = Task.detached(priority: .utility) { keep.keep(read) }
+            }
         } catch {
             self.error = client.direct == nil ? error.localizedDescription : "Could not load feedback. Try again."
         }

@@ -183,6 +183,8 @@ Each entry names the parts involved, the symbols to search for, and the tests th
 The Swift package that host apps import. `FeedbackRequestsView` is the screen and `FeedbackRequestsModel` its state.
 `FeedbackClient` picks the transport: `URLFeedbackConnection` through the app's backend, `FeedbackDirect` straight to
 the Worker's `/v2`, or `FeedbackSamples` offline. `FeedbackStatus` and `FeedbackShipped` decide what a row says.
+`FeedbackKeep` holds the list between launches: the model opens on it and says nothing of the builder until it has
+read.
 `OldNames.swift` keeps every `Feature*` name from before FeedbackKit left jai/prhub. `Exports.swift` re-exports
 AgentChatKit and AgentChatLive, which own the shared chat UI.
 

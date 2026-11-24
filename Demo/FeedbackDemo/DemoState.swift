@@ -16,6 +16,8 @@ final class DemoState {
 
     init(live: LiveWorker = .load()) {
         self.live = live
+        // Each launch of the demo starts with no list kept from the one before: its UI tests count on what they see.
+        FeedbackKeep.standard()?.clear()
         models = Dictionary(uniqueKeysWithValues: DemoRole.allCases.map { role in
             (role, FeedbackRequestsModel(client: FeedbackClient(connection: DemoWorker(role: role))))
         })

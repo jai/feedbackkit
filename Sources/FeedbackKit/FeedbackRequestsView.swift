@@ -231,7 +231,8 @@ private struct FeedbackListView: View {
                 thread: thread, custom: customLabel?(thread)
             )
         } header: {
-            if !model.list.builderOnline {
+            // Only once this launch has read it: a kept list, or none yet, does not know.
+            if model.hasReadList, !model.list.builderOnline {
                 BuilderNote().padding(.bottom, ChatSpace.xs)
             }
             if let unsent {

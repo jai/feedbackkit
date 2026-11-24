@@ -4,14 +4,14 @@ import SwiftUI
 /// What a feedback chat shipped (docs/api.md#shipped): the commits its agent landed on main, the pull requests it
 /// opened, their checks, and the first release that carries each commit. The runner finds it; the Worker serves it on
 /// the list's rows and on the chat.
-public struct FeedbackShipped: Decodable, Equatable, Hashable, Sendable {
+public struct FeedbackShipped: Codable, Equatable, Hashable, Sendable {
     /// A check's outcome: running, passed or failed.
-    public enum Checks: String, Decodable, Sendable {
+    public enum Checks: String, Codable, Sendable {
         case pending, success, failure
     }
 
     /// The first published GitHub Release whose tag contains the commit.
-    public struct Release: Decodable, Equatable, Hashable, Sendable {
+    public struct Release: Codable, Equatable, Hashable, Sendable {
         public let tag: String
         public let name: String
         public let url: URL
@@ -55,7 +55,7 @@ public struct FeedbackShipped: Decodable, Equatable, Hashable, Sendable {
     }
 
     public struct PullRequest: Decodable, Equatable, Hashable, Identifiable, Sendable {
-        public enum State: String, Decodable, Sendable {
+        public enum State: String, Codable, Sendable {
             case open, merged, closed
         }
 
@@ -270,5 +270,29 @@ struct FeedbackShippedSection: View {
             Spacer(minLength: ChatSpace.sm)
             Text(detail).foregroundStyle(theme.inkQuiet).lineLimit(1)
         }
+    }
+}
+
+// Written back with the Worker's own names, for the list a device keeps (`FeedbackKeep`).
+
+extension FeedbackShipped.Commit: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(sha, forKey: .sha)
+        try fields.encode(title, forKey: .title)
+        try fields.encode(url, forKey: .url)
+        try fields.encodeIfPresent(checks, forKey: .ci)
+        try fields.encodeIfPresent(release, forKey: .release)
+    }
+}
+
+extension FeedbackShipped.PullRequest: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(number, forKey: .number)
+        try fields.encode(title, forKey: .title)
+        try fields.encode(url, forKey: .url)
+        try fields.encode(state, forKey: .state)
+        try fields.encodeIfPresent(checks, forKey: .ci)
     }
 }

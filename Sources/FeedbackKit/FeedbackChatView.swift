@@ -132,7 +132,7 @@ struct FeedbackChatView: View {
                 if let shipped = chat?.shipped {
                     FeedbackShippedSection(shipped: shipped)
                 }
-                if chat?.builderOnline == false || (isNew && !model.list.builderOnline) {
+                if chat?.builderOnline == false || (isNew && model.hasReadList && !model.list.builderOnline) {
                     BuilderNote()
                 }
             },

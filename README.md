@@ -57,6 +57,10 @@ let feedback = FeedbackRequestsModel(client: client)
 FeedbackRequestsView(model: feedback)   // the list and New; a chat pushed on iPhone, beside the list on iPad and Mac
 ```
 
+- The list is kept on the device (`FeedbackKeep`, in Application Support), so the screen opens on the requests it
+  last had and reads again behind them. An app with more than one account gives each its own place and clears it at
+  sign-out: `FeedbackRequestsModel(client: client, keep: .standard(named: accountID))`, `keep.clear()`; `keep: nil`
+  keeps nothing.
 - `workerURL` is the app's own backend. It serves `GET/POST /feedback` and `/feedback/<id>` and forwards each call to
   the FeedbackKit Worker. [docs/api.md](docs/api.md) has the routes.
 - An app with its own backend client can conform it to `FeedbackConnection` and pass
