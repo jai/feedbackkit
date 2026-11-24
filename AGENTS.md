@@ -18,3 +18,10 @@ README.md says what the package, the Worker and the demo are. What it leaves out
   every three hours. Native workflows use the existing Zoomies lanes; release validation does not change host cordons.
 - **Test commands and workflows** are documented in `docs/workflow.md`; hooks fix staged files, lint the component
   before commit and run isolated units before push. Integration, UI and deployed E2E remain separate.
+
+## Tests on Jai's Macs
+
+Before you run UI tests, or anything else that controls the screen, on one of Jai's Macs (directly or over SSH), read
+`AGENTS.ci.md` in jai/ci (private):
+`gh api repos/jai/ci/contents/AGENTS.ci.md -H 'Accept: application/vnd.github.raw'`.
+It says which Macs are off limits and how to run Mac UI tests through CI. If you cannot read it, do not run them there.
