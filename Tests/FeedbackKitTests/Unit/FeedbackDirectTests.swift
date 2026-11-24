@@ -86,6 +86,35 @@ struct FeedbackDirectTests {
         #expect(await tokens.calls == [false, true])
     }
 
+    @Test func aDeviceIsRegisteredForPushesWithTheSendersTokenAndForgottenByItsOwn() async throws {
+        let http = DirectHTTP(statuses: [401, 200, 200])
+        let tokens = TokenCalls()
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { renew in await tokens.token(renew) },
+                                    http: http, streams: http)
+        let device = String(repeating: "ab", count: 32)
+        try await direct.registerDevice(token: device, environment: .production)
+        try await direct.unregisterDevice(token: device.uppercased())
+        let requests = await http.requests
+        #expect(requests.map { "\($0.httpMethod ?? "") \($0.url?.path ?? "")" } == [
+            "POST /v2/devices", "POST /v2/devices", "DELETE /v2/devices/\(device)",
+        ])
+        #expect(try JSONValue.decode(#require(requests[1].httpBody)) == .object([
+            "token": .string(device), "environment": .string("production"),
+        ]))
+        #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer renewed-fixture")
+        await #expect(throws: URLError.self) { try await direct.unregisterDevice(token: "../feedback") }
+        #expect(await http.requests.count == 3)
+    }
+
+    @Test func aRefusedDeviceRegistrationThrows() async throws {
+        let http = DirectHTTP(statuses: [400])
+        let direct = FeedbackDirect(baseURL: URL(string: "https://worker.test")!, token: { _ in "token" },
+                                    http: http, streams: http)
+        await #expect(throws: FeedbackRefusal.self) {
+            try await direct.registerDevice(token: "not-hex", environment: .sandbox)
+        }
+    }
+
     @Test func externalImage401DoesNotRequestAFeedbackTokenOrRetry() async throws {
         let images = DirectHTTP(statuses: [401])
         let tokens = TokenCalls()

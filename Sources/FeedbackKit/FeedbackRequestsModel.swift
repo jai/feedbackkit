@@ -150,7 +150,15 @@ public final class FeedbackRequestsModel {
         return selection.map(FeedbackRoute.thread)
     }
 
-    /// A new conversation to write in: the one already started and still empty, else a fresh one.
+    /// Where a requested chat shows: alone over the list in the narrow layout, picked in the wide one. A conversation
+    /// started here that became that chat keeps its route, and so its draft.
+    func open(
+        _ request: FeedbackOpenRequest, stacked path: [FeedbackRoute], selected: FeedbackRoute?
+    ) -> (path: [FeedbackRoute], selection: FeedbackRoute?) {
+        let stacked = route(for: request.chat, keeping: path.last) ?? .thread(request.chat)
+        return ([stacked], route(for: request.chat, keeping: selected))
+    }
+
     func compose(reusing route: FeedbackRoute?) -> FeedbackRoute {
         if case .new(let id) = route, started[id] == nil {
             return .new(id)

@@ -195,11 +195,17 @@ team's key, to the app's bundle id (`topic` in `APPS`; an app without one gets n
 |---|---|---|
 | An agent takes the chat: its coding thread is found | visible: the chat's title, "An agent has taken this and is starting." | `{chat, app, kind: "taken"}` |
 | The agent writes something new | visible: the chat's title, its newest words (180 characters) | `{chat, app, kind: "reply"}` |
+| The agent asks the sender a question (`asks` on its side) | visible and time-sensitive: the chat's title, "Needs you" under it, the question | `{chat, app, kind: "reply", asks: true}` |
 | A message is claimed, delivered or fails | silent (`content-available`) | `{chat, app, kind: "status", status}` |
 
 - Visible pushes carry `thread-id` = the chat, so a chat's pushes group together, and `mutable-content`.
+- A chat's newer reply replaces its older one on the phone (`apns-collapse-id`); a question is kept apart, so the
+  progress reply after it does not take it off the Lock Screen.
 - A device APNs answers as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) is forgotten.
 - The app opens the chat named in `feedbackkit.chat` when the push is tapped, and refreshes it on a silent one.
+- **Nothing is pushed until the app registers its device.** In Swift: `FeedbackDirect.registerDevice(token:environment:)`
+  at each launch and whenever the system gives a new APNs token; `FeedbackPush(userInfo:)` reads a notification, and
+  `FeedbackRequestsView.opening(FeedbackOpenRequest(chat:))` opens its chat when it is tapped.
 
 ### Swift direct client
 

@@ -15,6 +15,8 @@ public struct FeedbackRequestsView: View {
     private var liveIdentifiers = FeedbackLiveIdentifiers()
     private var rowLabel: ((FeedbackThread) -> AnyView?)?
     private var rowActions: (FeedbackThread) -> ChatThreadActions = { _ in ChatThreadActions() }
+    /// The chat the host asked for (`opening`, FeedbackPush.swift).
+    var openRequest: FeedbackOpenRequest?
     /// The wide layout's open conversation.
     @State private var selection: FeedbackRoute?
     /// The narrow layout's conversations, pushed by value onto a stack of its own, so they stay open whatever is
@@ -71,6 +73,14 @@ public struct FeedbackRequestsView: View {
     public var body: some View {
         layout
             .task { await model.refresh() }
+            .onChange(of: openRequest, initial: true) { _, request in
+                guard let request else { return }
+                let opened = model.open(request, stacked: path, selected: selection)
+                path = opened.path
+                selection = opened.selection
+                // The chat may be newer than the list read last: its row gives the title.
+                Task { await model.refresh() }
+            }
     }
 
     @ViewBuilder private var layout: some View {
