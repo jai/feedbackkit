@@ -25,9 +25,7 @@ final class FeedbackRowSurfaceUITests: XCTestCase {
             XCUIDevice.shared.appearance = appearance
             let title = app.staticTexts["Export my notes as CSV"].firstMatch
             XCTAssertTrue(title.waitForExistence(timeout: 10))
-            // Let the appearance settle before it is read.
-            RunLoop.current.run(until: Date().addingTimeInterval(1))
-            let shot = XCUIScreen.main.screenshot()
+            let shot = try settled(dark: appearance == .dark, in: app.windows.firstMatch.frame)
             let attachment = XCTAttachment(screenshot: shot)
             attachment.name = "rows-\(appearance == .dark ? "dark" : "light")"
             attachment.lifetime = .keepAlways
@@ -49,6 +47,22 @@ final class FeedbackRowSurfaceUITests: XCTestCase {
                 try colour(shot, at: CGPoint(x: screen.minX + 2, y: words.minY - CGFloat(step)), in: screen)
             }
             XCTAssertTrue(above.contains { !same($0, card) }, "\(appearance): no page shows between the rows")
+        }
+    }
+
+    /// The screen once it has taken the appearance asked for: its top corner, the ground behind the bars, is dark or
+    /// light. A loaded simulator takes longer than a fixed second to change.
+    private func settled(dark: Bool, in screen: CGRect) throws -> XCUIScreenshot {
+        let end = Date().addingTimeInterval(30)
+        while true {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            let shot = XCUIScreen.main.screenshot()
+            let corner = try colour(shot, at: CGPoint(x: screen.minX + 2, y: screen.minY + 2), in: screen)
+            let isDark = corner.reduce(0, +) < 3 * 128
+            if isDark == dark || Date() > end {
+                XCTAssertEqual(isDark, dark, "the screen never turned \(dark ? "dark" : "light")")
+                return shot
+            }
         }
     }
 
