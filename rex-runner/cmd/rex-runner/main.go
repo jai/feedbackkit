@@ -23,6 +23,7 @@ import (
 	"github.com/jai/feedbackkit/rex-runner/internal/rex"
 	"github.com/jai/feedbackkit/rex-runner/internal/state"
 	"github.com/jai/feedbackkit/rex-runner/internal/worker"
+	"github.com/jai/feedbackkit/rex-runner/prompts"
 )
 
 func main() {
@@ -360,7 +361,11 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 	if err != nil {
 		return rex.CreatedWindow{}, fmt.Errorf("coordinator session id: %w", err)
 	}
-	coordCmd := coordinatorCommand(cfg, sessionID, coordTranscriptExists(cfg.CoordDir, sessionID))
+	promptFile, err := prompts.WriteFile(cfg.StateDir, "coordinator", prompts.Coordinator())
+	if err != nil {
+		return rex.CreatedWindow{}, err
+	}
+	coordCmd := coordinatorCommand(cfg, sessionID, promptFile, coordTranscriptExists(cfg.CoordDir, sessionID))
 
 	sess, err := findCoordSession(ctx, cfg, rc)
 	if err != nil {
@@ -423,7 +428,9 @@ func findCoordSession(ctx context.Context, cfg config.Config, rc *rex.Client) (*
 // builderCommand is the builder's command line. A Claude builder with a configDir runs under
 // `env CLAUDE_CONFIG_DIR=<configDir>`, which picks its Claude account. REX_SESSION_NAMING=false is read by the Rex
 // SessionStart hook in that home: builders share one Rex session, so they must not be told to name it.
-func builderCommand(agent, model, sessionID, prompt, configDir string, resume bool) ([]string, error) {
+// Every builder gets prompts.Builder(): Claude as system prompt text from promptFile on each start and resume, the others after the
+// task in their first message (they have no system prompt flag, so a resumed one keeps the text it started with).
+func builderCommand(agent, model, sessionID, prompt, promptFile, configDir string, resume bool) ([]string, error) {
 	switch agent {
 	case "claude":
 		args := []string{"env", "REX_SESSION_NAMING=false"}
@@ -434,6 +441,7 @@ func builderCommand(agent, model, sessionID, prompt, configDir string, resume bo
 		if model != "" {
 			args = append(args, "--model", model)
 		}
+		args = append(args, systemPromptArgs(promptFile)...)
 		if resume && sessionID != "" {
 			args = append(args, "--resume", sessionID)
 		} else if sessionID != "" {
@@ -452,7 +460,7 @@ func builderCommand(agent, model, sessionID, prompt, configDir string, resume bo
 			args = append(args, "--model", model)
 		}
 		if prompt != "" {
-			args = append(args, prompt)
+			args = append(args, withBuilderPrompt(prompt))
 		}
 		return args, nil
 	case "agy":
@@ -460,12 +468,22 @@ func builderCommand(agent, model, sessionID, prompt, configDir string, resume bo
 		if resume && sessionID != "" {
 			args = append(args, "--resume", sessionID)
 		} else if prompt != "" {
-			args = append(args, prompt)
+			args = append(args, withBuilderPrompt(prompt))
 		}
 		return args, nil
 	default:
 		return nil, fmt.Errorf("unsupported agent %q (expected claude, codex, or agy)", agent)
 	}
+}
+
+// systemPromptArgs gives Claude a standing prompt. Snapshot off: by default Claude records the system prompt at the
+// first request and ignores a newer one on resume, so a resumed session would never get a changed prompt.
+func systemPromptArgs(promptFile string) []string {
+	return []string{"--append-system-prompt-file", promptFile, "--system-prompt-snapshot", "off"}
+}
+
+func withBuilderPrompt(task string) string {
+	return task + "\n\n---\n\n" + prompts.Builder()
 }
 
 func cmdBoot(ctx context.Context, cfg config.Config, args []string) error {
@@ -504,6 +522,10 @@ func cmdBoot(ctx context.Context, cfg config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
+	promptFile, err := prompts.WriteFile(cfg.StateDir, "builder", prompts.Builder())
+	if err != nil {
+		return err
+	}
 	resumed := 0
 	for _, m := range runs {
 		if m.IsTerminal() {
@@ -512,7 +534,7 @@ func cmdBoot(ctx context.Context, cfg config.Config, args []string) error {
 		if liveByID[m.RexWindowID] || (m.RexWindowLabel != "" && liveByLabel[m.RexWindowLabel]) {
 			continue
 		}
-		cmdArgs, err := builderCommand(m.Agent, m.Model, m.SessionID, "", config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), true)
+		cmdArgs, err := builderCommand(m.Agent, m.Model, m.SessionID, "", promptFile, config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), true)
 		if err != nil {
 			log.Printf("skip resume %s: %v", m.ChatID, err)
 			continue
@@ -559,10 +581,11 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 		runDir = filepath.Join(cfg.RunsDir, *chatID)
 	}
 	sessionID := newUUIDv4()
-	if strings.TrimSpace(*prompt) != "" {
-		*prompt += builderRules
+	promptFile, err := prompts.WriteFile(cfg.StateDir, "builder", prompts.Builder())
+	if err != nil {
+		return err
 	}
-	cmdArgs, err := builderCommand(*agent, *model, sessionID, *prompt, config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), false)
+	cmdArgs, err := builderCommand(*agent, *model, sessionID, *prompt, promptFile, config.LoadRuntimeBuilderConfigDir(cfg.StateDir, cfg.BuilderConfigDir), false)
 	if err != nil {
 		return err
 	}
