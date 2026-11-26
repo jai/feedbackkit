@@ -665,6 +665,15 @@ const ABOUT_HTML = `<!doctype html>
     padding-bottom: 0.55rem;
     border-bottom: 1px solid var(--border);
   }
+  .map-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+  }
+  .map-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .map-filter-bar button.btn { min-height: 2.15rem; padding: 0.22rem 0.68rem; font-size: 0.88rem; }
   .diagram-title { font-size: 1.05rem; font-weight: 650; color: var(--text); display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .mode-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .canvas-frame {
@@ -942,7 +951,16 @@ const ABOUT_HTML = `<!doctype html>
           <button class="btn mode-btn" data-mode="flow" aria-pressed="true" type="button">1 · Flow</button>
           <button class="btn mode-btn" data-mode="recovery" aria-pressed="false" type="button">2 · Reboot</button>
           <button class="btn mode-btn" data-mode="lanes" aria-pressed="false" type="button">3 · Orca vs Rex</button>
-          <button class="btn" id="toggleDoneBtn" type="button" aria-pressed="false">Show recent done</button>
+        </div>
+      </div>
+
+      <div class="map-filter-bar" aria-label="Map thread density and app filters">
+        <div class="map-filter-row" id="mapAppFilters"></div>
+        <div class="map-filter-row">
+          <button class="btn r4-mode-btn" data-r4="group" aria-pressed="false" type="button">Group by app</button>
+          <button class="btn r4-mode-btn" data-r4="threads" aria-pressed="false" type="button">All threads</button>
+          <button class="btn r4-mode-btn" data-r4="collapsed" aria-pressed="false" type="button">Collapse R4</button>
+          <button class="btn" id="toggleDoneBtn" type="button" aria-pressed="false">Show done</button>
         </div>
       </div>
 
@@ -1194,8 +1212,15 @@ let INSPECT = null;
 let SELECTED = "worker";
 let SHOW_DONE_IN_DIAGRAM = false;
 let SHOW_QUIET_APPS = false;
+let MAP_APP_FILTER = "all";
+let MAP_R4_MODE = "auto"; // "auto" | "group" | "threads" | "collapsed"
 const TOKEN_KEY = "fk_about_inspect_token";
 const SIZE_KEY = "fk_text_size";
+const R4_MODE_KEY = "fk_map_r4_mode";
+try {
+  const savedR4 = localStorage.getItem(R4_MODE_KEY);
+  if (savedR4 === "group" || savedR4 === "threads" || savedR4 === "collapsed") MAP_R4_MODE = savedR4;
+} catch {}
 
 const APP_LABELS = {
   "agent-pager": "Agent Pager",
@@ -1375,15 +1400,52 @@ function clipSvg(s, max) {
   return clean.length <= max ? clean : clean.slice(0, max - 1) + "…";
 }
 
+function renderMapAppFilterBar(allItems) {
+  const bar = document.getElementById("mapAppFilters");
+  const counts = new Map();
+  for (const item of allItems) {
+    counts.set(item.app, (counts.get(item.app) || 0) + 1);
+  }
+  const apps = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  let html = '<button class="btn map-app-btn" data-app="all" aria-pressed="' + (MAP_APP_FILTER === "all") + '" type="button">All (' + allItems.length + ')</button>';
+  for (const [slug, cnt] of apps) {
+    html += '<button class="btn map-app-btn" data-app="' + escHtml(slug) + '" aria-pressed="' + (MAP_APP_FILTER === slug) + '" type="button">' + escHtml(appDisplayName(slug)) + ' (' + cnt + ')</button>';
+  }
+  bar.innerHTML = html;
+  bar.querySelectorAll(".map-app-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      MAP_APP_FILTER = btn.dataset.app;
+      if (MAP_APP_FILTER !== "all" && MAP_R4_MODE !== "threads") {
+        MAP_R4_MODE = "threads";
+      }
+      renderDiagramBuilders();
+    });
+  });
+}
+
+function effectiveR4Mode(filteredCount) {
+  if (MAP_R4_MODE === "collapsed") return "collapsed";
+  if (MAP_APP_FILTER !== "all") return "threads";
+  if (MAP_R4_MODE === "group" || MAP_R4_MODE === "threads") return MAP_R4_MODE;
+  return filteredCount > 6 ? "group" : "threads";
+}
+
 function renderDiagramBuilders() {
   const edgesG = document.getElementById("dynamicEdges");
   const nodesG = document.getElementById("dynamicBuilders");
   const svg = document.getElementById("tree");
   const boundary = document.getElementById("rexBoundaryRect");
-  const items = collectDiagramThreads();
-  const liveCount = items.filter((x) => x.state !== "done").length;
+  const allItems = collectDiagramThreads();
+  const liveCount = allItems.filter((x) => x.state !== "done").length;
   document.getElementById("sbActive").textContent = String(liveCount);
   document.getElementById("rexRunsBadge").textContent = liveCount + " live thread" + (liveCount === 1 ? "" : "s");
+
+  renderMapAppFilterBar(allItems);
+  const items = MAP_APP_FILTER === "all" ? allItems : allItems.filter((x) => x.app === MAP_APP_FILTER);
+  const mode = effectiveR4Mode(items.length);
+  document.querySelectorAll(".r4-mode-btn").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.r4 === mode));
+  });
 
   const startY = 636;
   const cardW = 236;
@@ -1408,6 +1470,110 @@ function renderDiagramBuilders() {
     return;
   }
 
+  // Collapsed R4: 1 compact summary bar on the map
+  if (mode === "collapsed") {
+    const appCount = new Set(items.map((x) => x.app)).size;
+    const needs = items.filter((x) => x.state === "needs_you" || x.state === "blocked").length;
+    const working = items.filter((x) => x.state === "working" || x.state === "queued").length;
+    edgesG.innerHTML =
+      '<path class="edge edge-fwd edge-live-flow" d="M 762 582 L 762 636" marker-end="url(#arr-fwd)"/>' +
+      '<text class="edge-label fwd in-rex" x="776" y="614">rex-runner spawn (' + items.length + ' collapsed)</text>' +
+      '<path class="edge edge-ret only-flow" d="M 540 684 L 364 684 L 364 530 L 376 530" marker-end="url(#arr-live)"/>';
+    nodesG.innerHTML =
+      '<g class="node state-live" id="expandR4Node" transform="translate(540, 636)">' +
+        '<rect class="box" width="444" height="94"/>' +
+        '<text class="n-kicker" x="16" y="24">R4 · Collapsed (' + appCount + ' app' + (appCount === 1 ? '' : 's') + ')</text>' +
+        '<rect class="chip-bg" x="342" y="10" width="88" height="22" fill="var(--accent-soft)"/>' +
+        '<text class="chip-txt" x="354" y="25" fill="var(--accent)">Expand ▾</text>' +
+        '<text class="n-title" x="16" y="52">' + items.length + ' live thread' + (items.length === 1 ? '' : 's') + ' running</text>' +
+        '<text class="n-metric" x="16" y="78">' + working + ' working · ' + needs + ' needs you / blocked · click to expand</text>' +
+      '</g>';
+    boundary.setAttribute("height", "316");
+    svg.setAttribute("viewBox", "0 0 1160 778");
+    document.getElementById("expandR4Node").addEventListener("click", () => {
+      MAP_R4_MODE = items.length > 6 ? "group" : "threads";
+      try { localStorage.setItem(R4_MODE_KEY, MAP_R4_MODE); } catch {}
+      renderDiagramBuilders();
+    });
+    return;
+  }
+
+  // Group-by-app mode: 1 crisp summary node per app on the map; clicking zooms straight into that app's threads
+  if (mode === "group") {
+    const byApp = new Map();
+    for (const item of items) {
+      const arr = byApp.get(item.app) || [];
+      arr.push(item);
+      byApp.set(item.app, arr);
+    }
+    const groups = Array.from(byApp.entries()).sort((a, b) => b[1].length - a[1].length);
+    const numRows = Math.ceil(groups.length / 3);
+    const lastRowBottom = startY + (numRows - 1) * rowStride + cardH;
+    const returnBusY = lastRowBottom + 28;
+    const boundaryBottom = returnBusY + 28;
+    boundary.setAttribute("height", String(boundaryBottom - 438));
+    svg.setAttribute("viewBox", "0 0 1160 " + (boundaryBottom + 20));
+
+    let edgesHtml = '<path class="edge edge-fwd edge-live-flow" d="M 762 582 L 762 608"/>';
+    edgesHtml += '<text class="edge-label fwd in-rex" x="776" y="601">' + items.length + ' threads grouped by app (click an app to expand)</text>';
+    const topCols = Math.min(3, groups.length);
+    const leftX = colXs[0] + cardW / 2;
+    const rightX = colXs[topCols - 1] + cardW / 2;
+    if (topCols === 1) {
+      edgesHtml += '<path class="edge edge-fwd edge-live-flow" d="M 762 608 L ' + leftX + ' 608 L ' + leftX + ' ' + startY + '" marker-end="url(#arr-fwd)"/>';
+    } else {
+      edgesHtml += '<path class="edge edge-fwd" d="M ' + leftX + ' 608 L ' + rightX + ' 608"/>';
+      for (let c = 0; c < topCols; c++) {
+        const cx = colXs[c] + cardW / 2;
+        edgesHtml += '<path class="edge edge-fwd edge-live-flow" d="M ' + cx + ' 608 L ' + cx + ' ' + startY + '" marker-end="url(#arr-fwd)"/>';
+      }
+    }
+    for (let i = 3; i < groups.length; i++) {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const cx = colXs[col] + cardW / 2;
+      edgesHtml += '<path class="edge edge-fwd" d="M ' + cx + ' ' + (startY + (row - 1) * rowStride + cardH) + ' L ' + cx + ' ' + (startY + row * rowStride) + '" marker-end="url(#arr-fwd)"/>';
+    }
+    edgesHtml += '<path class="edge edge-ret only-flow" d="M ' + rightX + ' ' + lastRowBottom + ' L ' + rightX + ' ' + returnBusY + ' L 364 ' + returnBusY + ' L 364 530 L 376 530" marker-end="url(#arr-live)"/>';
+    edgesHtml += '<text class="edge-label ret in-rex" x="540" y="' + (returnBusY + 18) + '">rex-runner report → inbox.jsonl</text>';
+    edgesG.innerHTML = edgesHtml;
+
+    let nodesHtml = "";
+    for (let i = 0; i < groups.length; i++) {
+      const [slug, list] = groups[i];
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const x = colXs[col];
+      const y = startY + row * rowStride;
+      const needs = list.filter((t) => t.state === "needs_you" || t.state === "blocked").length;
+      const working = list.filter((t) => t.state === "working" || t.state === "queued").length;
+      const nodeState = needs > 0 ? "standby" : "live";
+      const chipBg = needs > 0 ? "var(--standby-soft)" : "var(--live-soft)";
+      const chipFg = needs > 0 ? "var(--standby)" : "var(--live)";
+      const chipTxt = list.length + " live ▾";
+      const topTitle = list[0] ? clipSvg(list[0].title, 26) : "";
+      nodesHtml += '<g class="node state-' + nodeState + ' app-group-node" data-app="' + escHtml(slug) + '" transform="translate(' + x + ', ' + y + ')">' +
+        '<rect class="box" width="' + cardW + '" height="' + cardH + '"/>' +
+        '<text class="n-kicker" x="12" y="23">App Group · Click to expand</text>' +
+        '<rect class="chip-bg" x="' + (cardW - 76) + '" y="9" width="66" height="20" fill="' + chipBg + '"/>' +
+        '<text class="chip-txt" x="' + (cardW - 67) + '" y="23" fill="' + chipFg + '">' + escHtml(chipTxt) + '</text>' +
+        '<text class="n-title" x="12" y="51">' + escHtml(appDisplayName(slug)) + '</text>' +
+        '<text class="n-metric" x="12" y="75" style="font-size:13px">' + working + ' working · ' + needs + ' needs you / blocked</text>' +
+        '<text class="n-sub" x="12" y="97">' + escHtml(topTitle) + '</text>' +
+      '</g>';
+    }
+    nodesG.innerHTML = nodesHtml;
+    nodesG.querySelectorAll(".app-group-node").forEach((g) => {
+      g.addEventListener("click", () => {
+        MAP_APP_FILTER = g.dataset.app;
+        MAP_R4_MODE = "threads";
+        renderDiagramBuilders();
+      });
+    });
+    return;
+  }
+
+  // Full per-thread mode: draw every live thread box with orthogonal branches
   const numRows = Math.ceil(items.length / 3);
   const lastRowBottom = startY + (numRows - 1) * rowStride + cardH;
   const returnBusY = lastRowBottom + 28;
@@ -1417,12 +1583,11 @@ function renderDiagramBuilders() {
   boundary.setAttribute("height", String(boundaryBottom - 438));
   svg.setAttribute("viewBox", "0 0 1160 " + totalHeight);
 
-  // Build orthogonal tree edges from Fable (x=762, y=582) to every live thread box
   let edgesHtml = "";
   const busY = 608;
   const topCols = Math.min(3, items.length);
   edgesHtml += '<path class="edge edge-fwd edge-live-flow" d="M 762 582 L 762 ' + busY + '"/>';
-  edgesHtml += '<text class="edge-label fwd in-rex" x="776" y="601">rex-runner spawn (' + items.length + ' thread' + (items.length === 1 ? '' : 's') + ')</text>';
+  edgesHtml += '<text class="edge-label fwd in-rex" x="776" y="601">rex-runner spawn (' + items.length + (MAP_APP_FILTER !== "all" ? (" in " + appDisplayName(MAP_APP_FILTER)) : " live") + ')</text>';
 
   if (topCols === 1) {
     const cx = colXs[0] + cardW / 2;
@@ -1437,7 +1602,6 @@ function renderDiagramBuilders() {
     }
   }
 
-  // Multi-row vertical connectors between rows inside each column
   for (let i = 3; i < items.length; i++) {
     const col = i % 3;
     const row = Math.floor(i / 3);
@@ -1447,7 +1611,6 @@ function renderDiagramBuilders() {
     edgesHtml += '<path class="edge edge-fwd" d="M ' + cx + ' ' + prevBottom + ' L ' + cx + ' ' + nextTop + '" marker-end="url(#arr-fwd)"/>';
   }
 
-  // Return bus along bottom -> up left edge of Rex box -> into Coordinator Inbox
   const leftmostX = colXs[0] + cardW / 2;
   const rightmostCol = Math.min(2, items.length - 1);
   const rightmostX = colXs[rightmostCol] + cardW / 2;
@@ -1458,7 +1621,6 @@ function renderDiagramBuilders() {
   edgesHtml += '<text class="edge-label ret in-rex" x="540" y="' + (returnBusY + 18) + '">rex-runner report → inbox.jsonl</text>';
   edgesG.innerHTML = edgesHtml;
 
-  // Render every thread box inside the SVG
   let nodesHtml = "";
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -1914,6 +2076,15 @@ document.getElementById("inspectorDock").addEventListener("click", () => setDraw
 document.getElementById("closeInspectorBtn").addEventListener("click", () => setDrawer(false));
 inspectorBackdrop.addEventListener("click", () => setDrawer(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") setDrawer(false); });
+
+document.querySelectorAll(".r4-mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    MAP_R4_MODE = btn.dataset.r4;
+    if (MAP_R4_MODE === "group") MAP_APP_FILTER = "all";
+    try { localStorage.setItem(R4_MODE_KEY, MAP_R4_MODE); } catch {}
+    renderDiagramBuilders();
+  });
+});
 
 document.getElementById("toggleDoneBtn").addEventListener("click", (e) => {
   SHOW_DONE_IN_DIAGRAM = !SHOW_DONE_IN_DIAGRAM;
