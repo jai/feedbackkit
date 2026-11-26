@@ -2,15 +2,19 @@
  * Live visual-first architecture dashboard (`GET /about`), sanitized status API
  * (`GET /about/status.json`), and Rex runner heartbeat ingest (`POST /runner/rex-status`).
  *
- * Strictly public-safe: exposes operational counts, component build states, and sanitized
- * slugs only — never chat text, emails, local paths, hostnames, or tokens.
+ * Strictly public-safe on `/about/status.json`: exposes operational counts, component
+ * build states, and sanitized slugs only — never chat text, emails, local paths, or tokens.
+ * Authenticated live thread titles & terminal captures hydrate via `/about/threads.json`
+ * and `/about/inspect` behind Cloudflare Access.
  */
 
 import type { AppConfig, FeatureKitEnv } from "./featurekit.ts";
 
 const REX_STATUS_KEY = "rex/status.json";
 const REX_INSPECT_KEY = "rex/inspect.json";
-const MAX_INSPECT_BYTES = 256 * 1024;
+const MAX_INSPECT_BYTES = 512 * 1024;
+const MAX_STORED_RUNS = 64;
+const MAX_STORED_PANES = 32;
 const ORCA_FRESH_MS = 90_000;
 const REX_FRESH_MS = 120_000;
 const SLUG_RE = /^[a-zA-Z0-9._-]{1,48}$/;
@@ -75,6 +79,26 @@ function safeInt(v: unknown, min = 0, max = 100_000): number {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.trunc(v))) : min;
 }
 
+function runPriority(status: string): number {
+  if (status === "active" || status === "progress") return 0;
+  if (status === "blocked") return 1;
+  if (status === "done") return 2;
+  if (status === "reaped") return 3;
+  return 4;
+}
+
+function isRunActive(status: string): boolean {
+  return status === "active" || status === "progress" || status === "blocked";
+}
+
+function sortRuns(runs: RexRunSnapshot[]): RexRunSnapshot[] {
+  return [...runs].sort((a, b) => {
+    const p = runPriority(a.status) - runPriority(b.status);
+    if (p !== 0) return p;
+    return b.updated_at_ms - a.updated_at_ms;
+  });
+}
+
 /** Validates and stores a sanitized snapshot pushed by `rex-runner` into R2. */
 export async function putRexStatus(request: Request, env: FeatureKitEnv, now: number): Promise<Response> {
   let raw: unknown;
@@ -94,8 +118,8 @@ export async function putRexStatus(request: Request, env: FeatureKitEnv, now: nu
     .slice(0, 20);
 
   const runsRaw = Array.isArray(obj.runs) ? obj.runs : [];
-  const runs: RexRunSnapshot[] = [];
-  for (const item of runsRaw.slice(0, 24)) {
+  const parsedRuns: RexRunSnapshot[] = [];
+  for (const item of runsRaw.slice(0, 200)) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       continue;
     }
@@ -104,7 +128,7 @@ export async function putRexStatus(request: Request, env: FeatureKitEnv, now: nu
     if (!chatId) {
       continue;
     }
-    runs.push({
+    parsedRuns.push({
       chat_id: chatId,
       app: safeSlug(r.app, "unknown"),
       agent: safeSlug(r.agent, "claude"),
@@ -112,6 +136,7 @@ export async function putRexStatus(request: Request, env: FeatureKitEnv, now: nu
       updated_at_ms: typeof r.updated_at_ms === "number" && Number.isFinite(r.updated_at_ms) ? r.updated_at_ms : now,
     });
   }
+  const runs = sortRuns(parsedRuns).slice(0, MAX_STORED_RUNS);
 
   const snapshot: StoredRexStatus = {
     reported_at_ms: now,
@@ -148,8 +173,8 @@ export async function putRexInspect(request: Request, env: FeatureKitEnv, now: n
   }
   const obj = raw as Record<string, unknown>;
   const panesRaw = Array.isArray(obj.panes) ? obj.panes : [];
-  const panes: StoredRexInspectPane[] = [];
-  for (const item of panesRaw.slice(0, 16)) {
+  const parsedPanes: StoredRexInspectPane[] = [];
+  for (const item of panesRaw.slice(0, 64)) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       continue;
     }
@@ -158,16 +183,23 @@ export async function putRexInspect(request: Request, env: FeatureKitEnv, now: n
     if (!id) {
       continue;
     }
-    panes.push({
+    parsedPanes.push({
       id,
       label: typeof p.label === "string" ? p.label.slice(0, 80) : id,
       kind: safeState(p.kind, "builder"),
       status: safeState(p.status, "active"),
       agent: typeof p.agent === "string" ? safeSlug(p.agent) : undefined,
       app: typeof p.app === "string" ? safeSlug(p.app) : undefined,
-      capture: typeof p.capture === "string" ? p.capture.slice(-12_000) : "",
+      capture: typeof p.capture === "string" ? p.capture.slice(-10_000) : "",
     });
   }
+  parsedPanes.sort((a, b) => {
+    const ka = a.kind === "coordinator" ? -1 : runPriority(a.status);
+    const kb = b.kind === "coordinator" ? -1 : runPriority(b.status);
+    return ka - kb;
+  });
+  const panes = parsedPanes.slice(0, MAX_STORED_PANES);
+
   const inboxRaw = Array.isArray(obj.recent_inbox) ? obj.recent_inbox : [];
   const recentInbox = inboxRaw
     .slice(-20)
@@ -277,9 +309,10 @@ export async function aboutStatusResponse(
       rex = null;
     }
   }
+  const sortedRuns = rex ? sortRuns(rex.runs ?? []) : [];
   const rexAgeSec = rex ? Math.max(0, Math.floor((now - rex.reported_at_ms) / 1000)) : null;
   const rexFresh = rex !== null && now - rex.reported_at_ms <= REX_FRESH_MS;
-  const activeRexRuns = rex ? rex.runs.filter((r) => r.status === "active" || r.status === "blocked") : [];
+  const activeRexRuns = sortedRuns.filter((r) => isRunActive(r.status));
 
   const components: Record<string, ComponentBuildState> = {
     apps: "live",
@@ -336,7 +369,7 @@ export async function aboutStatusResponse(
             coordinator_state: rex.coordinator_state,
             inbox_pending: rex.inbox_pending,
             claim_apps: rex.claim_apps,
-            runs: rex.runs,
+            runs: sortedRuns,
           }
         : {
             connected: false,
@@ -364,7 +397,8 @@ const ABOUT_HTML = `<!doctype html>
 <title>FeedbackKit — Live System Dashboard</title>
 <style>
   /* Eye-comfort palette & pure rem typography: soft contrast (no halation),
-     no background grid, generous line height, and zoomed-viewport drawer inspector. */
+     no background grid, diagram first with readable HTML nodes, compact status bar,
+     and clear per-app grouping for live threads. */
   :root {
     --bg: #f6f4ef;
     --surface: #fffdf9;
@@ -378,17 +412,16 @@ const ABOUT_HTML = `<!doctype html>
     --live: #1d6b4a;
     --live-soft: rgba(29, 107, 74, 0.11);
     --standby: #9a4a00;
-    --standby-soft: rgba(154, 74, 0, 0.11);
+    --standby-soft: rgba(154, 74, 0, 0.12);
     --unbuilt: #7a7368;
     --unbuilt-bg: #efece5;
-    --unbuilt-hatch: rgba(122, 115, 104, 0.14);
     --offline: #a8261c;
     --offline-soft: rgba(168, 38, 28, 0.11);
     --term-bg: #222529;
     --term-fg: #dcdfe3;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-    --shadow: 0 8px 24px rgba(31, 35, 40, 0.08);
+    --shadow: 0 8px 24px rgba(31, 35, 40, 0.07);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -404,15 +437,14 @@ const ABOUT_HTML = `<!doctype html>
       --live: #7fd3a8;
       --live-soft: rgba(127, 211, 168, 0.14);
       --standby: #f0b35a;
-      --standby-soft: rgba(240, 179, 90, 0.14);
+      --standby-soft: rgba(240, 179, 90, 0.15);
       --unbuilt: #8e96a0;
       --unbuilt-bg: #1f2226;
-      --unbuilt-hatch: rgba(142, 150, 160, 0.12);
       --offline: #ff9b8f;
       --offline-soft: rgba(255, 155, 143, 0.15);
       --term-bg: #16181b;
       --term-fg: #dcdfe3;
-      --shadow: 0 10px 28px rgba(0, 0, 0, 0.36);
+      --shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
     }
   }
   :root[data-theme="dark"] {
@@ -428,20 +460,16 @@ const ABOUT_HTML = `<!doctype html>
     --live: #7fd3a8;
     --live-soft: rgba(127, 211, 168, 0.14);
     --standby: #f0b35a;
-    --standby-soft: rgba(240, 179, 90, 0.14);
+    --standby-soft: rgba(240, 179, 90, 0.15);
     --unbuilt: #8e96a0;
     --unbuilt-bg: #1f2226;
-    --unbuilt-hatch: rgba(142, 150, 160, 0.12);
     --offline: #ff9b8f;
     --offline-soft: rgba(255, 155, 143, 0.15);
     --term-bg: #16181b;
     --term-fg: #dcdfe3;
-    --shadow: 0 10px 28px rgba(0, 0, 0, 0.36);
+    --shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
   }
-  html {
-    -webkit-text-size-adjust: 100%;
-    text-size-adjust: 100%;
-  }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   :root[data-size="large"] { font-size: 118%; }
   :root[data-size="huge"] { font-size: 136%; }
   * { box-sizing: border-box; }
@@ -449,7 +477,7 @@ const ABOUT_HTML = `<!doctype html>
     margin: 0;
     font-family: var(--sans);
     font-size: 1.125rem;
-    line-height: 1.6;
+    line-height: 1.55;
     color: var(--text);
     background-color: var(--bg);
     background-image: none;
@@ -457,78 +485,47 @@ const ABOUT_HTML = `<!doctype html>
   }
   em, i { font-style: normal; font-weight: 600; }
   p, li { max-width: 68ch; }
-  a:focus-visible, summary:focus-visible, button:focus-visible, input:focus-visible {
+  a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible {
     outline: 3px solid var(--accent);
     outline-offset: 3px;
   }
   .shell {
-    max-width: 84rem;
+    max-width: 86rem;
     margin: 0 auto;
-    padding: 1.25rem max(1.1rem, env(safe-area-inset-right, 0px)) 5rem max(1.1rem, env(safe-area-inset-left, 0px));
+    padding: 0.9rem max(1.1rem, env(safe-area-inset-right, 0px)) 5rem max(1.1rem, env(safe-area-inset-left, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
   }
 
+  /* Compact top header */
   header {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    padding-bottom: 1rem;
+    gap: 0.7rem 1rem;
+    padding-bottom: 0.7rem;
     border-bottom: 1px solid var(--border);
   }
-  .eyebrow {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text-dim);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.6rem;
-  }
-  .pill {
-    font-size: 0.88rem;
-    font-weight: 650;
-    padding: 0.2rem 0.6rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    white-space: nowrap;
-  }
-  .pill.live { border-color: var(--live); color: var(--live); background: var(--live-soft); }
-  .pill.standby { border-color: var(--standby); color: var(--standby); background: var(--standby-soft); }
-  .pill.unbuilt { border-color: var(--unbuilt); color: var(--unbuilt); background: var(--unbuilt-bg); border-style: dashed; }
-  .pill.offline { border-color: var(--offline); color: var(--offline); background: var(--offline-soft); }
-  .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; display: inline-block; background: currentColor; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-  @media (prefers-reduced-motion: no-preference) { .dot.pulsing { animation: pulse 2.4s ease-in-out infinite; } }
-
-  h1 { margin: 0.35rem 0 0.25rem; font-size: 1.65rem; font-weight: 650; line-height: 1.25; }
-  .subtitle { margin: 0; font-size: 1rem; color: var(--text-dim); max-width: 65ch; }
-  .subtitle code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); padding: 0.08rem 0.35rem; border-radius: 4px; }
-
-  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .title-block { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem 0.75rem; }
+  h1 { margin: 0; font-size: 1.45rem; font-weight: 650; line-height: 1.25; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
   .size-group {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
     overflow: hidden;
     background: var(--surface);
   }
-  .size-group button.btn {
-    border: none;
-    border-right: 1px solid var(--border);
-    border-radius: 0;
-    padding: 0.45rem 0.7rem;
-  }
+  .size-group button.btn { border: none; border-right: 1px solid var(--border); border-radius: 0; padding: 0.35rem 0.65rem; }
   .size-group button.btn:last-child { border-right: none; }
   button.btn, a.btn {
     font-family: var(--sans);
-    font-size: 0.95rem;
+    font-size: 0.92rem;
     font-weight: 500;
-    min-height: 2.75rem;
-    padding: 0.45rem 0.9rem;
+    min-height: 2.5rem;
+    padding: 0.35rem 0.8rem;
     border-radius: 8px;
     border: 1px solid var(--border-strong);
     background: var(--surface);
@@ -538,11 +535,9 @@ const ABOUT_HTML = `<!doctype html>
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    transition: border-color 140ms ease, background 140ms ease;
   }
   button.btn:hover, a.btn:hover { border-color: var(--accent); color: var(--accent); }
-  a.btn.worldview { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  button.btn[aria-pressed="true"] {
+  a.btn.worldview, button.btn[aria-pressed="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent);
@@ -550,106 +545,60 @@ const ABOUT_HTML = `<!doctype html>
   }
   #openInspectorBtn { display: none; }
 
-  /* Instrument KPI strip */
-  .kpi-strip {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
-    gap: 0.75rem;
-    margin: 1rem 0;
+  .pill {
+    font-size: 0.85rem;
+    font-weight: 650;
+    padding: 0.14rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
   }
-  .kpi {
+  .pill.live { border-color: var(--live); color: var(--live); background: var(--live-soft); }
+  .pill.standby { border-color: var(--standby); color: var(--standby); background: var(--standby-soft); }
+  .pill.accent { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .pill.unbuilt { border-color: var(--unbuilt); color: var(--unbuilt); background: var(--unbuilt-bg); border-style: dashed; }
+  .pill.offline { border-color: var(--offline); color: var(--offline); background: var(--offline-soft); }
+  .dot { width: 0.48rem; height: 0.48rem; border-radius: 50%; display: inline-block; background: currentColor; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  @media (prefers-reduced-motion: no-preference) { .dot.pulsing { animation: pulse 2.4s ease-in-out infinite; } }
+
+  /* Compact single-bar status strip (~25% height of old 5-card KPI grid) */
+  .status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 1rem;
+    padding: 0.55rem 0.9rem;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 0.9rem 1rem;
+    font-size: 0.94rem;
     font-variant-numeric: tabular-nums;
   }
-  .kpi-label {
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-  .kpi-val {
-    font-size: 1.35rem;
-    font-weight: 650;
-    margin: 0.3rem 0 0.15rem;
-    line-height: 1.25;
-  }
-  .kpi-sub { font-size: 0.92rem; color: var(--text-dim); overflow-wrap: anywhere; }
-  .progress-bar {
-    height: 0.45rem;
-    background: var(--surface-2);
-    border-radius: 4px;
-    overflow: hidden;
-    margin-top: 0.5rem;
-  }
-  .progress-fill { height: 100%; background: var(--live); transition: width 250ms ease; }
+  .sb-item { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-dim); }
+  .sb-item strong { color: var(--text); font-weight: 650; }
+  .sb-sep { color: var(--border-strong); user-select: none; }
+  .sb-time { margin-left: auto; color: var(--text-dim); font-size: 0.88rem; }
 
-  .live-threads-panel {
+  .terms-drawer {
+    display: none;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--accent);
     border-radius: 10px;
-    padding: 0.9rem 1.05rem;
-    margin: 0 0 1rem;
+    padding: 1rem 1.15rem;
   }
-  .live-threads-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    margin-bottom: 0.65rem;
-  }
-  .live-threads-head h2 { margin: 0; font-size: 1.15rem; font-weight: 650; }
-  .live-threads-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
-    gap: 0.65rem;
-  }
-  .mini-thread {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.7rem 0.85rem;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--border-strong);
-    background: var(--bg);
-    color: var(--text);
-    text-decoration: none;
-  }
-  .mini-thread:hover { border-color: var(--accent); }
-  .mini-thread.st-needs_you { border-left-color: var(--standby); }
-  .mini-thread.st-working { border-left-color: var(--live); }
-  .mini-thread.st-queued { border-left-color: var(--accent); }
-  .mini-thread.st-failed { border-left-color: var(--offline); }
-  .mini-thread-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-dim); }
-  .mini-thread-title { font-size: 0.98rem; font-weight: 650; line-height: 1.3; }
-  .mini-thread-act { font-size: 0.88rem; color: var(--text-dim); }
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem 1.25rem;
-    margin: 0 0 0.9rem;
-    font-size: 0.95rem;
-    color: var(--text-dim);
-  }
-  .legend-item { display: inline-flex; align-items: center; gap: 0.45rem; }
-  .swatch-box { width: 1rem; height: 0.7rem; border-radius: 3px; display: inline-block; }
-  .swatch-box.live { border: 2px solid var(--live); background: var(--live-soft); }
-  .swatch-box.standby { border: 2px solid var(--standby); background: var(--standby-soft); }
-  .swatch-box.unbuilt {
-    border: 2px dashed var(--unbuilt);
-    background: repeating-linear-gradient(-45deg, var(--unbuilt-bg), var(--unbuilt-bg) 4px, var(--unbuilt-hatch) 4px, var(--unbuilt-hatch) 8px);
-  }
+  .terms-drawer.open { display: block; }
+  .terms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.8rem 1.2rem; font-size: 0.96rem; }
+  .terms-grid dt { font-family: var(--mono); font-size: 0.94rem; font-weight: 700; color: var(--accent); }
+  .terms-grid dd { margin: 0.2rem 0 0; color: var(--text-dim); }
 
+  /* Main workspace: Eye-comfort Diagram FIRST + Inspector */
   .workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 24rem;
+    grid-template-columns: minmax(0, 1fr) 23rem;
     gap: 1.1rem;
     align-items: start;
   }
@@ -657,7 +606,7 @@ const ABOUT_HTML = `<!doctype html>
   .ins-close { display: none; }
   .inspector-dock { display: none; }
 
-  @media (max-width: 1120px) {
+  @media (max-width: 1180px) {
     .workspace { grid-template-columns: 1fr; }
     #openInspectorBtn { display: inline-flex; }
     .inspector-dock {
@@ -692,143 +641,181 @@ const ABOUT_HTML = `<!doctype html>
       transform: translateX(105%);
       transition: transform 180ms ease;
     }
-    aside.inspector.drawer-open {
-      transform: translateX(0);
-    }
-    .ins-close {
-      display: inline-flex;
-      margin-left: auto;
-    }
+    aside.inspector.drawer-open { transform: translateX(0); }
+    .ins-close { display: inline-flex; margin-left: auto; }
   }
 
-  .canvas-frame {
+  /* Native eye-comfort HTML flow diagram */
+  .diagram {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 12px;
+    padding: 1rem 1.1rem 1.15rem;
     box-shadow: var(--shadow);
-    overflow-x: auto;
-    padding: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
   }
-  svg#tree { display: block; width: 100%; min-width: 700px; height: auto; user-select: none; }
+  .diagram-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .diagram-title { font-size: 1.05rem; font-weight: 650; color: var(--text); }
+  .mode-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
-  .rank-label { font-family: var(--sans); font-size: 11px; font-weight: 650; fill: var(--text-dim); }
-  .rank-rule { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 5; opacity: 0.65; }
-  .boundary { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 6 4; rx: 8; }
-  .boundary-tag { font-family: var(--sans); font-size: 11px; font-weight: 600; fill: var(--text-dim); }
+  .rank {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .rank-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 650;
+    color: var(--text-dim);
+  }
+  .rank-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 0.7rem;
+  }
+  .rank-row.single { grid-template-columns: minmax(0, 1fr); }
+  .rank-row.two-col { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.35fr); }
+  @media (max-width: 760px) { .rank-row.two-col { grid-template-columns: 1fr; } }
 
-  .edge { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: opacity 180ms ease; }
-  .edge-fwd { stroke: var(--accent); }
-  .edge-ret { stroke: var(--live); stroke-dasharray: 6 4; }
-  .edge-rec { stroke: var(--standby); stroke-dasharray: 3 4; }
-  .edge-orca { stroke: var(--live); opacity: 0.85; }
-  .edge-unbuilt { stroke: var(--unbuilt); stroke-dasharray: 3 4; opacity: 0.65; }
-  .edge-label {
-    font-family: var(--sans);
-    font-size: 11px;
+  .flow-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    font-size: 0.9rem;
     font-weight: 600;
-    fill: var(--text-dim);
-    paint-order: stroke;
-    stroke: var(--surface);
-    stroke-width: 5px;
-    stroke-linejoin: round;
+    color: var(--text-dim);
+    padding: 0.05rem 0;
   }
-  .edge-label.fwd { fill: var(--accent); }
-  .edge-label.ret { fill: var(--live); }
-  .edge-label.rec { fill: var(--standby); }
-  .edge-label.unbuilt { fill: var(--unbuilt); }
-
-  @keyframes flowDash { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
-  @media (prefers-reduced-motion: no-preference) {
-    .mode-flow .edge-live-flow { stroke-dasharray: 8 4; animation: flowDash 1.8s linear infinite; }
-    .mode-recovery .edge-rec { animation: flowDash 1.6s linear infinite; }
+  .flow-arrow::before, .flow-arrow::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
   }
+  .flow-arrow.hot { color: var(--accent); }
+  .flow-arrow.live { color: var(--live); }
 
-  /* Node visual states: LIVE vs IDLE vs UNBUILT vs OFFLINE */
-  .node { cursor: pointer; transition: opacity 180ms ease; }
-  .node rect.box { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.8; rx: 7; }
-  .node:hover rect.box { stroke: var(--accent); stroke-width: 2.5; }
-  .node.is-selected rect.box { stroke: var(--accent); stroke-width: 3; }
-
-  .node.state-live rect.box { stroke: var(--live); stroke-width: 2.2; }
-  .node.state-standby rect.box { stroke: var(--standby); stroke-width: 2; }
-  .node.state-offline rect.box { stroke: var(--offline); stroke-width: 2; }
-  .node.state-unbuilt rect.box {
-    fill: url(#unbuilt-hatch);
-    stroke: var(--unbuilt);
-    stroke-width: 1.6;
-    stroke-dasharray: 5 3;
+  .node-card {
+    text-align: left;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 2px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    transition: border-color 140ms ease, background 140ms ease;
+    width: 100%;
   }
-  .node.state-unbuilt .n-title,
-  .node.state-unbuilt .n-sub,
-  .node.state-unbuilt .n-metric { fill: var(--unbuilt); }
+  .node-card:hover { border-color: var(--accent); background: var(--surface-2); }
+  .node-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .node-card.state-live { border-color: var(--live); }
+  .node-card.state-standby { border-color: var(--standby); }
+  .node-card.state-offline { border-color: var(--offline); }
+  .node-card.state-unbuilt { border-color: var(--unbuilt); border-style: dashed; background: var(--unbuilt-bg); color: var(--text-dim); }
 
-  .node .n-kicker { font-family: var(--sans); font-size: 10px; font-weight: 600; fill: var(--text-dim); }
-  .node .n-title { font-family: var(--sans); font-size: 14px; font-weight: 700; fill: var(--text); }
-  .node .n-sub { font-family: var(--sans); font-size: 11px; fill: var(--text-dim); }
-  .node .n-metric { font-family: var(--sans); font-size: 11.5px; font-weight: 600; fill: var(--text); }
-  .node .chip-bg { rx: 4; }
-  .node .chip-txt { font-family: var(--sans); font-size: 9.5px; font-weight: 700; }
-  .node a.cf-link rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.2; rx: 4; }
-  .node a.cf-link text { font-family: var(--sans); font-size: 10px; font-weight: 650; fill: var(--accent); }
-  .node a.cf-link:hover rect { fill: var(--accent); }
-  .node a.cf-link:hover text { fill: var(--surface); }
-  .cf-links-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+  .nc-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem; }
+  .nc-kicker { font-size: 0.86rem; font-weight: 600; color: var(--text-dim); }
+  .nc-title { font-size: 1.08rem; font-weight: 650; line-height: 1.3; }
+  .nc-metric { font-size: 0.95rem; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  .nc-sub { font-size: 0.9rem; color: var(--text-dim); overflow-wrap: anywhere; }
+
+  .cf-links-bar { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.3rem; }
   .cf-links-bar a {
-    font-size: 0.92rem;
+    font-size: 0.88rem;
     font-weight: 600;
     color: var(--accent);
     background: var(--accent-soft);
     border: 1px solid var(--accent);
     border-radius: 6px;
-    padding: 0.3rem 0.65rem;
+    padding: 0.2rem 0.6rem;
     text-decoration: none;
   }
   .cf-links-bar a:hover { background: var(--accent); color: var(--surface); }
-  .terms-drawer {
-    display: none;
-    background: var(--surface);
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    padding: 1rem 1.15rem;
-    margin-bottom: 1rem;
-  }
-  .terms-drawer.open { display: block; }
-  .terms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.8rem 1.2rem; font-size: 0.98rem; }
-  .terms-grid dt { font-family: var(--mono); font-size: 0.95rem; font-weight: 700; color: var(--accent); }
-  .terms-grid dd { margin: 0.2rem 0 0; color: var(--text-dim); }
-  .inspect-box { border-top: 1px solid var(--border); padding-top: 0.85rem; margin-top: 0.35rem; }
-  .inspect-controls { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
-  .inspect-controls input {
-    flex: 1 1 10rem;
-    min-height: 2.75rem;
-    font-family: var(--mono);
-    font-size: 0.95rem;
-    padding: 0.45rem 0.7rem;
-    border-radius: 8px;
-    border: 1px solid var(--border-strong);
+
+  /* Rex session dashed boundary */
+  .rex-box {
+    border: 2px dashed var(--border-strong);
+    border-radius: 12px;
+    padding: 0.85rem;
     background: var(--surface-2);
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .rex-box-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.94rem;
+    font-weight: 650;
     color: var(--text);
   }
-  pre.term-dump {
-    margin: 0.65rem 0 0;
-    padding: 0.85rem;
-    background: var(--term-bg);
-    color: var(--term-fg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-family: var(--mono);
-    font-size: 0.9rem;
-    line-height: 1.5;
-    max-height: 22rem;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
+  .coord-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
   }
+  @media (max-width: 820px) { .coord-grid { grid-template-columns: 1fr; } }
 
-  .mode-flow .only-recovery { opacity: 0.16; }
-  .mode-recovery .only-flow { opacity: 0.22; }
-  .mode-lanes .only-recovery { opacity: 0.18; }
+  /* Dynamic R4 Builder Threads inside the diagram */
+  .builder-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16.5rem, 1fr));
+    gap: 0.65rem;
+  }
+  .builder-node {
+    text-align: left;
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-left: 5px solid var(--live);
+    border-radius: 9px;
+    padding: 0.7rem 0.85rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    width: 100%;
+  }
+  .builder-node:hover { border-color: var(--accent); background: var(--bg); }
+  .builder-node.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .builder-node.st-needs_you, .builder-node.st-blocked { border-left-color: var(--standby); }
+  .builder-node.st-queued { border-left-color: var(--accent); }
+  .builder-node.st-failed { border-left-color: var(--offline); }
+  .builder-node.st-done { border-left-color: var(--unbuilt); opacity: 0.82; }
+  .bn-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-dim); }
+  .bn-age { margin-left: auto; font-size: 0.85rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .bn-title { font-size: 1rem; font-weight: 650; line-height: 1.32; }
+  .bn-meta { font-size: 0.88rem; color: var(--text-dim); overflow-wrap: anywhere; }
 
+  .mode-recovery .only-flow { opacity: 0.32; }
+  .mode-flow .only-recovery { opacity: 0.45; }
+  .mode-lanes .lane-dim { opacity: 0.45; }
+
+  /* Inspector panel */
   aside.inspector {
     position: sticky;
     top: 1rem;
@@ -836,46 +823,141 @@ const ABOUT_HTML = `<!doctype html>
     overflow-y: auto;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.15rem;
+    border-radius: 12px;
+    padding: 1.1rem;
     box-shadow: var(--shadow);
   }
   .ins-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem; }
   .ins-kicker { font-size: 0.9rem; font-weight: 600; color: var(--text-dim); margin: 0; }
-  .ins-title { margin: 0.2rem 0 0.45rem; font-size: 1.3rem; font-weight: 650; line-height: 1.3; }
-  .ins-summary { margin: 0 0 0.85rem; font-size: 1rem; color: var(--text-dim); }
-  .kv { border-top: 1px solid var(--border); padding: 0.75rem 0; }
-  .kv-label { font-size: 0.92rem; font-weight: 650; color: var(--text-dim); margin-bottom: 0.3rem; }
-  .kv-val { font-size: 1rem; color: var(--text); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-  .kv-val code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); padding: 0.08rem 0.35rem; border-radius: 4px; }
-  ul.checklist { list-style: none; padding: 0; margin: 0.35rem 0 0; font-size: 0.98rem; }
-  ul.checklist li { display: flex; gap: 0.5rem; padding: 0.2rem 0; }
+  .ins-title { margin: 0.2rem 0 0.45rem; font-size: 1.25rem; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+  .ins-summary { margin: 0 0 0.8rem; font-size: 0.98rem; color: var(--text-dim); }
+  .kv { border-top: 1px solid var(--border); padding: 0.7rem 0; }
+  .kv-label { font-size: 0.9rem; font-weight: 650; color: var(--text-dim); margin-bottom: 0.28rem; }
+  .kv-val { font-size: 0.98rem; color: var(--text); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .kv-val code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2); padding: 0.08rem 0.35rem; border-radius: 4px; }
+  ul.checklist { list-style: none; padding: 0; margin: 0.3rem 0 0; font-size: 0.95rem; }
+  ul.checklist li { display: flex; gap: 0.5rem; padding: 0.18rem 0; }
   ul.checklist li.done { color: var(--text); }
   ul.checklist li.todo { color: var(--unbuilt); }
   ul.checklist .mark { font-family: var(--mono); font-weight: 700; width: 1rem; flex-shrink: 0; }
   ul.checklist li.done .mark { color: var(--live); }
+  .inspect-box { border-top: 1px solid var(--border); padding-top: 0.8rem; margin-top: 0.3rem; }
+  .inspect-controls { display: flex; gap: 0.45rem; margin-top: 0.45rem; flex-wrap: wrap; }
+  .inspect-controls input {
+    flex: 1 1 9rem;
+    min-height: 2.5rem;
+    font-family: var(--mono);
+    font-size: 0.92rem;
+    padding: 0.4rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  pre.term-dump {
+    margin: 0.6rem 0 0;
+    padding: 0.8rem;
+    background: var(--term-bg);
+    color: var(--term-fg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    line-height: 1.48;
+    max-height: 22rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Live Threads Grouped by App (below the diagram, clear visual separation per app) */
+  .apps-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    margin-top: 0.3rem;
+  }
+  .apps-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .apps-section-head h2 { margin: 0; font-size: 1.35rem; font-weight: 650; }
+  .app-group {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.95rem 1.1rem 1.05rem;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .app-group.quiet { padding: 0.75rem 1.1rem; background: var(--surface-2); box-shadow: none; }
+  .app-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 0.9rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .app-group.quiet .app-group-head { padding-bottom: 0; border-bottom: none; }
+  .app-group-title {
+    margin: 0;
+    font-size: 1.22rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+  .app-group-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+  .app-thread-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+    gap: 0.7rem;
+  }
+  .app-thread-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    padding: 0.8rem 0.95rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 140ms ease, background 140ms ease;
+  }
+  .app-thread-card:hover { border-color: var(--accent); background: var(--surface-2); }
+  .app-thread-card.st-needs_you { border-left-color: var(--standby); }
+  .app-thread-card.st-working { border-left-color: var(--live); }
+  .app-thread-card.st-queued { border-left-color: var(--accent); }
+  .app-thread-card.st-failed { border-left-color: var(--offline); }
+  .atc-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; font-size: 0.88rem; color: var(--text-dim); }
+  .atc-age { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .atc-title { font-size: 1.05rem; font-weight: 650; line-height: 1.35; }
+  .atc-act { font-size: 0.92rem; color: var(--accent); font-weight: 600; }
+  .atc-prev { font-size: 0.92rem; color: var(--text-dim); }
 </style>
 </head>
 <body>
 <div class="shell">
   <header>
-    <div>
-      <div class="eyebrow">
-        <span>FeedbackKit · Live System Dashboard</span>
-        <span class="pill live" id="liveBadge"><span class="dot pulsing"></span>Live · 10s poll</span>
-      </div>
+    <div class="title-block">
       <h1>Feedback Loop — Mathematical Tree</h1>
-      <p class="subtitle">Real telemetry from Worker D1 and <code>rex-runner</code>. Click any box to inspect live state and terminal output.</p>
+      <span class="pill live" id="liveBadge"><span class="dot pulsing"></span>Live · 10s</span>
     </div>
     <div class="controls">
       <a class="btn" href="https://systems-floorplan.pages.dev/">← Systems Home</a>
-      <a class="btn worldview" href="/about/threads">Live Threads →</a>
-      <a class="btn" href="/about/worldview">Mental Model (30s) →</a>
+      <a class="btn worldview" href="/about/threads">Full Tracker →</a>
+      <a class="btn" href="/about/worldview">Mental Model (30s)</a>
       <button class="btn" id="openInspectorBtn" type="button">Inspector</button>
       <button class="btn" id="termsBtn" type="button" aria-expanded="false">Terms</button>
-      <button class="btn mode-btn" data-mode="flow" aria-pressed="true">1 · Flow</button>
-      <button class="btn mode-btn" data-mode="recovery" aria-pressed="false">2 · Reboot</button>
-      <button class="btn mode-btn" data-mode="lanes" aria-pressed="false">3 · Orca vs Rex</button>
       <div class="size-group" role="group" aria-label="Text size">
         <button class="btn size-btn" data-size="normal" aria-pressed="true" type="button">A</button>
         <button class="btn size-btn" data-size="large" aria-pressed="false" type="button">A+</button>
@@ -886,294 +968,139 @@ const ABOUT_HTML = `<!doctype html>
     </div>
   </header>
 
-  <section class="kpi-strip" aria-label="Live telemetry summary">
-    <div class="kpi">
-      <div class="kpi-label"><span>Worker D1</span><span class="pill live">LIVE</span></div>
-      <div class="kpi-val" id="kpiChats">—</div>
-      <div class="kpi-sub" id="kpiQueue">loading queue…</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label"><span>Orca (Python)</span><span class="pill standby" id="kpiOrcaPill">—</span></div>
-      <div class="kpi-val" id="kpiOrcaVal">—</div>
-      <div class="kpi-sub" id="kpiOrcaSub">untouched production lane</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label"><span>Rex (Go Binary)</span><span class="pill standby" id="kpiRexPill">—</span></div>
-      <div class="kpi-val" id="kpiRexVal">—</div>
-      <div class="kpi-sub" id="kpiRexSub">claim-apps: none (safe)</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label"><span>Fable 5.2 Tab 1</span><span class="pill standby" id="kpiFablePill">—</span></div>
-      <div class="kpi-val" id="kpiFableVal">—</div>
-      <div class="kpi-sub" id="kpiFableSub">inbox: — pending</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label"><span>Build Progress</span><span class="pill live" id="kpiBuildPct">—</span></div>
-      <div class="kpi-val" id="kpiBuildVal">—</div>
-      <div class="progress-bar"><div class="progress-fill" id="kpiBuildBar" style="width:0%"></div></div>
-    </div>
+  <section class="status-bar" aria-label="Live telemetry summary">
+    <span class="sb-item"><strong>Worker</strong> <span id="sbChats">—</span></span>
+    <span class="sb-sep">·</span>
+    <span class="sb-item"><span class="pill standby" id="sbOrcaPill">Orca —</span></span>
+    <span class="sb-sep">·</span>
+    <span class="sb-item"><span class="pill standby" id="sbRexPill">Rex —</span></span>
+    <span class="sb-sep">·</span>
+    <span class="sb-item"><strong>Fable</strong> <span id="sbFable">—</span></span>
+    <span class="sb-sep">·</span>
+    <span class="sb-item"><strong>Live threads</strong> <span id="sbActive">—</span></span>
+    <span class="sb-time" id="lastUpdated">Syncing…</span>
   </section>
 
   <section class="terms-drawer" id="termsDrawer" aria-label="Glossary of system terms">
     <dl class="terms-grid" id="termsGrid"></dl>
   </section>
 
-  <section class="live-threads-panel" id="liveThreadsPanel" aria-label="Live feedback threads by app">
-    <div class="live-threads-head">
-      <h2>Live Threads by App</h2>
-      <a class="btn worldview" href="/about/threads">Open Full Tracker →</a>
-    </div>
-    <div id="liveThreadsBody" class="subtitle">Loading live threads…</div>
-  </section>
-
-  <div class="legend">
-    <span class="legend-item"><span class="swatch-box live"></span>Live (running, fresh heartbeat)</span>
-    <span class="legend-item"><span class="swatch-box standby"></span>Idle (built, not running right now)</span>
-    <span class="legend-item"><span class="swatch-box unbuilt"></span>Unbuilt (greyed out)</span>
-    <span class="legend-item" id="lastUpdated">Syncing…</span>
-  </div>
-
   <div class="workspace">
-    <div class="canvas-frame">
-      <svg id="tree" class="mode-flow" viewBox="0 0 920 715" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Live FeedbackKit mathematical tree">
-        <defs>
-          <pattern id="unbuilt-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="8" height="8" fill="var(--unbuilt-bg)"/>
-            <line x1="0" y1="0" x2="0" y2="8" stroke="var(--unbuilt-hatch)" stroke-width="3"/>
-          </pattern>
-          <marker id="arr-fwd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--accent)"/>
-          </marker>
-          <marker id="arr-live" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--live)"/>
-          </marker>
-          <marker id="arr-rec" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--standby)"/>
-          </marker>
-          <marker id="arr-unbuilt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--unbuilt)"/>
-          </marker>
-        </defs>
+    <section class="diagram mode-flow" id="diagramRoot" aria-label="Live FeedbackKit system flow diagram">
+      <div class="diagram-toolbar">
+        <span class="diagram-title">Live System Flow (click any box or thread to inspect)</span>
+        <div class="mode-group">
+          <button class="btn mode-btn" data-mode="flow" aria-pressed="true" type="button">1 · Flow</button>
+          <button class="btn mode-btn" data-mode="recovery" aria-pressed="false" type="button">2 · Reboot</button>
+          <button class="btn mode-btn" data-mode="lanes" aria-pressed="false" type="button">3 · Orca vs Rex</button>
+        </div>
+      </div>
 
-        <!-- Rank guide lines -->
-        <text class="rank-label" x="14" y="34">R0 · APPS</text>
-        <line class="rank-rule" x1="14" y1="86" x2="906" y2="86"/>
-        <text class="rank-label" x="14" y="108">R1 · WORKER</text>
-        <line class="rank-rule" x1="14" y1="186" x2="906" y2="186"/>
-        <text class="rank-label" x="14" y="208">R2 · RUNNERS</text>
-        <line class="rank-rule" x1="14" y1="308" x2="906" y2="308"/>
-        <text class="rank-label" x="14" y="330">R3 · COORDINATOR</text>
-        <line class="rank-rule" x1="14" y1="494" x2="906" y2="494"/>
-        <text class="rank-label" x="14" y="516">R4 · BUILDERS</text>
+      <!-- Rank 0: Client Apps -->
+      <div class="rank">
+        <div class="rank-head"><span>R0 · Client Apps</span><span>FeedbackKit SDK → POST /v2/feedback</span></div>
+        <div class="rank-row">
+          <button class="node-card state-live" data-id="apps" type="button">
+            <div class="nc-top"><span class="nc-kicker">Client Apps (iOS / macOS)</span><span class="pill live">Live</span></div>
+            <div class="nc-title">Agent Pager · PR Hub · Trips · Demo</div>
+            <div class="nc-metric" id="nodeAppsMetric">Loading app counts…</div>
+          </button>
+          <button class="node-card state-unbuilt only-flow" data-id="menubar_about" type="button">
+            <div class="nc-top"><span class="nc-kicker">Menu Bar Item</span><span class="pill unbuilt">Unbuilt</span></div>
+            <div class="nc-title">Menu Bar → /about Link</div>
+            <div class="nc-sub">Not wired in MenuBar Swift app yet</div>
+          </button>
+        </div>
+      </div>
 
-        <!-- Rex session dashed boundary -->
-        <rect class="boundary" x="278" y="318" width="626" height="382"/>
-        <text class="boundary-tag" id="rexBoundaryTag" x="292" y="336">REX SESSION: feedback-loop · OSC 7501 STATUS</text>
+      <div class="flow-arrow hot">↓ POST /v2/feedback · ↑ ACP live + APNs push</div>
 
-        <!-- R0 <-> R1 edges -->
-        <path class="edge edge-fwd edge-live-flow only-flow" d="M 445 74 L 445 104" marker-end="url(#arr-fwd)"/>
-        <path class="edge edge-ret edge-live-flow only-flow" d="M 475 104 L 475 74" marker-end="url(#arr-live)"/>
-        <text class="edge-label fwd" x="342" y="93">POST /v2/feedback</text>
-        <text class="edge-label ret" x="486" y="93">ACP live + APNs</text>
+      <!-- Rank 1: Cloudflare Worker -->
+      <div class="rank">
+        <div class="rank-head"><span>R1 · Cloudflare Worker</span><span>Single D1 queue + R2 media + DO live rooms</span></div>
+        <div class="rank-row single">
+          <div class="node-card state-live is-selected" data-id="worker" role="button" tabindex="0">
+            <div class="nc-top"><span class="nc-kicker">Cloudflare Worker</span><span class="pill live">Live</span></div>
+            <div class="nc-title">featurekit Worker + D1 + R2</div>
+            <div class="nc-metric" id="nodeWorkerMetric">Loading D1 telemetry…</div>
+            <div class="cf-links-bar" id="nodeWorkerLinks" style="display:none">
+              <a id="cardLinkWorker" href="#" target="_blank" rel="noopener noreferrer">Worker ↗</a>
+              <a id="cardLinkD1" href="#" target="_blank" rel="noopener noreferrer">D1 ↗</a>
+              <a id="cardLinkR2" href="#" target="_blank" rel="noopener noreferrer">R2 ↗</a>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        <!-- R0 Menu Bar About (unbuilt) -> Worker /about -->
-        <path class="edge edge-unbuilt" d="M 736 74 L 736 138 L 634 138" marker-end="url(#arr-unbuilt)"/>
-        <text class="edge-label unbuilt" x="646" y="132">About link (unbuilt)</text>
+      <div class="flow-arrow live" id="arrowWorkerRunners">↓ /runner/poll (Orca skips rex-apps.json) · ↓ /runner/claim (Rex Go)</div>
 
-        <!-- R1 -> R2 Orca (LIVE untouched) -->
-        <path class="edge edge-orca edge-live-flow" d="M 405 172 L 405 196 L 146 196 L 146 218" marker-end="url(#arr-live)"/>
-        <text class="edge-label ret" x="158" y="191">LIVE /runner/poll (untouched)</text>
+      <!-- Rank 2: Two Isolated Runners -->
+      <div class="rank">
+        <div class="rank-head"><span>R2 · Runners (No Race)</span><span>Orca keeps legacy chats · Rex takes opted-in apps</span></div>
+        <div class="rank-row two-col">
+          <button class="node-card state-standby" id="nodeOrcaRunner" data-id="orca_runner" type="button">
+            <div class="nc-top"><span class="nc-kicker">Orca Lane (Python)</span><span class="pill standby" id="chipOrca">Wait</span></div>
+            <div class="nc-title">Orca Runner + Worktrees</div>
+            <div class="nc-metric" id="nodeOrcaMetric">Checking beat…</div>
+            <div class="nc-sub">Untouched · skips rex-apps.json</div>
+          </button>
 
-        <!-- R1 -> R2 Go Rex Runner: claim edge (unbuilt/opt-in off) + live status push -->
-        <path id="edgeWorkerRexClaim" class="edge edge-unbuilt" d="M 515 172 L 515 196 L 568 196 L 568 218" marker-end="url(#arr-unbuilt)"/>
-        <path id="edgeRexPushStatus" class="edge edge-ret edge-live-flow" d="M 612 218 L 612 190 L 538 190 L 538 172" marker-end="url(#arr-live)"/>
-        <text id="lblWorkerRexClaim" class="edge-label unbuilt" x="424" y="212">new chats: Orca (Rex off)</text>
-        <text class="edge-label ret" x="622" y="193">POST /runner/rex-status</text>
+          <button class="node-card state-standby" id="nodeGoRunner" data-id="go_runner" type="button">
+            <div class="nc-top"><span class="nc-kicker">Rex Lane (Go Binary)</span><span class="pill standby" id="chipRex">Idle</span></div>
+            <div class="nc-title">rex-runner (LaunchAgent + Watchdog)</div>
+            <div class="nc-metric" id="nodeRexMetric">Checking Rex heartbeat…</div>
+            <div class="nc-sub" id="nodeRexSub">claude-switch watchdog · OSC 7501</div>
+          </button>
+        </div>
+      </div>
 
-        <!-- Orca lane R2 -> R3 -->
-        <path class="edge edge-orca edge-live-flow" d="M 146 292 L 146 360" marker-end="url(#arr-live)"/>
-        <text class="edge-label ret" x="50" y="332">orca worktree create</text>
+      <div class="flow-arrow hot">↓ enqueue inbox.jsonl → drain when Fable is idle</div>
 
-        <!-- R2 Go Runner -> R3 Inbox -> Fable -->
-        <path class="edge edge-fwd edge-live-flow" d="M 530 292 L 530 350 L 418 350 L 418 368" marker-end="url(#arr-fwd)"/>
-        <text class="edge-label fwd" x="374" y="346">enqueue inbox.jsonl</text>
-        <path class="edge edge-fwd edge-live-flow" d="M 500 414 L 542 414" marker-end="url(#arr-fwd)"/>
-        <text class="edge-label fwd" x="503" y="406">drain</text>
+      <!-- Rank 3 & 4: Rex Session feedback-loop -->
+      <div class="rex-box">
+        <div class="rex-box-head">
+          <span id="rexBoundaryTag">R3–R4 · Rex Session: feedback-loop</span>
+          <span class="pill accent" id="rexRunsBadge">Loading threads…</span>
+        </div>
 
-        <!-- R2 Go Runner -> Reaper -->
-        <path class="edge edge-rec" d="M 650 292 L 650 350 L 818 350 L 818 368" marker-end="url(#arr-rec)"/>
-        <text class="edge-label rec" x="692" y="346">rex-runner reap</text>
+        <div class="coord-grid">
+          <button class="node-card state-standby" id="nodeInbox" data-id="inbox" type="button">
+            <div class="nc-top"><span class="nc-kicker">FIFO Queue</span><span class="pill standby" id="chipInbox">Idle</span></div>
+            <div class="nc-title">Coordinator Inbox</div>
+            <div class="nc-metric" id="nodeInboxMetric">0 pending</div>
+            <div class="nc-sub">inbox.jsonl + flock</div>
+          </button>
 
-        <!-- Recovery edge: launchd auto-boot (unbuilt) -->
-        <path class="edge edge-unbuilt only-recovery" d="M 595 292 L 595 368" marker-end="url(#arr-unbuilt)"/>
-        <text class="edge-label unbuilt only-recovery" x="602" y="344">launchd boot (unbuilt)</text>
+          <button class="node-card state-standby" id="nodeFable" data-id="fable" type="button">
+            <div class="nc-top"><span class="nc-kicker">Tab 1 (Pinned UUID)</span><span class="pill standby" id="chipFable">Idle</span></div>
+            <div class="nc-title">Fable 5.2 Coordinator</div>
+            <div class="nc-metric" id="nodeFableMetric">Checking Tab 1…</div>
+            <div class="nc-sub">claude-switch failover</div>
+          </button>
 
-        <!-- R3 Fable -> R4 Builders -->
-        <path id="edgeSpawn1" class="edge edge-unbuilt" d="M 615 458 L 615 512 L 385 512 L 385 540" marker-end="url(#arr-unbuilt)"/>
-        <path id="edgeSpawn2" class="edge edge-unbuilt" d="M 615 458 L 615 540" marker-end="url(#arr-unbuilt)"/>
-        <path id="edgeSpawn3" class="edge edge-unbuilt" d="M 615 458 L 615 512 L 800 512 L 800 540" marker-end="url(#arr-unbuilt)"/>
-        <text id="lblSpawn" class="edge-label unbuilt" x="458" y="507">rex-runner spawn (0 active)</text>
+          <button class="node-card state-standby" id="nodeReaper" data-id="reaper" type="button">
+            <div class="nc-top"><span class="nc-kicker">Cleanup</span><span class="pill standby" id="chipReaper">Idle</span></div>
+            <div class="nc-title">Reaper (reap)</div>
+            <div class="nc-metric" id="nodeReaperMetric">Clean git guard</div>
+            <div class="nc-sub">24h idle TTL</div>
+          </button>
+        </div>
 
-        <!-- R4 Builders -> Return bus -> Inbox (auto-report hook unbuilt) -->
-        <path class="edge edge-unbuilt only-flow" d="M 385 638 L 385 672 L 800 672 L 800 638"/>
-        <path class="edge edge-unbuilt only-flow" d="M 595 638 L 595 672"/>
-        <path class="edge edge-unbuilt only-flow" d="M 385 672 L 306 672 L 306 414 L 336 414" marker-end="url(#arr-unbuilt)"/>
-        <text class="edge-label unbuilt" x="424" y="688">builder auto-report hook (unbuilt · manual rex-runner report works)</text>
-
-        <!-- NODES -->
-        <!-- R0: Apps -->
-        <g class="node state-live" data-id="apps" transform="translate(300, 14)">
-          <rect class="box" width="320" height="60"/>
-          <text class="n-kicker" x="12" y="17">R0 · CLIENT APPS (SDK)</text>
-          <text class="n-title" x="12" y="35">Agent Pager · PR Hub · Trips</text>
-          <text class="n-metric" id="nodeAppsMetric" x="12" y="51">Loading live app counts…</text>
-          <rect class="chip-bg" x="268" y="6" width="42" height="15" fill="var(--live-soft)"/>
-          <text class="chip-txt" x="277" y="17" fill="var(--live)">LIVE</text>
-        </g>
-
-        <!-- R0 Right: Menu Bar About Link (UNBUILT) -->
-        <g class="node state-unbuilt" data-id="menubar_about" transform="translate(650, 14)">
-          <rect class="box" width="212" height="60"/>
-          <text class="n-kicker" x="12" y="17">R0 · MENU BAR ITEM</text>
-          <text class="n-title" x="12" y="35">About → /about Link</text>
-          <text class="n-sub" x="12" y="51">Not wired in MenuBar yet</text>
-          <rect class="chip-bg" x="148" y="6" width="54" height="15" fill="var(--surface)"/>
-          <text class="chip-txt" x="155" y="17" fill="var(--unbuilt)">UNBUILT</text>
-        </g>
-
-        <!-- R1: Worker -->
-        <g class="node state-live is-selected" data-id="worker" transform="translate(290, 96)">
-          <rect class="box" width="340" height="82"/>
-          <text class="n-kicker" x="12" y="16">R1 · CLOUDFLARE WORKER</text>
-          <text class="n-title" x="12" y="34">featurekit Worker + D1 + R2</text>
-          <text class="n-metric" id="nodeWorkerMetric" x="12" y="51">Loading D1 telemetry…</text>
-          <g id="nodeWorkerLinks" style="display:none">
-            <a id="svgLinkWorker" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
-              <rect x="12" y="59" width="66" height="16"/>
-              <text x="19" y="70">Worker ↗</text>
-            </a>
-            <a id="svgLinkD1" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
-              <rect x="84" y="59" width="44" height="16"/>
-              <text x="93" y="70">D1 ↗</text>
-            </a>
-            <a id="svgLinkR2" class="cf-link" href="#" target="_blank" rel="noopener noreferrer">
-              <rect x="134" y="59" width="44" height="16"/>
-              <text x="143" y="70">R2 ↗</text>
-            </a>
-          </g>
-          <rect class="chip-bg" x="288" y="6" width="42" height="15" fill="var(--live-soft)"/>
-          <text class="chip-txt" x="297" y="17" fill="var(--live)">LIVE</text>
-        </g>
-
-        <!-- R2 Left: Orca Runner -->
-        <g class="node state-standby" id="nodeOrcaRunner" data-id="orca_runner" transform="translate(32, 218)">
-          <rect class="box" width="228" height="74"/>
-          <text class="n-kicker" x="12" y="17">R2 · ORCA LANE (UNTOUCHED)</text>
-          <text class="n-title" x="12" y="36">Orca Runner (Python)</text>
-          <text class="n-metric" id="nodeOrcaMetric" x="12" y="54">Checking beat…</text>
-          <text class="n-sub" x="12" y="67">runner.py · untouched</text>
-          <rect class="chip-bg" id="chipOrcaBg" x="168" y="6" width="50" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipOrcaTxt" x="175" y="17" fill="var(--standby)">WAIT</text>
-        </g>
-
-        <!-- R3 Left: Orca Worktrees -->
-        <g class="node state-standby" id="nodeOrcaWorktrees" data-id="orca_worktrees" transform="translate(32, 360)">
-          <rect class="box" width="228" height="94"/>
-          <text class="n-kicker" x="12" y="17">ORCA WORKSTREAM</text>
-          <text class="n-title" x="12" y="37">Per-chat Orca Worktrees</text>
-          <text class="n-sub" x="12" y="55">fb-&lt;8hex&gt; · Claude Opus</text>
-          <text class="n-sub" x="12" y="70">agentSession.send queue</text>
-          <text class="n-sub" x="12" y="85">Protected while Rex iterates</text>
-        </g>
-
-        <!-- R2 Right: Go Rex Runner -->
-        <g class="node state-standby" id="nodeGoRunner" data-id="go_runner" transform="translate(432, 218)">
-          <rect class="box" width="316" height="74"/>
-          <text class="n-kicker" x="12" y="17">R2 · REX LANE (GO BINARY)</text>
-          <text class="n-title" x="12" y="36">rex-runner (Wake-up &amp; Bridge)</text>
-          <text class="n-metric" id="nodeRexMetric" x="12" y="54">Checking Rex heartbeat…</text>
-          <text class="n-sub" id="nodeRexSub" x="12" y="68">LaunchAgent daemon</text>
-          <rect class="chip-bg" id="chipRexBg" x="260" y="6" width="46" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipRexTxt" x="270" y="17" fill="var(--standby)">IDLE</text>
-        </g>
-
-        <!-- R3 Inside Rex: Inbox -->
-        <g class="node state-standby" id="nodeInbox" data-id="inbox" transform="translate(336, 368)">
-          <rect class="box" width="164" height="90"/>
-          <text class="n-kicker" x="10" y="17">R3 · SERIALIZED FIFO</text>
-          <text class="n-title" x="10" y="36">Coordinator Inbox</text>
-          <text class="n-metric" id="nodeInboxMetric" x="10" y="54">0 pending</text>
-          <text class="n-sub" x="10" y="70">inbox.jsonl + flock</text>
-          <text class="n-sub" x="10" y="83">OSC 7501 gated drain</text>
-          <rect class="chip-bg" id="chipInboxBg" x="116" y="6" width="40" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipInboxTxt" x="124" y="17" fill="var(--standby)">IDLE</text>
-        </g>
-
-        <!-- R3 Inside Rex: Fable 5.2 -->
-        <g class="node state-standby" id="nodeFable" data-id="fable" transform="translate(542, 368)">
-          <rect class="box" width="194" height="90"/>
-          <text class="n-kicker" x="10" y="17">R3 · TAB 1 (PINNED)</text>
-          <text class="n-title" x="10" y="36">Fable 5.2 Coordinator</text>
-          <text class="n-metric" id="nodeFableMetric" x="10" y="54">Checking Tab 1…</text>
-          <text class="n-sub" x="10" y="70">Pinned UUID · rotatable</text>
-          <text class="n-sub" x="10" y="83">Strict coord &amp; validator</text>
-          <rect class="chip-bg" id="chipFableBg" x="142" y="6" width="44" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipFableTxt" x="151" y="17" fill="var(--standby)">IDLE</text>
-        </g>
-
-        <!-- R3 Inside Rex: Reaper -->
-        <g class="node state-standby" id="nodeReaper" data-id="reaper" transform="translate(754, 368)">
-          <rect class="box" width="136" height="90"/>
-          <text class="n-kicker" x="10" y="17">R3 · CLEANUP</text>
-          <text class="n-title" x="10" y="36">Reaper / Kill</text>
-          <text class="n-sub" x="10" y="54">rex-runner reap</text>
-          <text class="n-sub" x="10" y="69">Clean git check</text>
-          <text class="n-sub" x="10" y="83">Built · manual</text>
-          <rect class="chip-bg" id="chipReaperBg" x="90" y="6" width="38" height="15" fill="var(--standby-soft)"/>
-          <text class="chip-txt" id="chipReaperTxt" x="97" y="17" fill="var(--standby)">IDLE</text>
-        </g>
-
-        <!-- R4 Inside Rex: 3 Builder Slots (greyed out when 0 active, light up dynamically from live runs) -->
-        <g class="node state-unbuilt" id="slot0" data-id="builder_slot_0" transform="translate(296, 540)">
-          <rect class="box" width="184" height="98"/>
-          <text class="n-kicker" id="slot0Kicker" x="10" y="17">R4 · SLOT 1 (EPHEMERAL)</text>
-          <text class="n-title" id="slot0Title" x="10" y="36">App Builder Tab</text>
-          <text class="n-metric" id="slot0Metric" x="10" y="54">No active Rex run</text>
-          <text class="n-sub" id="slot0Sub1" x="10" y="70">Claude / Codex subfolder</text>
-          <text class="n-sub" id="slot0Sub2" x="10" y="85">Auto-claim: UNBUILT</text>
-          <rect class="chip-bg" id="slot0ChipBg" x="122" y="6" width="52" height="15" fill="var(--surface)"/>
-          <text class="chip-txt" id="slot0ChipTxt" x="128" y="17" fill="var(--unbuilt)">UNBUILT</text>
-        </g>
-
-        <g class="node state-unbuilt" id="slot1" data-id="builder_slot_1" transform="translate(502, 540)">
-          <rect class="box" width="190" height="98"/>
-          <text class="n-kicker" id="slot1Kicker" x="10" y="17">R4 · SLOT 2 (EPHEMERAL)</text>
-          <text class="n-title" id="slot1Title" x="10" y="36">Shared Kit Builder</text>
-          <text class="n-metric" id="slot1Metric" x="10" y="54">No active Rex run</text>
-          <text class="n-sub" id="slot1Sub1" x="10" y="70">FeedbackKit · DurableNet</text>
-          <text class="n-sub" id="slot1Sub2" x="10" y="85">AgentChatKit · PRKit</text>
-          <rect class="chip-bg" id="slot1ChipBg" x="128" y="6" width="52" height="15" fill="var(--surface)"/>
-          <text class="chip-txt" id="slot1ChipTxt" x="134" y="17" fill="var(--unbuilt)">UNBUILT</text>
-        </g>
-
-        <g class="node state-unbuilt" id="slot2" data-id="builder_slot_2" transform="translate(712, 540)">
-          <rect class="box" width="178" height="98"/>
-          <text class="n-kicker" id="slot2Kicker" x="10" y="17">R4 · SLOT 3 (EPHEMERAL)</text>
-          <text class="n-title" id="slot2Title" x="10" y="36">Antigravity Builder</text>
-          <text class="n-metric" id="slot2Metric" x="10" y="54">Hooks installed · 0 runs</text>
-          <text class="n-sub" id="slot2Sub1" x="10" y="70">rex-antigravity-hooks</text>
-          <text class="n-sub" id="slot2Sub2" x="10" y="85">OSC 7501 ready</text>
-          <rect class="chip-bg" id="slot2ChipBg" x="116" y="6" width="52" height="15" fill="var(--surface)"/>
-          <text class="chip-txt" id="slot2ChipTxt" x="122" y="17" fill="var(--unbuilt)">UNBUILT</text>
-        </g>
-      </svg>
-    </div>
+        <div class="rank-head" style="margin-top:0.2rem">
+          <span id="r4Heading">R4 · Live Builder &amp; Active Threads</span>
+          <button class="btn" id="toggleDoneBtn" type="button" aria-pressed="false" style="min-height:2.1rem;padding:0.2rem 0.65rem;font-size:0.86rem">Show recent done</button>
+        </div>
+        <div class="builder-grid" id="builderGrid">
+          <div class="nc-sub">Loading live threads…</div>
+        </div>
+      </div>
+    </section>
 
     <div class="inspector-backdrop" id="inspectorBackdrop" aria-hidden="true"></div>
     <aside class="inspector" id="inspectorPanel" aria-live="polite">
       <div class="ins-head">
         <p class="ins-kicker" id="insKicker">R1 · Cloudflare Worker</p>
-        <span class="pill live" id="insBadge">LIVE</span>
+        <span class="pill live" id="insBadge">Live</span>
         <button class="btn ins-close" id="closeInspectorBtn" type="button" aria-label="Close inspector">Close ×</button>
       </div>
       <h2 class="ins-title" id="insTitle">featurekit Worker</h2>
@@ -1184,7 +1111,7 @@ const ABOUT_HTML = `<!doctype html>
         <div class="cf-links-bar" id="insLinks" style="display:none"></div>
       </div>
       <div class="kv">
-        <div class="kv-label">Build Checklist (Built vs Unbuilt)</div>
+        <div class="kv-label">Build Checklist</div>
         <ul class="checklist" id="insChecklist"></ul>
       </div>
       <div class="kv">
@@ -1192,25 +1119,51 @@ const ABOUT_HTML = `<!doctype html>
         <div class="kv-val" id="insRecovery"></div>
       </div>
       <div class="inspect-box" id="inspectBox">
-        <div class="kv-label">Live Thread / Terminal Dump (Token-Gated)</div>
+        <div class="kv-label">Live Thread / Terminal Dump</div>
         <div class="inspect-controls" id="inspectAuthRow">
           <input type="password" id="inspectTokenInput" placeholder="Runner or Admin token…"/>
           <button class="btn" id="inspectUnlockBtn" type="button">Unlock</button>
           <button class="btn" id="inspectClearBtn" type="button" style="display:none">Lock</button>
         </div>
-        <div class="kv-val" id="inspectMeta" style="margin-top:0.5rem;font-size:0.95rem;color:var(--text-dim)">Enter your runner token once (stored locally in this browser) to inspect live Rex panes and inbox events.</div>
+        <div class="kv-val" id="inspectMeta" style="margin-top:0.45rem;font-size:0.92rem;color:var(--text-dim)">Auto-unlocks behind Cloudflare Access (or enter runner token once).</div>
         <pre class="term-dump" id="inspectDump" style="display:none"></pre>
       </div>
     </aside>
   </div>
+
+  <!-- Live Threads Grouped Clearly by App -->
+  <section class="apps-section" id="liveThreadsPanel" aria-label="Live feedback threads grouped by app">
+    <div class="apps-section-head">
+      <h2>Live Threads by App</h2>
+      <div class="controls">
+        <button class="btn" id="toggleQuietAppsBtn" type="button" aria-pressed="false">Show quiet apps</button>
+        <a class="btn worldview" href="/about/threads">Open Full Tracker →</a>
+      </div>
+    </div>
+    <div id="liveThreadsBody" class="nc-sub">Loading live threads…</div>
+  </section>
 </div>
 <button class="btn inspector-dock" id="inspectorDock" type="button">Inspector: featurekit Worker</button>
 
 <script>
 let LATEST = null;
+let THREADS = null;
 let INSPECT = null;
 let SELECTED = "worker";
+let SHOW_DONE_IN_DIAGRAM = false;
+let SHOW_QUIET_APPS = false;
 const TOKEN_KEY = "fk_about_inspect_token";
+const SIZE_KEY = "fk_text_size";
+
+const APP_LABELS = {
+  "agent-pager": "Agent Pager",
+  "prhub": "PR Hub",
+  "trips": "Trips",
+  "feedbackkit-demo": "FeedbackKit Demo"
+};
+function appDisplayName(slug) {
+  return APP_LABELS[slug] || slug;
+}
 
 const ABOUT_TERMS = {
   runner: "Local Mac daemon (Python runner/ for Orca, Go rex-runner for Rex) bridging the Worker and your Mac.",
@@ -1219,10 +1172,9 @@ const ABOUT_TERMS = {
   fable: "Claude Fable 5.2 in Tab 1 of Rex session feedback-loop — coordinates & validates, never edits app code directly.",
   inbox: "File-locked FIFO queue (inbox.jsonl) drained into Fable only when OSC 7501 reports idle/done.",
   reaper: "Deterministic cleanup (rex-runner reap) verifying clean git + pushed commits before closing tabs.",
+  "claude-switch": "Go binary from jai/tools rotating Fable across Claude accounts on usage limits without shell scripts.",
   "OSC 7501": "Rex Program Status Protocol escape sequence reporting live idle/working/blocked/done/error states.",
-  "run.json": "Per-chat manifest in each builder subfolder enabling exact session resume after reboot.",
-  "/runner/agent": "Endpoint where the runner posts agent replies & working status to D1 so your phone updates live.",
-  "/v2/acp": "AgentChatKit live streaming protocol pushing updates to iOS/macOS apps."
+  "run.json": "Per-chat manifest in each builder subfolder enabling exact session resume after reboot."
 };
 
 const termsGridEl = document.getElementById("termsGrid");
@@ -1238,11 +1190,16 @@ termsBtnEl.addEventListener("click", () => {
   termsBtnEl.setAttribute("aria-expanded", String(open));
 });
 
+function escHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function fmtAge(sec) {
   if (sec === null || sec === undefined) return "never";
   if (sec < 60) return sec + "s ago";
   if (sec < 3600) return Math.floor(sec / 60) + "m ago";
-  return Math.floor(sec / 3600) + "h ago";
+  if (sec < 86400) return Math.floor(sec / 3600) + "h ago";
+  return Math.floor(sec / 86400) + "d ago";
 }
 
 function setNodeState(el, state) {
@@ -1252,8 +1209,11 @@ function setNodeState(el, state) {
 }
 
 function stateLabel(state) {
-  if (state === "standby") return "IDLE";
-  return state.toUpperCase();
+  if (state === "standby") return "Idle";
+  if (state === "live") return "Live";
+  if (state === "offline") return "Offline";
+  if (state === "unbuilt") return "Unbuilt";
+  return state;
 }
 
 function setPill(el, state, label) {
@@ -1262,18 +1222,201 @@ function setPill(el, state, label) {
   el.textContent = label || stateLabel(state);
 }
 
-function setChip(bgEl, txtEl, state, label) {
-  if (!bgEl || !txtEl) return;
-  const styles = {
-    live: ["var(--live-soft)", "var(--live)"],
-    standby: ["var(--standby-soft)", "var(--standby)"],
-    offline: ["var(--offline-soft)", "var(--offline)"],
-    unbuilt: ["var(--surface)", "var(--unbuilt)"]
-  };
-  const [bg, fg] = styles[state] || styles.standby;
-  bgEl.setAttribute("fill", bg);
-  txtEl.setAttribute("fill", fg);
-  txtEl.textContent = label;
+function getInspectToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+}
+
+function authHeaders() {
+  const t = getInspectToken();
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+
+function threadById(chatId) {
+  if (!THREADS || !Array.isArray(THREADS.apps)) return null;
+  for (const g of THREADS.apps) {
+    for (const t of g.threads || []) {
+      if (t.id === chatId) return t;
+    }
+  }
+  return null;
+}
+
+function runById(chatId) {
+  if (!LATEST || !LATEST.rex || !Array.isArray(LATEST.rex.runs)) return null;
+  return LATEST.rex.runs.find((r) => r.chat_id === chatId) || null;
+}
+
+/** Merges ALL live Rex builder runs + live D1 threads so the diagram never hides active work. */
+function collectDiagramThreads() {
+  const byId = new Map();
+  const runs = (LATEST && LATEST.rex && Array.isArray(LATEST.rex.runs)) ? LATEST.rex.runs : [];
+  for (const r of runs) {
+    const isLive = r.status === "active" || r.status === "progress" || r.status === "blocked";
+    if (!isLive && !(SHOW_DONE_IN_DIAGRAM && r.status === "done")) continue;
+    byId.set(r.chat_id, {
+      id: r.chat_id,
+      app: r.app,
+      title: r.chat_id,
+      state: r.status === "blocked" ? "blocked" : (isLive ? "working" : "done"),
+      rawStatus: r.status,
+      agent: r.agent,
+      lane: "rex",
+      activity: r.agent + " · " + r.status,
+      updatedAt: r.updated_at_ms
+    });
+  }
+  if (THREADS && Array.isArray(THREADS.apps)) {
+    for (const g of THREADS.apps) {
+      for (const t of g.threads || []) {
+        const isLive = t.state === "needs_you" || t.state === "working" || t.state === "queued" || t.state === "failed";
+        const existing = byId.get(t.id);
+        if (existing) {
+          existing.title = t.title || existing.title;
+          if (t.state === "needs_you" || t.state === "failed" || t.state === "queued") {
+            existing.state = t.state;
+          }
+          if (t.activity) existing.activity = t.activity;
+          existing.asks = t.asks;
+          existing.updatedAt = Math.max(existing.updatedAt || 0, t.updated_at || 0);
+        } else if (isLive) {
+          byId.set(t.id, {
+            id: t.id,
+            app: t.app,
+            title: t.title || t.id,
+            state: t.state,
+            rawStatus: t.state,
+            agent: t.builder ? t.builder.agent : (t.lane === "rex" ? "fable" : t.lane),
+            lane: t.lane,
+            asks: t.asks,
+            activity: t.activity || (t.lane === "rex" ? "Coordinator / Rex" : t.lane),
+            updatedAt: t.updated_at
+          });
+        }
+      }
+    }
+  }
+  const order = { needs_you: 0, blocked: 1, working: 2, queued: 3, failed: 4, done: 5 };
+  return Array.from(byId.values()).sort((a, b) => {
+    const oa = order[a.state] ?? 9;
+    const ob = order[b.state] ?? 9;
+    if (oa !== ob) return oa - ob;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+}
+
+function badgeForThreadState(state, asks) {
+  if (state === "needs_you") return ["standby", asks ? "Needs answer" : "Needs you"];
+  if (state === "blocked") return ["standby", "Blocked"];
+  if (state === "working") return ["live", "Working"];
+  if (state === "queued") return ["accent", "Queued"];
+  if (state === "failed") return ["offline", "Failed"];
+  return ["unbuilt", "Done"];
+}
+
+function renderDiagramBuilders() {
+  const grid = document.getElementById("builderGrid");
+  const items = collectDiagramThreads();
+  const liveCount = items.filter((x) => x.state !== "done").length;
+  document.getElementById("sbActive").textContent = String(liveCount);
+  document.getElementById("rexRunsBadge").textContent = liveCount + " live thread" + (liveCount === 1 ? "" : "s");
+  document.getElementById("r4Heading").textContent = "R4 · Live Builder & Active Threads (" + items.length + " shown)";
+
+  if (items.length === 0) {
+    grid.innerHTML = '<div class="nc-sub">All quiet — 0 active builder threads right now.</div>';
+    return;
+  }
+  let html = "";
+  for (const item of items) {
+    const [pillCls, pillTxt] = badgeForThreadState(item.state, item.asks);
+    const sel = SELECTED === ("chat:" + item.id) ? " is-selected" : "";
+    const ageSec = item.updatedAt ? Math.max(0, Math.floor((Date.now() - item.updatedAt) / 1000)) : null;
+    html += '<button class="builder-node st-' + escHtml(item.state) + sel + '" data-id="chat:' + escHtml(item.id) + '" type="button">' +
+      '<div class="bn-top">' +
+        '<span class="pill ' + pillCls + '">' + (item.state === "working" ? '<span class="dot pulsing"></span>' : '') + escHtml(pillTxt) + '</span>' +
+        '<span class="pill accent">' + escHtml(appDisplayName(item.app)) + '</span>' +
+        '<span class="bn-age">' + escHtml(fmtAge(ageSec)) + '</span>' +
+      '</div>' +
+      '<div class="bn-title">' + escHtml(item.title) + '</div>' +
+      '<div class="bn-meta">' + escHtml(item.activity || item.agent) + ' · ' + escHtml(item.id) + '</div>' +
+    '</button>';
+  }
+  grid.innerHTML = html;
+  grid.querySelectorAll(".builder-node").forEach((btn) => {
+    btn.addEventListener("click", () => selectNode(btn.dataset.id));
+  });
+}
+
+function renderGroupedThreads() {
+  const box = document.getElementById("liveThreadsBody");
+  if (!THREADS) return;
+  if (THREADS.error === "HTTP 401") {
+    box.innerHTML = 'Sign in via Cloudflare Access or unlock with your runner token to view live threads. <a href="/about/threads">Open tracker →</a>';
+    return;
+  }
+  if (THREADS.error) {
+    box.textContent = "Live threads sync error: " + THREADS.error;
+    return;
+  }
+  const groups = [...(THREADS.apps || [])].sort((a, b) => {
+    const aLive = a.needs_you + a.working + a.queued + a.failed;
+    const bLive = b.needs_you + b.working + b.queued + b.failed;
+    if (aLive !== bLive) return bLive - aLive;
+    return b.total - a.total;
+  });
+
+  let html = "";
+  let rendered = 0;
+  for (const g of groups) {
+    const active = (g.threads || []).filter((t) =>
+      t.state === "needs_you" || t.state === "working" || t.state === "queued" || t.state === "failed"
+    );
+    const isQuiet = active.length === 0;
+    if (isQuiet && !SHOW_QUIET_APPS) continue;
+    rendered++;
+    html += '<article class="app-group' + (isQuiet ? ' quiet' : '') + '">';
+    html += '<div class="app-group-head">';
+    html += '<h3 class="app-group-title">' + escHtml(appDisplayName(g.app)) +
+      ' <span class="pill ' + (g.lane_default === "rex" ? "accent" : "unbuilt") + '">' + (g.lane_default === "rex" ? "Rex / Fable" : "Orca") + '</span></h3>';
+    html += '<div class="app-group-pills">' +
+      (g.needs_you ? '<span class="pill standby">' + g.needs_you + ' needs you</span>' : '') +
+      (g.working ? '<span class="pill live">' + g.working + ' working</span>' : '') +
+      (g.queued ? '<span class="pill accent">' + g.queued + ' queued</span>' : '') +
+      (g.failed ? '<span class="pill offline">' + g.failed + ' failed</span>' : '') +
+      '<span class="pill unbuilt">' + g.total + ' total</span>' +
+      '<a class="btn" href="/about/threads" style="min-height:2rem;padding:0.2rem 0.65rem;font-size:0.86rem">Tracker →</a>' +
+      '</div></div>';
+
+    if (!isQuiet) {
+      html += '<div class="app-thread-grid">';
+      for (const t of active) {
+        const [pillCls, pillTxt] = badgeForThreadState(t.state, t.asks);
+        const ageSec = t.updated_at ? Math.max(0, Math.floor((Date.now() - t.updated_at) / 1000)) : null;
+        html += '<a class="app-thread-card st-' + escHtml(t.state) + '" href="/about/threads#chat=' + escHtml(t.id) + '">' +
+          '<div class="atc-top">' +
+            '<span class="pill ' + pillCls + '">' + (t.state === "working" ? '<span class="dot pulsing"></span>' : '') + escHtml(pillTxt) + '</span>' +
+            '<span>' + escHtml(t.lane === "rex" ? "Rex" : t.lane) + ' · ' + escHtml(t.id) + '</span>' +
+            '<span class="atc-age">' + escHtml(fmtAge(ageSec)) + '</span>' +
+          '</div>' +
+          '<div class="atc-title">' + escHtml(t.title) + '</div>' +
+          (t.activity ? '<div class="atc-act">' + escHtml(t.activity) + '</div>' : '') +
+          (t.latest_preview && t.latest_preview !== t.title ? '<div class="atc-prev">' + escHtml(t.latest_preview) + '</div>' : '') +
+        '</a>';
+      }
+      html += '</div>';
+    }
+    html += '</article>';
+  }
+
+  const quietCount = groups.filter((g) => (g.needs_you + g.working + g.queued + g.failed) === 0).length;
+  const qBtn = document.getElementById("toggleQuietAppsBtn");
+  qBtn.textContent = SHOW_QUIET_APPS ? ("Hide quiet apps (" + quietCount + ")") : ("Show quiet apps (" + quietCount + ")");
+  qBtn.style.display = quietCount > 0 ? "inline-flex" : "none";
+
+  if (rendered === 0) {
+    const total = groups.reduce((n, g) => n + g.total, 0);
+    html = '<div class="app-group quiet">All quiet — 0 active or waiting threads (' + total + ' total across ' + groups.length + ' apps). <a href="/about/threads">Browse all threads →</a></div>';
+  }
+  box.innerHTML = html;
 }
 
 function metaFor(id, data) {
@@ -1281,164 +1424,135 @@ function metaFor(id, data) {
   const o = data ? data.orca : null;
   const r = data ? data.rex : null;
   const c = data ? data.components : {};
-  const runs = r ? r.runs : [];
+
+  if (id && id.startsWith("chat:")) {
+    const chatId = id.slice(5);
+    const t = threadById(chatId);
+    const run = runById(chatId);
+    const st = t
+      ? (t.state === "working" ? "live" : (t.state === "failed" ? "offline" : "standby"))
+      : (run && (run.status === "active" || run.status === "progress") ? "live" : "standby");
+    return {
+      kicker: "R4 · " + appDisplayName((t && t.app) || (run && run.app) || "thread"),
+      title: (t && t.title) || chatId,
+      state: st,
+      summary: (t && t.latest_preview) || "Live feedback thread tracked inside Rex session feedback-loop.",
+      live: (t && t.activity ? t.activity + " · " : "") + "chat=" + chatId + (run ? " · agent=" + run.agent + " (" + run.status + ")" : ""),
+      links: [["Open full thread in Tracker ↗", "/about/threads#chat=" + chatId]],
+      checklist: [
+        [true, "Tracked in Worker D1 (" + chatId + ")"],
+        [Boolean(run), "Isolated Rex builder subfolder + run.json"],
+        [Boolean(t && t.shipped), "Shipped commit / PR / release linked"]
+      ],
+      recovery: "rex-runner boot reads run.json and resumes the builder session cleanly after a reboot."
+    };
+  }
 
   const catalog = {
     apps: {
-      kicker: "R0 · CLIENT APPS",
-      title: "Agent Pager · PR Hub · Trips",
+      kicker: "R0 · Client Apps",
+      title: "Agent Pager · PR Hub · Trips · Demo",
       state: c.apps || "live",
-      summary: "Apps embedding FeedbackKit SDK. Owners trigger coding fixes; builders open PRs; everyone else files a GitHub issue.",
-      live: w ? w.apps.map((a) => a.app + ": " + a.chats + " chat(s)").join(" · ") : "Loading…",
+      summary: "Apps embedding FeedbackKit SDK. Owners ship fixes; builders open PRs; everyone else files a GitHub issue.",
+      live: w ? w.apps.map((a) => appDisplayName(a.app) + ": " + a.chats).join(" · ") : "Loading…",
       checklist: [
         [true, "FeedbackKit SDK integrated in apps"],
         [true, "Live ACP updates + APNs push"],
-        [false, "Route selected apps into Rex lane via --claim-apps"]
+        [Boolean(r && r.claim_apps && r.claim_apps.length > 0), "Apps opted into Rex lane (" + (r && r.claim_apps ? r.claim_apps.join(", ") : "none") + ")"]
       ],
       recovery: "DurableNetworking buffers messages offline and replays idempotently via client_ref."
     },
     menubar_about: {
-      kicker: "R0 · MENU BAR ITEM",
-      title: "Menu Bar About → /about Link",
+      kicker: "R0 · Menu Bar Item",
+      title: "Menu Bar → /about Link",
       state: c.menubar_about || "unbuilt",
       summary: "Menu bar entry that opens this live dashboard directly from macOS.",
       live: "Unbuilt — open this URL directly in browser for now.",
       checklist: [
-        [true, "Live /about dashboard deployed on Worker"],
-        [false, "Add About menu item in runner/MenuBar Swift app"],
-        [false, "Release updated Menu Bar build"]
+        [true, "Live /about + /about/threads dashboards deployed on Worker"],
+        [false, "Add About menu item in runner/MenuBar Swift app"]
       ],
       recovery: "Stateless URL launcher; falls back to browser bookmark."
     },
     worker: {
-      kicker: "R1 · CLOUDFLARE WORKER",
+      kicker: "R1 · Cloudflare Worker",
       title: "featurekit Worker + D1 + R2",
       state: c.worker || "live",
-      summary: "Cloudflare Worker holding every app's chats, media, wake-up Durable Object, and this live dashboard API.",
+      summary: "Cloudflare Worker holding every app's chats, media, wake-up Durable Object, and these live dashboards.",
       live: w ? (w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " delivering · " + w.failed_messages + " failed") : "Loading…",
       checklist: [
         [true, "D1 chats + messages + runner_beat live"],
-        [true, "GET /about + GET /about/status.json live"],
-        [true, "POST /runner/rex-status heartbeat ingest live"]
+        [true, "GET /about + /about/threads + /about/status.json live"],
+        [true, "Cloudflare Access JWT auto-unlock persisted as Worker secrets"]
       ],
       recovery: "Stateless edge Worker over D1 & R2. Unclaimed messages wait safely until claimed."
     },
     orca_runner: {
-      kicker: "R2 · ORCA LANE (UNTOUCHED)",
-      title: "Orca Runner (Python)",
+      kicker: "R2 · Orca Lane (Python)",
+      title: "Orca Runner + Worktrees",
       state: c.orca_runner || "standby",
-      summary: "Existing production Python runner kept 100% untouched while the Go Rex runner iterates in parallel.",
-      live: o ? (o.online ? "ONLINE · last poll " + fmtAge(o.age_seconds) : "OFFLINE · last poll " + fmtAge(o.age_seconds)) : "Loading…",
+      summary: "Existing production Python runner kept untouched for existing Orca chats; skips Rex apps via rex-apps.json.",
+      live: o ? (o.online ? "Online · last poll " + fmtAge(o.age_seconds) : "Offline · last poll " + fmtAge(o.age_seconds)) : "Loading…",
       checklist: [
         [true, "Production LaunchAgent running"],
-        [true, "Protected from rex-runner (--claim-apps empty by default)"]
+        [true, "Skips Rex apps via rex-apps.json (zero race)"]
       ],
       recovery: "launchd restarts automatically; claimed messages are journaled before delivery."
     },
-    orca_worktrees: {
-      kicker: "ORCA WORKSTREAM",
-      title: "Per-Chat Orca Worktrees",
-      state: c.orca_worktrees || "standby",
-      summary: "Existing per-chat Orca worktrees continuing to serve live app feedback with zero disruption.",
-      live: o && o.online ? "Active production workstream" : "Waiting on Orca runner heartbeat",
-      checklist: [
-        [true, "Per-chat worktree creation & 24h tidy live"],
-        [true, "Untouched by Rex iteration"]
-      ],
-      recovery: "Messages queue while a builder host is offline and replay once Orca answers."
-    },
     go_runner: {
-      kicker: "R2 · REX LANE (GO BINARY)",
-      title: "rex-runner (Go Binary)",
+      kicker: "R2 · Rex Lane (Go Binary)",
+      title: "rex-runner (Go Daemon)",
       state: c.go_runner || "standby",
-      summary: "Nondestructive single Go binary for Rex session boot, serialized inbox drain, deterministic reap, and opt-in Worker claiming.",
+      summary: "Single Go binary for Rex session boot, claude-switch coordinator watchdog, FIFO inbox drain, reap, and Worker claiming.",
       live: r && r.reported_at_ms
-        ? ("Heartbeat " + fmtAge(r.age_seconds) + " · session " + r.session_name + " · claim_apps: " + (r.claim_apps.length ? r.claim_apps.join(", ") : "none (observe only)"))
-        : "Binary installed; run rex-runner push-status or serve to report live.",
+        ? ("Heartbeat " + fmtAge(r.age_seconds) + " · session " + r.session_name + " · apps: " + (r.claim_apps.length ? r.claim_apps.join(", ") : "none"))
+        : "Waiting for heartbeat…",
       checklist: [
-        [true, "Go binary built & installed (boot, spawn, report, reply, drain, reap, serve)"],
-        [true, "Worker /runner/rex-status + /runner/rex-inspect telemetry push"],
+        [true, "Go binary installed (boot, spawn, report, reply, drain, reap, serve)"],
+        [true, "Pure-Go claude-switch watchdog + modal auto-dismiss (start.sh deleted)"],
         [Boolean(r && r.connected), "macOS LaunchAgent keeping rex-runner serve alive"],
-        [Boolean(r && r.claim_apps && r.claim_apps.length > 0), "Opt-in claim_apps routing enabled (Orca skips listed apps via rex-apps.json)"]
+        [Boolean(r && r.claim_apps && r.claim_apps.length > 0), "Opt-in claim_apps routing active"]
       ],
-      recovery: "On boot, rex-runner boot ensures feedback-loop + Fable Tab 1 and resumes unfinished run.json builder folders."
+      recovery: "30s watchdog detects dead/rate-limited Tab 1 and relaunches via claude-switch resume --next."
     },
     inbox: {
-      kicker: "R3 · SERIALIZED QUEUE",
+      kicker: "R3 · Serialized Queue",
       title: "Coordinator Inbox (FIFO)",
       state: c.inbox || "standby",
       summary: "File-locked append-only inbox.jsonl drained into Fable only when Rex OSC 7501 reports idle/done.",
       live: r ? (r.inbox_pending + " pending event(s) queued for Fable") : "Loading…",
       checklist: [
         [true, "Flocked inbox.jsonl + atomic cursor ack built in Go"],
-        [true, "OSC 7501 stream watcher in rex-runner serve"],
-        [false, "Continuous serve daemon running via LaunchAgent"]
+        [true, "OSC 7501 stream watcher + dialog guard active"]
       ],
       recovery: "Unacknowledged events stay on disk across crashes and drain cleanly once Fable returns to idle."
     },
     fable: {
-      kicker: "R3 · TAB 1 (PINNED)",
+      kicker: "R3 · Tab 1 (Pinned UUID)",
       title: "Fable 5.2 Coordinator",
       state: c.fable || "standby",
       summary: "Strictly coordinates and validates across apps and shared kit repos from its own isolated folder.",
-      live: r ? ((r.coordinator_active ? "Tab 1 ACTIVE" : "Tab 1 NOT REPORTED") + " · state: " + r.coordinator_state) : "Loading…",
+      live: r ? ((r.coordinator_active ? "Tab 1 Active" : "Tab 1 Offline") + " · state: " + r.coordinator_state) : "Loading…",
       checklist: [
-        [true, "Dedicated feedback-coordinator/ folder with pinned UUID start.sh"],
-        [true, "Transcript folder symlinked across account profiles for rotation"],
-        [true, "Running Fable 5.2 in Rex session feedback-loop Tab 1"],
-        [false, "End-to-end Worker → Inbox → Fable → Builder test run"]
+        [true, "Dedicated feedback-coordinator/ folder with pinned UUID"],
+        [true, "Managed by rex-runner + claude-switch (zero shell scripts)"],
+        [true, "Auto-dismisses Claude Code nag modals"]
       ],
-      recovery: "start.sh automatically runs --resume <pinned-uuid> after any restart or account rotation."
+      recovery: "On exit or usage limit, rex-runner watchdog resumes the pinned UUID on the next available Claude account."
     },
     reaper: {
-      kicker: "R3 · CLEANUP",
+      kicker: "R3 · Cleanup",
       title: "Deterministic Reaper",
       state: c.reaper || "standby",
       summary: "Verifies clean git status, zero unpushed commits, and idle TTL before closing finished Rex tabs.",
-      live: r ? (r.runs.filter((x) => x.status === "reaped").length + " reaped · " + r.runs.filter((x) => x.status === "kept").length + " kept") : "Standby",
+      live: r ? (r.runs.filter((x) => x.status === "reaped").length + " reaped · " + r.runs.filter((x) => x.status === "done").length + " done") : "Standby",
       checklist: [
         [true, "rex-runner reap subcommand + git safety tests built"],
-        [false, "Periodic reap running continuously inside LaunchAgent serve"]
+        [Boolean(r && r.connected), "Periodic reap running inside LaunchAgent serve"]
       ],
       recovery: "Never deletes dirty or unpushed folders — marks kept and notifies Fable."
     }
   };
-
-  for (let i = 0; i < 3; i++) {
-    const run = runs[i];
-    const slotKey = "builder_slot_" + i;
-    if (run) {
-      catalog[slotKey] = {
-        kicker: "R4 · LIVE BUILDER TAB " + (i + 2),
-        title: run.chat_id + " (" + run.app + ")",
-        state: run.status === "active" || run.status === "blocked" ? "live" : "standby",
-        summary: "Isolated builder subfolder tracked by run.json inside Rex session feedback-loop.",
-        live: "agent=" + run.agent + " · status=" + run.status + " · updated " + fmtAge(data ? Math.max(0, Math.floor((data.now_ms - run.updated_at_ms) / 1000)) : null),
-        checklist: [
-          [true, "Isolated folder + run.json manifest"],
-          [true, "Dedicated Rex tab in feedback-loop"],
-          [false, "Automatic builder-to-Fable stop hook calling rex-runner report"]
-        ],
-        recovery: "rex-runner boot reads run.json and resumes " + run.agent + " with its saved session ID."
-      };
-    } else {
-      const titles = ["App Builder Slot", "Shared Kit Builder Slot", "Antigravity Builder Slot"];
-      catalog[slotKey] = {
-        kicker: "R4 · EPHEMERAL BUILDER SLOT " + (i + 1),
-        title: titles[i],
-        state: "unbuilt",
-        summary: "No active Rex builder tab in this slot yet. Lights up automatically once rex-runner spawns a fb-xxxx run.",
-        live: "0 active runs in this slot",
-        checklist: [
-          [true, "rex-runner spawn + run.json manifest format built"],
-          [true, "rex-antigravity-hooks plugin published & installed"],
-          [false, "First live feedback chat routed through Rex builder tab"],
-          [false, "Automatic builder Stop hook calling rex-runner report"]
-        ],
-        recovery: "Each spawned run gets its own folder + run.json so reboots resume exact agent history."
-      };
-    }
-  }
   return catalog[id] || catalog.worker;
 }
 
@@ -1447,7 +1561,7 @@ function renderInspector() {
   document.getElementById("insKicker").textContent = info.kicker;
   document.getElementById("insTitle").textContent = info.title;
   document.getElementById("inspectorDock").textContent = "Inspector: " + info.title;
-  document.getElementById("openInspectorBtn").textContent = "Inspector: " + info.title;
+  document.getElementById("openInspectorBtn").textContent = "Inspector";
   document.getElementById("insSummary").textContent = info.summary;
   document.getElementById("insLive").textContent = info.live;
   document.getElementById("insRecovery").textContent = info.recovery;
@@ -1455,14 +1569,20 @@ function renderInspector() {
 
   const linksBar = document.getElementById("insLinks");
   linksBar.innerHTML = "";
-  const cfLinks = SELECTED === "worker" && LATEST && LATEST.worker ? LATEST.worker.links : null;
-  if (cfLinks) {
+  const linkItems = [];
+  if (SELECTED === "worker" && LATEST && LATEST.worker && LATEST.worker.links) {
+    const cf = LATEST.worker.links;
+    linkItems.push(["Cloudflare Worker ↗", cf.worker], ["D1 (feedbackkit) ↗", cf.d1], ["R2 (featurekit) ↗", cf.r2]);
+  }
+  if (Array.isArray(info.links)) {
+    for (const pair of info.links) linkItems.push(pair);
+  }
+  if (linkItems.length > 0) {
     linksBar.style.display = "flex";
-    for (const [label, url] of [["Cloudflare Worker ↗", cfLinks.worker], ["D1 (feedbackkit) ↗", cfLinks.d1], ["R2 (featurekit) ↗", cfLinks.r2]]) {
+    for (const [label, url] of linkItems) {
       const a = document.createElement("a");
       a.href = url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
+      if (url.startsWith("http")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
       a.textContent = label;
       linksBar.appendChild(a);
     }
@@ -1475,14 +1595,10 @@ function renderInspector() {
   for (const [done, label] of info.checklist) {
     const li = document.createElement("li");
     li.className = done ? "done" : "todo";
-    li.innerHTML = '<span class="mark">' + (done ? "✓" : "○") + "</span><span>" + label + "</span>";
+    li.innerHTML = '<span class="mark">' + (done ? "✓" : "○") + "</span><span>" + escHtml(label) + "</span>";
     ul.appendChild(li);
   }
   renderInspectDump();
-}
-
-function getInspectToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
 }
 
 function renderInspectDump() {
@@ -1525,15 +1641,14 @@ function renderInspectDump() {
     return;
   }
   let targetPane = null;
-  if (SELECTED === "fable" || SELECTED === "go_runner" || SELECTED === "worker") {
+  if (SELECTED.startsWith("chat:")) {
+    const chatId = SELECTED.slice(5);
+    targetPane = (INSPECT.panes || []).find((p) => p.id === chatId) || null;
+  } else if (SELECTED === "fable" || SELECTED === "go_runner" || SELECTED === "worker") {
     targetPane = (INSPECT.panes || []).find((p) => p.kind === "coordinator") || (INSPECT.panes || [])[0];
-  } else if (SELECTED.startsWith("builder_slot_")) {
-    const idx = Number(SELECTED.replace("builder_slot_", ""));
-    const builders = (INSPECT.panes || []).filter((p) => p.kind !== "coordinator");
-    targetPane = builders[idx] || null;
   }
   if (!targetPane) {
-    meta.textContent = "No live terminal capture for this node yet (snapshot " + age + "). Click Fable 5.2 or an active builder slot.";
+    meta.textContent = "No live Rex terminal capture for this node yet (snapshot " + age + "). Click Fable 5.2 or an active builder thread.";
     dump.style.display = "none";
     return;
   }
@@ -1542,11 +1657,163 @@ function renderInspectDump() {
   dump.style.display = "block";
 }
 
-async function pollInspect() {
-  const token = getInspectToken();
-  const headers = token ? { Authorization: "Bearer " + token } : {};
+function applyStatus(data) {
+  LATEST = data;
+  const w = data.worker;
+  const o = data.orca;
+  const r = data.rex;
+  const c = data.components;
+
+  // Compact status bar
+  document.getElementById("sbChats").textContent = w.total_chats + " chats" + (w.pending_messages > 0 ? " (" + w.pending_messages + " pending)" : "");
+  setPill(document.getElementById("sbOrcaPill"), c.orca_runner, "Orca " + (o.online ? "Online" : "Offline"));
+  setPill(document.getElementById("sbRexPill"), c.go_runner, "Rex " + (r.connected ? ("Live · " + r.claim_apps.length + " apps") : "Idle"));
+  document.getElementById("sbFable").textContent = (r.coordinator_active ? r.coordinator_state : "offline") + " · " + r.inbox_pending + " inbox";
+
+  // Diagram nodes
+  document.getElementById("nodeAppsMetric").textContent =
+    w.apps.map((a) => appDisplayName(a.app) + ": " + a.chats).join(" · ") || "No apps configured";
+  document.getElementById("nodeWorkerMetric").textContent =
+    w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " delivering · " + w.failed_messages + " failed";
+
+  const linksGroup = document.getElementById("nodeWorkerLinks");
+  if (w.links) {
+    linksGroup.style.display = "flex";
+    document.getElementById("cardLinkWorker").setAttribute("href", w.links.worker);
+    document.getElementById("cardLinkD1").setAttribute("href", w.links.d1);
+    document.getElementById("cardLinkR2").setAttribute("href", w.links.r2);
+  } else {
+    linksGroup.style.display = "none";
+  }
+
+  setNodeState(document.getElementById("nodeOrcaRunner"), c.orca_runner);
+  document.getElementById("nodeOrcaMetric").textContent = o.online ? ("Online · beat " + fmtAge(o.age_seconds)) : ("Offline · " + fmtAge(o.age_seconds));
+  setPill(document.getElementById("chipOrca"), c.orca_runner, o.online ? "Live" : "Offline");
+
+  setNodeState(document.getElementById("nodeGoRunner"), c.go_runner);
+  document.getElementById("nodeRexMetric").textContent = r.reported_at_ms
+    ? ("Beat " + fmtAge(r.age_seconds) + " · " + r.runs.length + " recorded run(s)")
+    : "Built · awaiting daemon";
+  document.getElementById("nodeRexSub").textContent = r.connected
+    ? ("LaunchAgent live · " + (r.claim_apps.length ? r.claim_apps.join(", ") : "observe only"))
+    : "LaunchAgent idle";
+  setPill(document.getElementById("chipRex"), c.go_runner, r.connected ? "Live" : "Idle");
+
+  setNodeState(document.getElementById("nodeInbox"), c.inbox);
+  document.getElementById("nodeInboxMetric").textContent = r.inbox_pending + " pending event(s)";
+  setPill(document.getElementById("chipInbox"), c.inbox, c.inbox === "live" ? "Live" : "Idle");
+
+  setNodeState(document.getElementById("nodeFable"), c.fable);
+  document.getElementById("nodeFableMetric").textContent = r.coordinator_active ? ("Active · " + r.coordinator_state) : "Offline";
+  setPill(document.getElementById("chipFable"), c.fable, r.coordinator_active ? (r.connected ? "Live" : "Idle") : "Off");
+
+  setNodeState(document.getElementById("nodeReaper"), c.reaper);
+  document.getElementById("nodeReaperMetric").textContent =
+    r.runs.filter((x) => x.status === "reaped").length + " reaped · " + r.runs.filter((x) => x.status === "done").length + " done";
+  setPill(document.getElementById("chipReaper"), c.reaper, c.reaper === "live" ? "Live" : "Idle");
+
+  document.getElementById("rexBoundaryTag").textContent =
+    "R3–R4 · Rex Session: " + r.session_name + (r.session_active ? " (Active)" : " (Offline)");
+  document.getElementById("arrowWorkerRunners").textContent = r.claim_apps.length
+    ? ("↓ Orca (legacy chats) · ↓ Rex claims: " + r.claim_apps.map(appDisplayName).join(", "))
+    : "↓ /runner/poll (Orca) · Rex observe-only";
+
+  document.getElementById("lastUpdated").textContent = "Updated " + new Date(data.now_ms).toLocaleTimeString();
+  renderDiagramBuilders();
+  renderInspector();
+}
+
+const inspectorPanel = document.getElementById("inspectorPanel");
+const inspectorBackdrop = document.getElementById("inspectorBackdrop");
+function setDrawer(open) {
+  inspectorPanel.classList.toggle("drawer-open", open);
+  inspectorBackdrop.classList.toggle("open", open);
+}
+function selectNode(id) {
+  SELECTED = id;
+  document.querySelectorAll(".node-card, .builder-node").forEach((x) => {
+    x.classList.toggle("is-selected", x.dataset.id === SELECTED);
+  });
+  renderInspector();
+  if (window.matchMedia("(max-width: 1180px)").matches) setDrawer(true);
+}
+
+document.querySelectorAll(".node-card").forEach((n) => {
+  n.addEventListener("click", (e) => {
+    if (e.target && e.target.closest && e.target.closest("a")) return;
+    selectNode(n.dataset.id);
+  });
+});
+
+document.getElementById("openInspectorBtn").addEventListener("click", () => setDrawer(true));
+document.getElementById("inspectorDock").addEventListener("click", () => setDrawer(true));
+document.getElementById("closeInspectorBtn").addEventListener("click", () => setDrawer(false));
+inspectorBackdrop.addEventListener("click", () => setDrawer(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setDrawer(false); });
+
+document.getElementById("toggleDoneBtn").addEventListener("click", (e) => {
+  SHOW_DONE_IN_DIAGRAM = !SHOW_DONE_IN_DIAGRAM;
+  e.currentTarget.setAttribute("aria-pressed", String(SHOW_DONE_IN_DIAGRAM));
+  renderDiagramBuilders();
+});
+document.getElementById("toggleQuietAppsBtn").addEventListener("click", (e) => {
+  SHOW_QUIET_APPS = !SHOW_QUIET_APPS;
+  e.currentTarget.setAttribute("aria-pressed", String(SHOW_QUIET_APPS));
+  renderGroupedThreads();
+});
+
+document.querySelectorAll(".mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const root = document.getElementById("diagramRoot");
+    root.classList.remove("mode-flow", "mode-recovery", "mode-lanes");
+    root.classList.add("mode-" + btn.dataset.mode);
+    document.querySelectorAll(".mode-btn").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  });
+});
+
+function applySize(size) {
+  const valid = size === "large" || size === "huge" ? size : "normal";
+  if (valid === "normal") document.documentElement.removeAttribute("data-size");
+  else document.documentElement.setAttribute("data-size", valid);
+  document.querySelectorAll(".size-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.size === valid)));
+  try { localStorage.setItem(SIZE_KEY, valid); } catch {}
+}
+document.querySelectorAll(".size-btn").forEach((btn) => btn.addEventListener("click", () => applySize(btn.dataset.size)));
+try { applySize(localStorage.getItem(SIZE_KEY) || "normal"); } catch {}
+
+document.getElementById("themeBtn").addEventListener("click", () => {
+  const root = document.documentElement;
+  const current = root.getAttribute("data-theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  root.setAttribute("data-theme", current ? (current === "dark" ? "light" : "dark") : (prefersDark ? "light" : "dark"));
+});
+
+document.getElementById("inspectUnlockBtn").addEventListener("click", () => {
+  const val = document.getElementById("inspectTokenInput").value.trim();
+  if (!val) return;
+  try { localStorage.setItem(TOKEN_KEY, val); } catch {}
+  document.getElementById("inspectTokenInput").value = "";
+  pollAll();
+});
+document.getElementById("inspectClearBtn").addEventListener("click", () => {
+  try { localStorage.removeItem(TOKEN_KEY); } catch {}
+  INSPECT = null;
+  renderInspectDump();
+});
+
+async function pollStatus() {
   try {
-    const res = await fetch("/about/inspect", { headers, cache: "no-store" });
+    const res = await fetch("/about/status.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    applyStatus(await res.json());
+  } catch (err) {
+    document.getElementById("lastUpdated").textContent = "Sync error: " + err.message;
+  }
+}
+
+async function pollInspect() {
+  try {
+    const res = await fetch("/about/inspect", { headers: authHeaders(), cache: "no-store" });
     if (!res.ok) { INSPECT = { error: "HTTP " + res.status }; renderInspectDump(); return; }
     INSPECT = await res.json();
     renderInspectDump();
@@ -1556,273 +1823,35 @@ async function pollInspect() {
   }
 }
 
-function escHtml(s) {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 async function pollThreads() {
-  const box = document.getElementById("liveThreadsBody");
-  const token = getInspectToken();
-  const headers = token ? { Authorization: "Bearer " + token } : {};
   try {
-    const res = await fetch("/about/threads.json", { headers, cache: "no-store" });
-    if (res.status === 401) {
-      box.innerHTML = 'Sign in via Cloudflare Access or unlock with your runner token to view live threads. <a href="/about/threads">Open tracker →</a>';
+    const res = await fetch("/about/threads.json", { headers: authHeaders(), cache: "no-store" });
+    if (!res.ok) {
+      THREADS = { error: "HTTP " + res.status };
+      renderGroupedThreads();
       return;
     }
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const active = [];
-    for (const g of data.apps || []) {
-      for (const t of g.threads || []) {
-        if (t.state === "needs_you" || t.state === "working" || t.state === "queued" || t.state === "failed") {
-          active.push(t);
-        }
-      }
-    }
-    if (active.length === 0) {
-      const total = (data.apps || []).reduce((n, g) => n + g.total, 0);
-      box.innerHTML = 'All quiet — 0 active or waiting threads (' + total + ' total across ' + (data.apps || []).length + ' apps). <a href="/about/threads">Browse all threads →</a>';
-      return;
-    }
-    let html = '<div class="live-threads-grid">';
-    for (const t of active.slice(0, 12)) {
-      const pillCls = t.state === "needs_you" ? "standby" : t.state === "working" ? "live" : t.state === "failed" ? "offline" : "live";
-      const label = t.state === "needs_you" ? (t.asks ? "Needs answer" : "Needs you") : t.state === "working" ? "Working" : t.state === "queued" ? "Queued" : "Failed";
-      const ageSec = Math.max(0, Math.floor((Date.now() - t.updated_at) / 1000));
-      html += '<a class="mini-thread st-' + escHtml(t.state) + '" href="/about/threads#chat=' + escHtml(t.id) + '">' +
-        '<div class="mini-thread-top"><span class="pill ' + pillCls + '">' + escHtml(label) + '</span><span>' + escHtml(t.app) + ' · ' + escHtml(t.lane) + '</span><span style="margin-left:auto">' + escHtml(fmtAge(ageSec)) + '</span></div>' +
-        '<div class="mini-thread-title">' + escHtml(t.title) + '</div>' +
-        (t.activity ? '<div class="mini-thread-act">' + escHtml(t.activity) + '</div>' : '') +
-        '</a>';
-    }
-    html += '</div>';
-    if (active.length > 12) {
-      html += '<p class="subtitle" style="margin-top:0.6rem">Showing 12 of ' + active.length + ' active threads. <a href="/about/threads">See all →</a></p>';
-    }
-    box.innerHTML = html;
-  } catch (err) {
-    box.textContent = "Live threads sync error: " + err.message;
-  }
-}
-
-document.getElementById("inspectUnlockBtn").addEventListener("click", () => {
-  const val = document.getElementById("inspectTokenInput").value.trim();
-  if (!val) return;
-  try { localStorage.setItem(TOKEN_KEY, val); } catch {}
-  document.getElementById("inspectTokenInput").value = "";
-  pollInspect();
-});
-document.getElementById("inspectClearBtn").addEventListener("click", () => {
-  try { localStorage.removeItem(TOKEN_KEY); } catch {}
-  INSPECT = null;
-  renderInspectDump();
-});
-
-function applyStatus(data) {
-  LATEST = data;
-  const w = data.worker;
-  const o = data.orca;
-  const r = data.rex;
-  const c = data.components;
-
-  // Top KPI Strip
-  document.getElementById("kpiChats").textContent = w.total_chats + " chats";
-  document.getElementById("kpiQueue").textContent =
-    w.pending_messages + " pending · " + w.delivering_messages + " delivering · " + w.failed_messages + " failed";
-
-  setPill(document.getElementById("kpiOrcaPill"), c.orca_runner, o.online ? "LIVE" : "OFFLINE");
-  document.getElementById("kpiOrcaVal").textContent = o.online ? "Online" : "Offline";
-  document.getElementById("kpiOrcaSub").textContent = "last poll " + fmtAge(o.age_seconds);
-
-  setPill(document.getElementById("kpiRexPill"), c.go_runner, r.connected ? "LIVE" : "IDLE");
-  document.getElementById("kpiRexVal").textContent = r.connected ? "Running" : (r.reported_at_ms ? "Idle" : "No beat");
-  document.getElementById("kpiRexSub").textContent =
-    (r.reported_at_ms ? "beat " + fmtAge(r.age_seconds) : "awaiting daemon") + " · new chats: " + (r.claim_apps.length ? r.claim_apps.join(",") : "Orca");
-
-  setPill(document.getElementById("kpiFablePill"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "IDLE") : "OFFLINE");
-  document.getElementById("kpiFableVal").textContent = r.coordinator_active ? r.coordinator_state : "offline";
-  document.getElementById("kpiFableSub").textContent = "inbox: " + r.inbox_pending + " pending";
-
-  // Build Progress
-  const keys = Object.keys(c);
-  const builtCount = keys.filter((k) => c[k] === "live" || c[k] === "standby").length;
-  const liveCount = keys.filter((k) => c[k] === "live").length;
-  const pct = Math.round((builtCount / keys.length) * 100);
-  document.getElementById("kpiBuildPct").textContent = pct + "%";
-  document.getElementById("kpiBuildVal").textContent = liveCount + " live · " + (builtCount - liveCount) + " idle · " + (keys.length - builtCount) + " unbuilt";
-  document.getElementById("kpiBuildBar").style.width = pct + "%";
-
-  // Node labels & live states
-  document.getElementById("nodeAppsMetric").textContent =
-    w.apps.map((a) => a.app + " (" + a.chats + ")").join(" · ") || "No apps configured";
-  document.getElementById("nodeWorkerMetric").textContent =
-    w.total_chats + " chats · " + w.pending_messages + " pending · " + w.delivering_messages + " active";
-
-  const linksGroup = document.getElementById("nodeWorkerLinks");
-  if (w.links) {
-    linksGroup.style.display = "inline";
-    document.getElementById("svgLinkWorker").setAttribute("href", w.links.worker);
-    document.getElementById("svgLinkD1").setAttribute("href", w.links.d1);
-    document.getElementById("svgLinkR2").setAttribute("href", w.links.r2);
-  } else {
-    linksGroup.style.display = "none";
-  }
-
-  setNodeState(document.getElementById("nodeOrcaRunner"), c.orca_runner);
-  setNodeState(document.getElementById("nodeOrcaWorktrees"), c.orca_worktrees);
-  document.getElementById("nodeOrcaMetric").textContent = o.online ? ("Online · beat " + fmtAge(o.age_seconds)) : ("Offline · " + fmtAge(o.age_seconds));
-  setChip(document.getElementById("chipOrcaBg"), document.getElementById("chipOrcaTxt"), c.orca_runner, o.online ? "LIVE" : "OFFLINE");
-
-  setNodeState(document.getElementById("nodeGoRunner"), c.go_runner);
-  document.getElementById("nodeRexMetric").textContent = r.reported_at_ms
-    ? ("Beat " + fmtAge(r.age_seconds) + " · " + r.runs.length + " run(s)")
-    : "Built · daemon not started";
-  document.getElementById("nodeRexSub").textContent = r.connected
-    ? ("LaunchAgent live · " + (r.claim_apps.length ? r.claim_apps.length + " apps" : "observe only"))
-    : "LaunchAgent idle";
-  setChip(document.getElementById("chipRexBg"), document.getElementById("chipRexTxt"), c.go_runner, r.connected ? "LIVE" : "IDLE");
-
-  setNodeState(document.getElementById("nodeInbox"), c.inbox);
-  document.getElementById("nodeInboxMetric").textContent = r.inbox_pending + " pending event(s)";
-  setChip(document.getElementById("chipInboxBg"), document.getElementById("chipInboxTxt"), c.inbox, c.inbox === "live" ? "LIVE" : "IDLE");
-
-  setNodeState(document.getElementById("nodeFable"), c.fable);
-  document.getElementById("nodeFableMetric").textContent = r.coordinator_active
-    ? ("Tab 1 ACTIVE · " + r.coordinator_state)
-    : "Tab 1 not detected";
-  setChip(document.getElementById("chipFableBg"), document.getElementById("chipFableTxt"), c.fable, r.coordinator_active ? (r.connected ? "LIVE" : "IDLE") : "OFF");
-
-  setNodeState(document.getElementById("nodeReaper"), c.reaper);
-  setChip(document.getElementById("chipReaperBg"), document.getElementById("chipReaperTxt"), c.reaper, c.reaper === "live" ? "LIVE" : "IDLE");
-
-  document.getElementById("rexBoundaryTag").textContent =
-    "REX SESSION: " + r.session_name + (r.session_active ? " (ACTIVE)" : " (OFFLINE)") + " · OSC 7501 STATUS";
-
-  // Claim edge state
-  const claimEdge = document.getElementById("edgeWorkerRexClaim");
-  const claimLbl = document.getElementById("lblWorkerRexClaim");
-  if (r.claim_apps.length > 0) {
-    claimEdge.setAttribute("class", "edge edge-fwd edge-live-flow");
-    claimEdge.setAttribute("marker-end", "url(#arr-fwd)");
-    claimLbl.setAttribute("class", "edge-label fwd");
-    claimLbl.textContent = "new chats: " + r.claim_apps.join(",");
-  } else {
-    claimEdge.setAttribute("class", "edge edge-unbuilt");
-    claimEdge.setAttribute("marker-end", "url(#arr-unbuilt)");
-    claimLbl.setAttribute("class", "edge-label unbuilt");
-    claimLbl.textContent = "new chats: Orca (Rex off)";
-  }
-
-  // Dynamic R4 builder slots
-  const activeCount = r.runs.filter((x) => x.status === "active" || x.status === "blocked").length;
-  const spawnLbl = document.getElementById("lblSpawn");
-  spawnLbl.textContent = activeCount > 0 ? ("rex-runner spawn (" + activeCount + " active)") : "rex-runner spawn (0 active)";
-  spawnLbl.setAttribute("class", activeCount > 0 ? "edge-label fwd" : "edge-label unbuilt");
-
-  for (let i = 0; i < 3; i++) {
-    const slot = document.getElementById("slot" + i);
-    const edge = document.getElementById("edgeSpawn" + (i + 1));
-    const run = r.runs[i];
-    if (run) {
-      const st = run.status === "active" || run.status === "blocked" ? "live" : "standby";
-      setNodeState(slot, st);
-      edge.setAttribute("class", st === "live" ? "edge edge-fwd edge-live-flow" : "edge edge-rec");
-      edge.setAttribute("marker-end", st === "live" ? "url(#arr-fwd)" : "url(#arr-rec)");
-      document.getElementById("slot" + i + "Kicker").textContent = "R4 · TAB " + (i + 2) + " (" + run.app + ")";
-      document.getElementById("slot" + i + "Title").textContent = run.chat_id;
-      document.getElementById("slot" + i + "Metric").textContent = run.agent + " · " + run.status;
-      document.getElementById("slot" + i + "Sub1").textContent = "updated " + fmtAge(Math.max(0, Math.floor((data.now_ms - run.updated_at_ms) / 1000)));
-      document.getElementById("slot" + i + "Sub2").textContent = "run.json tracked";
-      setChip(document.getElementById("slot" + i + "ChipBg"), document.getElementById("slot" + i + "ChipTxt"), st, run.status.toUpperCase());
-    } else {
-      setNodeState(slot, "unbuilt");
-      edge.setAttribute("class", "edge edge-unbuilt");
-      edge.setAttribute("marker-end", "url(#arr-unbuilt)");
-      setChip(document.getElementById("slot" + i + "ChipBg"), document.getElementById("slot" + i + "ChipTxt"), "unbuilt", "UNBUILT");
-    }
-  }
-
-  document.getElementById("lastUpdated").textContent = "Updated " + new Date(data.now_ms).toLocaleTimeString();
-  renderInspector();
-}
-
-async function pollStatus() {
-  try {
-    const res = await fetch("/about/status.json", { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    applyStatus(data);
-  } catch (err) {
-    document.getElementById("lastUpdated").textContent = "Sync error: " + err.message;
-  }
-}
-
-const inspectorPanel = document.getElementById("inspectorPanel");
-const inspectorBackdrop = document.getElementById("inspectorBackdrop");
-function setDrawer(open) {
-  inspectorPanel.classList.toggle("drawer-open", open);
-  inspectorBackdrop.classList.toggle("open", open);
-}
-document.getElementById("openInspectorBtn").addEventListener("click", () => setDrawer(true));
-document.getElementById("inspectorDock").addEventListener("click", () => setDrawer(true));
-document.getElementById("closeInspectorBtn").addEventListener("click", () => setDrawer(false));
-inspectorBackdrop.addEventListener("click", () => setDrawer(false));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") setDrawer(false); });
-
-const SIZE_KEY = "fk_text_size";
-function applySize(size) {
-  const valid = size === "large" || size === "huge" ? size : "normal";
-  if (valid === "normal") document.documentElement.removeAttribute("data-size");
-  else document.documentElement.setAttribute("data-size", valid);
-  document.querySelectorAll(".size-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.size === valid)));
-  try { localStorage.setItem(SIZE_KEY, valid); } catch {}
-}
-document.querySelectorAll(".size-btn").forEach((btn) => {
-  btn.addEventListener("click", () => applySize(btn.dataset.size));
-});
-try { applySize(localStorage.getItem(SIZE_KEY) || "normal"); } catch {}
-
-document.querySelectorAll(".node").forEach((n) => {
-  n.addEventListener("click", (e) => {
-    if (e.target && e.target.closest && e.target.closest("a")) return;
-    SELECTED = n.dataset.id;
-    document.querySelectorAll(".node").forEach((x) => x.classList.toggle("is-selected", x.dataset.id === SELECTED));
+    THREADS = await res.json();
+    renderDiagramBuilders();
+    renderGroupedThreads();
     renderInspector();
-    if (window.matchMedia("(max-width: 1120px)").matches) setDrawer(true);
-  });
-});
+  } catch (err) {
+    THREADS = { error: err.message };
+    renderGroupedThreads();
+  }
+}
 
-document.querySelectorAll(".mode-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const svg = document.getElementById("tree");
-    svg.classList.remove("mode-flow", "mode-recovery", "mode-lanes");
-    svg.classList.add("mode-" + btn.dataset.mode);
-    document.querySelectorAll(".mode-btn").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
-  });
-});
-
-document.getElementById("refreshBtn").addEventListener("click", pollStatus);
-document.getElementById("themeBtn").addEventListener("click", () => {
-  const root = document.documentElement;
-  const current = root.getAttribute("data-theme");
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  root.setAttribute("data-theme", current ? (current === "dark" ? "light" : "dark") : (prefersDark ? "light" : "dark"));
-});
-
-renderInspector();
-pollStatus();
-pollInspect();
-pollThreads();
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) { pollStatus(); pollInspect(); pollThreads(); }
-});
-setInterval(() => {
-  if (document.hidden) return;
+function pollAll() {
   pollStatus();
   pollInspect();
   pollThreads();
-}, 10000);
+}
+
+document.getElementById("refreshBtn").addEventListener("click", pollAll);
+renderInspector();
+pollAll();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollAll(); });
+setInterval(() => { if (!document.hidden) pollAll(); }, 10000);
 </script>
 </body>
 </html>

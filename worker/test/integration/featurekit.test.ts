@@ -159,7 +159,16 @@ test("GET /about serves the live architecture dashboard HTML and sanitized statu
         coordinator_state: "idle",
         inbox_pending: 2,
         claim_apps: [],
-        runs: [{ chat_id: "fb-1a2b", app: "prhub", agent: "claude", status: "active" }],
+        runs: [
+          ...Array.from({ length: 30 }, (_, i) => ({
+            chat_id: `fb-reaped-${i}`,
+            app: "prhub",
+            agent: "claude",
+            status: "reaped",
+            updated_at_ms: 1000 + i,
+          })),
+          { chat_id: "fb-1a2b", app: "prhub", agent: "claude", status: "active", updated_at_ms: 5000 },
+        ],
       }),
     }),
     e,
@@ -177,7 +186,8 @@ test("GET /about serves the live architecture dashboard HTML and sanitized statu
   assert.equal(status.rex.connected, true);
   assert.equal(status.rex.coordinator_active, true);
   assert.equal(status.rex.inbox_pending, 2);
-  assert.equal(status.rex.runs.length, 1);
+  assert.equal(status.rex.runs.length, 31);
+  assert.equal(status.rex.runs[0].chat_id, "fb-1a2b");
   assert.equal(status.components.menubar_about, "unbuilt");
   assert.equal(status.components.go_runner, "live");
 
