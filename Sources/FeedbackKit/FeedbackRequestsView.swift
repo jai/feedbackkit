@@ -269,8 +269,9 @@ private struct FeedbackListView: View {
             }
         } footer: {
             archivedSection.onPage()
-            if let error = model.error {
+            if let error = model.listError {
                 Text(error)
+                    .accessibilityIdentifier("feedback-list-error")
                     .font(theme.font(.footnote))
                     .foregroundStyle(theme.toneBad)
                     .padding(.horizontal, ChatSpace.lg)

@@ -66,6 +66,8 @@ public final class FeedbackRequestsModel {
     @ObservationIgnored var keeping: Task<Void, Never>?
     private(set) var chats: [String: FeedbackChat] = [:]
     var error: String?
+    /// Why the list's last read failed, said under its rows only: it keeps nobody from writing in a conversation.
+    var listError: String?
     /// Unsent words, one box per conversation (`FeedbackRoute.box`).
     var drafts: [String: String] = [:]
     /// The words on their way, by box, shown as sent until the chat has them.
@@ -282,7 +284,8 @@ public final class FeedbackRequestsModel {
                 error = nil
                 chatShows(thread, messages: chat.messages.count, isWorking: chat.isWorking)
             } catch {
-                self.error = error.localizedDescription
+                // A read cancelled with its screen's task failed at nothing: the conversation says nothing of it.
+                self.error = error.isCancellation ? self.error : error.localizedDescription
             }
             guard mode.keepsReading(chats[thread]) || sending.contains(route.box) else {
                 return

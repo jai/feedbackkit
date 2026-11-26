@@ -18,6 +18,15 @@ struct ListReads {
     var again = false
 }
 
+extension Error {
+    /// The task that asked was cancelled (a `.task` whose view went, an app leaving the foreground): `URLSession` says
+    /// so with `URLError.cancelled`, structured concurrency with `CancellationError`. Nothing failed, so nothing is
+    /// shown.
+    var isCancellation: Bool {
+        self is CancellationError || (self as? URLError)?.code == .cancelled
+    }
+}
+
 /// The list: its reads, what the device keeps of it, and the changes made on the device ahead of the Worker's next
 /// answer. `needsAttentionCount` (FeedbackAttention.swift) is counted from it.
 extension FeedbackRequestsModel {
@@ -37,14 +46,20 @@ extension FeedbackRequestsModel {
             let isNew = read != list || !hasReadList
             list = read
             hasReadList = true
-            error = nil
+            listError = nil
             if isNew {
                 keepList()
             }
+        } catch where error.isCancellation {
+            // The screen that asked went away, or the app left the foreground: no read failed, and the next one says.
         } catch {
-            self.error = client.direct == nil ? error.localizedDescription : "Could not load feedback. Try again."
+            listError = client.direct == nil ? error.localizedDescription : Self.listProblem
         }
     }
+
+    /// What the list says under its rows when a read of it failed on the direct path, whose errors can carry signed
+    /// URLs. The rows above it are the last ones read; the list is read again at each opening, pull and foreground.
+    static let listProblem = "Could not refresh this list. It is read again each time you open it."
 
     /// The list as it stands, written for the next launch. Off the main actor: the encode and the write.
     private func keepList() {
