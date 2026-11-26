@@ -475,6 +475,7 @@ const ABOUT_HTML = `<!doctype html>
   * { box-sizing: border-box; }
   body {
     margin: 0;
+    overflow-x: clip;
     font-family: var(--sans);
     font-size: 1.125rem;
     line-height: 1.55;
@@ -603,50 +604,12 @@ const ABOUT_HTML = `<!doctype html>
     align-items: start;
   }
   .inspector-backdrop { display: none; }
-  .ins-close { display: none; }
+  .ins-close { display: none; flex-shrink: 0; }
   .inspector-dock { display: none; }
-
-  @media (max-width: 1180px) {
-    .workspace { grid-template-columns: 1fr; }
-    #openInspectorBtn { display: inline-flex; }
-    .inspector-dock {
-      display: inline-flex;
-      position: fixed;
-      right: 1rem;
-      bottom: max(1rem, env(safe-area-inset-bottom, 0px));
-      z-index: 40;
-      box-shadow: var(--shadow);
-      border-color: var(--accent) !important;
-      background: var(--surface) !important;
-      color: var(--accent) !important;
-      font-weight: 650 !important;
-    }
-    .inspector-backdrop.open {
-      display: block;
-      position: fixed;
-      inset: 0;
-      z-index: 49;
-      background: rgba(20, 22, 26, 0.48);
-    }
-    aside.inspector {
-      position: fixed;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      width: min(30rem, 100vw);
-      max-height: 100vh;
-      overflow-y: auto;
-      z-index: 50;
-      border-radius: 12px 0 0 12px;
-      transform: translateX(105%);
-      transition: transform 180ms ease;
-    }
-    aside.inspector.drawer-open { transform: translateX(0); }
-    .ins-close { display: inline-flex; margin-left: auto; }
-  }
 
   /* Eye-comfort 2D SVG Mathematical Tree Map */
   .map-panel {
+    min-width: 0;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -782,8 +745,70 @@ const ABOUT_HTML = `<!doctype html>
     padding: 1.1rem;
     box-shadow: var(--shadow);
   }
-  .ins-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem; }
-  .ins-kicker { font-size: 0.9rem; font-weight: 600; color: var(--text-dim); margin: 0; }
+  .ins-head {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+  }
+  .ins-kicker { font-size: 0.9rem; font-weight: 600; color: var(--text-dim); margin: 0; min-width: 0; }
+  @media (max-width: 1180px) {
+    .workspace { grid-template-columns: minmax(0, 1fr); }
+    #openInspectorBtn { display: inline-flex; }
+    .inspector-dock {
+      display: inline-flex;
+      position: fixed;
+      right: 1rem;
+      bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+      z-index: 40;
+      box-shadow: var(--shadow);
+      border-color: var(--accent) !important;
+      background: var(--surface) !important;
+      color: var(--accent) !important;
+      font-weight: 650 !important;
+    }
+    .inspector-backdrop.open {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 49;
+      background: rgba(20, 22, 26, 0.48);
+    }
+    aside.inspector {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(28rem, calc(100vw - 1.25rem));
+      max-width: 100vw;
+      max-height: 100dvh;
+      overflow-y: auto;
+      z-index: 50;
+      border-radius: 12px 0 0 12px;
+      transform: translateX(105%);
+      visibility: hidden;
+      pointer-events: none;
+      transition: transform 180ms ease, visibility 0s linear 180ms;
+    }
+    aside.inspector.drawer-open {
+      transform: translateX(0);
+      visibility: visible;
+      pointer-events: auto;
+      transition: transform 180ms ease, visibility 0s linear 0s;
+    }
+    .ins-head {
+      position: sticky;
+      top: -1.1rem;
+      z-index: 2;
+      background: var(--surface);
+      padding: 0.65rem 0 0.45rem;
+      margin: -0.65rem 0 0.45rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .ins-close { display: inline-flex; margin-left: auto; }
+  }
   .ins-title { margin: 0.2rem 0 0.45rem; font-size: 1.25rem; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
   .ins-summary { margin: 0 0 0.8rem; font-size: 0.98rem; color: var(--text-dim); }
   .kv { border-top: 1px solid var(--border); padding: 0.7rem 0; }
