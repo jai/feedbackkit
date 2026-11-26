@@ -575,8 +575,46 @@ const TRACKER_HTML = `<!doctype html>
   .health-item { display: inline-flex; align-items: center; gap: 0.45rem; }
   .health-item strong { color: var(--text); font-weight: 650; }
 
-  .filter-bar { display: flex; flex-direction: column; gap: 0.65rem; }
-  .filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .filter-bar { display: flex; flex-direction: column; gap: 0.7rem; }
+  .filter-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.55rem;
+    align-items: center;
+  }
+  .filter-label {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    min-width: 3.4rem;
+  }
+  .filter-row { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; flex: 1; }
+  button.app-btn {
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  button.state-btn {
+    border-radius: 999px;
+    padding: 0.38rem 0.85rem;
+    min-height: 2.5rem;
+    background: var(--surface-2);
+    border-color: var(--border);
+  }
+  button.state-btn[data-filter="needs_you"][aria-pressed="true"] {
+    border-color: var(--warn);
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+  button.state-btn[data-filter="working"][aria-pressed="true"] {
+    border-color: var(--live);
+    background: var(--live-soft);
+    color: var(--live);
+  }
+  button.state-btn[data-filter="shipped"][aria-pressed="true"] {
+    border-color: var(--live);
+    background: var(--live-soft);
+    color: var(--live);
+  }
   .search-input {
     flex: 1 1 14rem;
     min-height: 2.75rem;
@@ -755,14 +793,20 @@ const TRACKER_HTML = `<!doctype html>
   </section>
 
   <section class="filter-bar" aria-label="Filters">
-    <div class="filter-row" id="appTabs"></div>
-    <div class="filter-row">
-      <button class="btn state-btn" data-filter="live" aria-pressed="true" type="button">Live (Active + Needs you)</button>
-      <button class="btn state-btn" data-filter="needs_you" aria-pressed="false" type="button">Needs you</button>
-      <button class="btn state-btn" data-filter="working" aria-pressed="false" type="button">Working</button>
-      <button class="btn state-btn" data-filter="shipped" aria-pressed="false" type="button">Shipped</button>
-      <button class="btn state-btn" data-filter="all" aria-pressed="false" type="button">All recent</button>
-      <input class="search-input" id="searchInput" type="search" placeholder="Filter by title, chat ID, or text…"/>
+    <div class="filter-group">
+      <span class="filter-label">Apps</span>
+      <div class="filter-row" id="appTabs"></div>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Status</span>
+      <div class="filter-row">
+        <button class="btn state-btn" data-filter="live" aria-pressed="true" type="button">⚡ Live</button>
+        <button class="btn state-btn" data-filter="needs_you" aria-pressed="false" type="button">🙋 Needs you</button>
+        <button class="btn state-btn" data-filter="working" aria-pressed="false" type="button">⚙️ Working</button>
+        <button class="btn state-btn" data-filter="shipped" aria-pressed="false" type="button">🚀 Shipped</button>
+        <button class="btn state-btn" data-filter="all" aria-pressed="false" type="button">📋 All recent</button>
+        <input class="search-input" id="searchInput" type="search" placeholder="🔍 Filter by title, chat ID, or text…"/>
+      </div>
     </div>
   </section>
 
@@ -813,15 +857,26 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
+const APP_META = {
+  "agent-pager": { icon: "📟", name: "Agent Pager" },
+  "prhub": { icon: "🔀", name: "PR Hub" },
+  "trips": { icon: "✈️", name: "Trips" },
+  "feedbackkit-demo": { icon: "🧪", name: "FeedbackKit Demo" }
+};
+function appLabel(slug) {
+  const m = APP_META[slug];
+  return m ? (m.icon + " " + m.name) : ("📦 " + slug);
+}
+
 function stateBadge(t) {
-  if (t.state === "needs_you") return ['warn', t.asks ? 'Needs your answer' : 'Needs you'];
-  if (t.state === "working") return ['live', 'Working'];
-  if (t.state === "queued") return ['accent', 'Queued'];
-  if (t.state === "failed") return ['err', 'Failed'];
-  if (t.state === "ended") return ['muted', 'Ended'];
-  if (t.shipped && t.shipped.released) return ['live', 'Released'];
-  if (t.shipped) return ['accent', 'On main'];
-  return ['muted', 'Idle'];
+  if (t.state === "needs_you") return ['warn', t.asks ? '❓ Needs your answer' : '🙋 Needs you'];
+  if (t.state === "working") return ['live', '⚙️ Working'];
+  if (t.state === "queued") return ['accent', '⏳ Queued'];
+  if (t.state === "failed") return ['err', '❌ Failed'];
+  if (t.state === "ended") return ['muted', '🔒 Ended'];
+  if (t.shipped && t.shipped.released) return ['live', '🚀 Released'];
+  if (t.shipped) return ['accent', '✅ On main'];
+  return ['muted', '💤 Idle'];
 }
 
 function matchesFilter(t) {
@@ -871,9 +926,9 @@ function render() {
   if (!DATA) return;
   const r = DATA.runners;
   document.getElementById("healthStrip").innerHTML =
-    '<span class="health-item"><span class="pill ' + (r.rex_connected ? 'live' : 'warn') + '">Rex ' + (r.rex_connected ? 'Live' : 'Idle') + '</span></span>' +
-    '<span class="health-item">Fable: <strong>' + esc(r.coordinator_active ? r.coordinator_state : 'offline') + '</strong> (inbox ' + esc(r.inbox_pending) + ')</span>' +
-    '<span class="health-item"><span class="pill ' + (r.orca_online ? 'live' : 'muted') + '">Orca ' + (r.orca_online ? 'Online' : 'Offline') + '</span></span>' +
+    '<span class="health-item"><span class="pill ' + (r.rex_connected ? 'live' : 'warn') + '">🦖 Rex ' + (r.rex_connected ? 'Live' : 'Idle') + '</span></span>' +
+    '<span class="health-item">🧭 Fable: <strong>' + esc(r.coordinator_active ? r.coordinator_state : 'offline') + '</strong> (inbox ' + esc(r.inbox_pending) + ')</span>' +
+    '<span class="health-item"><span class="pill ' + (r.orca_online ? 'live' : 'muted') + '">🐋 Orca ' + (r.orca_online ? 'Online' : 'Offline') + '</span></span>' +
     '<span class="health-item" style="margin-left:auto">Updated ' + new Date(DATA.now_ms).toLocaleTimeString() + '</span>';
 
   document.querySelectorAll(".state-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.filter === STATE_FILTER)));
@@ -882,11 +937,11 @@ function render() {
   const tabsEl = document.getElementById("appTabs");
   const allLive = DATA.apps.reduce((n, a) => n + a.working + a.queued + a.needs_you + a.failed, 0);
   const allTotal = DATA.apps.reduce((n, a) => n + a.total, 0);
-  let tabsHtml = '<button class="btn app-btn" data-app="all" aria-pressed="' + (SELECTED_APP === "all") + '" type="button">All Apps (' + allLive + ' live / ' + allTotal + ')</button>';
+  let tabsHtml = '<button class="btn app-btn" data-app="all" aria-pressed="' + (SELECTED_APP === "all") + '" type="button">🌐 All Apps (' + allLive + ' live / ' + allTotal + ')</button>';
   for (const g of DATA.apps) {
     const active = g.working + g.queued + g.needs_you + g.failed;
     const badge = active > 0 ? (active + ' live') : (g.total + ' total');
-    tabsHtml += '<button class="btn app-btn" data-app="' + esc(g.app) + '" aria-pressed="' + (SELECTED_APP === g.app) + '" type="button">' + esc(g.app) + ' (' + badge + ')</button>';
+    tabsHtml += '<button class="btn app-btn" data-app="' + esc(g.app) + '" aria-pressed="' + (SELECTED_APP === g.app) + '" type="button">' + esc(appLabel(g.app)) + ' (' + badge + ')</button>';
   }
   tabsEl.innerHTML = tabsHtml;
   tabsEl.querySelectorAll(".app-btn").forEach((btn) => {
@@ -904,28 +959,31 @@ function render() {
   let shownCount = 0;
 
   for (const g of groups) {
-    const visible = g.threads.filter(matchesFilter);
+    const visible = g.threads.filter(matchesFilter).sort((a, b) => {
+      if (a.asks !== b.asks) return a.asks ? -1 : 1;
+      return 0;
+    });
     if (visible.length === 0 && SELECTED_APP === "all") continue;
     shownCount += visible.length;
     html += '<section class="app-section">';
     html += '<div class="app-head">';
-    html += '<h2 class="app-title">' + esc(g.app) + ' <span class="pill ' + (g.lane_default === 'rex' ? 'accent' : 'muted') + '">Default: ' + (g.lane_default === 'rex' ? 'Rex / Fable' : 'Orca') + '</span></h2>';
+    html += '<h2 class="app-title">' + esc(appLabel(g.app)) + ' <span class="pill ' + (g.lane_default === 'rex' ? 'accent' : 'muted') + '">' + (g.lane_default === 'rex' ? '🦖 Rex / Fable' : '🐋 Orca') + '</span></h2>';
     html += '<div class="app-counts">' +
-      (g.needs_you ? '<span class="pill warn">' + g.needs_you + ' needs you</span>' : '') +
-      (g.working ? '<span class="pill live">' + g.working + ' working</span>' : '') +
-      (g.queued ? '<span class="pill accent">' + g.queued + ' queued</span>' : '') +
-      (g.failed ? '<span class="pill err">' + g.failed + ' failed</span>' : '') +
+      (g.needs_you ? '<span class="pill warn">🙋 ' + g.needs_you + ' needs you</span>' : '') +
+      (g.working ? '<span class="pill live">⚙️ ' + g.working + ' working</span>' : '') +
+      (g.queued ? '<span class="pill accent">⏳ ' + g.queued + ' queued</span>' : '') +
+      (g.failed ? '<span class="pill err">❌ ' + g.failed + ' failed</span>' : '') +
       '<span class="pill muted">' + g.total + ' total</span>' +
       '</div></div>';
 
     if (visible.length === 0) {
-      html += '<div class="empty-state">No threads match the current filter for ' + esc(g.app) + '. Try switching to "All recent".</div>';
+      html += '<div class="empty-state">No threads match the current filter for ' + esc(appLabel(g.app)) + '. Try switching to "📋 All recent".</div>';
     } else {
       for (const t of visible) {
         const [pillCls, pillTxt] = stateBadge(t);
         const isOpen = OPEN_CHATS.has(t.id);
         const recentlyChanged = CHANGED_AT.has(t.id) && (now - CHANGED_AT.get(t.id) < 25000);
-        const laneLabel = t.builder ? ('Rex · ' + t.builder.agent + ' (' + t.builder.status + ')') : (t.lane === 'rex' ? 'Rex · Fable' : t.lane === 'orca' ? 'Orca' : 'Queued');
+        const laneLabel = t.builder ? ('🦖 Rex · ' + t.builder.agent + ' (' + t.builder.status + ')') : (t.lane === 'rex' ? '🧭 Rex · Fable' : t.lane === 'orca' ? '🐋 Orca' : '⏳ Queued');
 
         html += '<article class="thread-card state-' + esc(t.state) + (isOpen ? ' is-open' : '') + (recentlyChanged ? ' changed-flash' : '') + '" id="card-' + esc(t.id) + '">';
         html += '<button class="thread-summary" type="button" data-chat="' + esc(t.id) + '" aria-expanded="' + isOpen + '">';

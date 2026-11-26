@@ -957,10 +957,10 @@ const ABOUT_HTML = `<!doctype html>
       <div class="map-filter-bar" aria-label="Map thread density and app filters">
         <div class="map-filter-row" id="mapAppFilters"></div>
         <div class="map-filter-row">
-          <button class="btn r4-mode-btn" data-r4="group" aria-pressed="false" type="button">Group by app</button>
-          <button class="btn r4-mode-btn" data-r4="threads" aria-pressed="false" type="button">All threads</button>
-          <button class="btn r4-mode-btn" data-r4="collapsed" aria-pressed="false" type="button">Collapse R4</button>
-          <button class="btn" id="toggleDoneBtn" type="button" aria-pressed="false">Show done</button>
+          <button class="btn r4-mode-btn" data-r4="group" aria-pressed="false" type="button">📦 Group by app</button>
+          <button class="btn r4-mode-btn" data-r4="threads" aria-pressed="false" type="button">🧵 All threads</button>
+          <button class="btn r4-mode-btn" data-r4="collapsed" aria-pressed="false" type="button">➖ Collapse R4</button>
+          <button class="btn" id="toggleDoneBtn" type="button" aria-pressed="false">✅ Show done</button>
         </div>
       </div>
 
@@ -1223,13 +1223,13 @@ try {
 } catch {}
 
 const APP_LABELS = {
-  "agent-pager": "Agent Pager",
-  "prhub": "PR Hub",
-  "trips": "Trips",
-  "feedbackkit-demo": "FeedbackKit Demo"
+  "agent-pager": "📟 Agent Pager",
+  "prhub": "🔀 PR Hub",
+  "trips": "✈️ Trips",
+  "feedbackkit-demo": "🧪 FeedbackKit Demo"
 };
 function appDisplayName(slug) {
-  return APP_LABELS[slug] || slug;
+  return APP_LABELS[slug] || ("📦 " + slug);
 }
 
 const ABOUT_TERMS = {
@@ -1372,12 +1372,12 @@ function collectDiagramThreads() {
 }
 
 function badgeForThreadState(state, asks) {
-  if (state === "needs_you") return ["standby", asks ? "Needs answer" : "Needs you"];
-  if (state === "blocked") return ["standby", "Blocked"];
-  if (state === "working") return ["live", "Working"];
-  if (state === "queued") return ["accent", "Queued"];
-  if (state === "failed") return ["offline", "Failed"];
-  return ["unbuilt", "Done"];
+  if (state === "needs_you") return ["standby", asks ? "❓ Needs answer" : "🙋 Needs you"];
+  if (state === "blocked") return ["standby", "🚧 Blocked"];
+  if (state === "working") return ["live", "⚙️ Working"];
+  if (state === "queued") return ["accent", "⏳ Queued"];
+  if (state === "failed") return ["offline", "❌ Failed"];
+  return ["unbuilt", "✅ Done"];
 }
 
 function setChip(bgEl, txtEl, state, label) {
@@ -1396,7 +1396,7 @@ function setChip(bgEl, txtEl, state, label) {
 }
 
 function clipSvg(s, max) {
-  const clean = String(s ?? "").replace(/s+/g, " ").trim();
+  const clean = String(s ?? "").replace(/\\s+/g, " ").trim();
   return clean.length <= max ? clean : clean.slice(0, max - 1) + "…";
 }
 
@@ -1407,7 +1407,7 @@ function renderMapAppFilterBar(allItems) {
     counts.set(item.app, (counts.get(item.app) || 0) + 1);
   }
   const apps = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  let html = '<button class="btn map-app-btn" data-app="all" aria-pressed="' + (MAP_APP_FILTER === "all") + '" type="button">All (' + allItems.length + ')</button>';
+  let html = '<button class="btn map-app-btn" data-app="all" aria-pressed="' + (MAP_APP_FILTER === "all") + '" type="button">🌐 All (' + allItems.length + ')</button>';
   for (const [slug, cnt] of apps) {
     html += '<button class="btn map-app-btn" data-app="' + escHtml(slug) + '" aria-pressed="' + (MAP_APP_FILTER === slug) + '" type="button">' + escHtml(appDisplayName(slug)) + ' (' + cnt + ')</button>';
   }
@@ -1642,7 +1642,7 @@ function renderDiagramBuilders() {
       : chipState === "accent" ? "var(--accent)" : "var(--unbuilt)";
     const sel = SELECTED === ("chat:" + item.id) ? " is-selected" : "";
     const ageSec = item.updatedAt ? Math.max(0, Math.floor((Date.now() - item.updatedAt) / 1000)) : null;
-    const chipW = Math.max(58, chipLabel.length * 7.2 + 16);
+    const chipW = Math.max(68, chipLabel.length * 7.6 + 18);
 
     nodesHtml += '<g class="node state-' + nodeState + sel + '" data-id="chat:' + escHtml(item.id) + '" transform="translate(' + x + ', ' + y + ')">' +
       '<rect class="box" width="' + cardW + '" height="' + cardH + '"/>' +
@@ -1980,9 +1980,9 @@ function applyStatus(data) {
 
   // Compact status bar
   document.getElementById("sbChats").textContent = w.total_chats + " chats" + (w.pending_messages > 0 ? " (" + w.pending_messages + " pending)" : "");
-  setPill(document.getElementById("sbOrcaPill"), c.orca_runner, "Orca " + (o.online ? "Online" : "Offline"));
-  setPill(document.getElementById("sbRexPill"), c.go_runner, "Rex " + (r.connected ? ("Live · " + r.claim_apps.length + " apps") : "Idle"));
-  document.getElementById("sbFable").textContent = (r.coordinator_active ? r.coordinator_state : "offline") + " · " + r.inbox_pending + " inbox";
+  setPill(document.getElementById("sbOrcaPill"), c.orca_runner, "🐋 Orca " + (o.online ? "Online" : "Offline"));
+  setPill(document.getElementById("sbRexPill"), c.go_runner, "🦖 Rex " + (r.connected ? ("Live · " + r.claim_apps.length + " apps") : "Idle"));
+  document.getElementById("sbFable").textContent = "🧭 " + (r.coordinator_active ? r.coordinator_state : "offline") + " · " + r.inbox_pending + " inbox";
 
   // Diagram nodes
   document.getElementById("nodeAppsMetric").textContent =
