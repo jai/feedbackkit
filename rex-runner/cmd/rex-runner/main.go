@@ -368,6 +368,9 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 		if err := os.MkdirAll(cfg.CoordDir, 0o755); err != nil {
 			return rex.CreatedWindow{}, fmt.Errorf("coordinator dir: %w", err)
 		}
+		if err := ensureAgyTrustedWorkspace(cfg.CoordDir); err != nil {
+			log.Printf("trust agy coord dir %s: %v", cfg.CoordDir, err)
+		}
 		hasTranscript = agyCoordStarted(cfg.CoordDir)
 	} else {
 		var err error
@@ -612,6 +615,11 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 	}
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return err
+	}
+	if *agent == "agy" {
+		if err := ensureAgyTrustedWorkspace(runDir); err != nil {
+			log.Printf("trust agy run dir %s: %v", runDir, err)
+		}
 	}
 	rc := rex.NewClient(cfg.RexBinary)
 	coord, err := ensureCoordinator(ctx, cfg, rc)

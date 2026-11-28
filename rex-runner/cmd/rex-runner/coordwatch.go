@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -86,6 +87,77 @@ var resolveAgyBin = func() string {
 		return "/opt/homebrew/bin/agy"
 	}
 	return "agy"
+}
+
+// agySettingsPath locates Antigravity CLI's settings.json where exact trustedWorkspaces paths are stored.
+var agySettingsPath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
+}
+
+// ensureAgyTrustedWorkspace idempotently appends dir to ~/.gemini/antigravity-cli/settings.json
+// trustedWorkspaces so newly spawned Antigravity builders do not stall on the folder trust prompt.
+func ensureAgyTrustedWorkspace(dir string) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" || dir == "." {
+		return nil
+	}
+	settingsFile := agySettingsPath()
+	if settingsFile == "" {
+		return nil
+	}
+	doc := map[string]any{}
+	if raw, err := os.ReadFile(settingsFile); err == nil {
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	var list []string
+	if existing, ok := doc["trustedWorkspaces"].([]any); ok {
+		for _, item := range existing {
+			if s, ok := item.(string); ok {
+				if filepath.Clean(s) == dir {
+					return nil
+				}
+				list = append(list, s)
+			}
+		}
+	}
+	list = append(list, dir)
+	doc["trustedWorkspaces"] = list
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	if err := os.MkdirAll(filepath.Dir(settingsFile), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(settingsFile), "settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, settingsFile)
 }
 
 // agyCoordStarted reports whether an Antigravity coordinator session has already run in coordDir.

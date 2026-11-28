@@ -71,6 +71,34 @@ func TestCoordinatorCommandUsesAgyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestEnsureAgyTrustedWorkspaceIsIdempotent(t *testing.T) {
+	tmp := t.TempDir()
+	sf := filepath.Join(tmp, "settings.json")
+	if err := os.WriteFile(sf, []byte(`{"model":"Gemini 4 Neon (High)","trustedWorkspaces":["/a"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := agySettingsPath
+	agySettingsPath = func() string { return sf }
+	defer func() { agySettingsPath = orig }()
+
+	if err := ensureAgyTrustedWorkspace("/tmp/run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureAgyTrustedWorkspace("/tmp/run-1"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(sf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), `"/tmp/run-1"`) != 1 {
+		t.Fatalf("expected exactly one /tmp/run-1 entry, got:\n%s", string(raw))
+	}
+	if !strings.Contains(string(raw), `"Gemini 4 Neon (High)"`) {
+		t.Fatalf("lost unrelated settings fields:\n%s", string(raw))
+	}
+}
+
 func TestCoordinatorDownReason(t *testing.T) {
 	cases := []struct {
 		name   string
