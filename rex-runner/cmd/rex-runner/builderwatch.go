@@ -38,7 +38,13 @@ var transcriptExists = func(sessionID string) bool {
 func stuckReason(m state.RunManifest, screen string, now time.Time) string {
 	// A permission prompt with Claude Code's countdown blocks itself and the builder carries on: not stuck.
 	selfClearing := strings.Contains(screen, "will automatically block this request")
-	if marker := rex.DialogMarker(screen); marker != "" && !selfClearing {
+	marker := rex.DialogMarker(screen)
+	// Antigravity prints "esc to cancel" in its status footer while actively running a turn.
+	agyWorkingFooter := m.Agent == "agy" && marker == "esc to cancel" &&
+		(strings.Contains(strings.ToLower(screen), "auto ·") ||
+			strings.Contains(strings.ToLower(screen), "gemini ") ||
+			strings.Contains(strings.ToLower(screen), "running"))
+	if marker != "" && !selfClearing && !agyWorkingFooter {
 		return fmt.Sprintf("the builder pane is waiting at a prompt (%q on screen)", marker)
 	}
 	if m.Agent == "claude" && m.SessionID != "" && !m.CreatedAt.IsZero() &&

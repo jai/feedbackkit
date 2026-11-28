@@ -32,7 +32,11 @@ func main() {
 		os.Exit(2)
 	}
 	cfg := config.Default()
+	cfg.CoordAgent = config.LoadRuntimeCoordAgent(cfg.StateDir, cfg.CoordAgent)
 	cfg.CoordLauncher = config.LoadRuntimeCoordLauncher(cfg.StateDir, cfg.CoordLauncher)
+	cfg.CoordModel = config.LoadRuntimeCoordModel(cfg.StateDir, cfg.CoordModel)
+	cfg.BuilderAgent = config.LoadRuntimeBuilderAgent(cfg.StateDir, cfg.BuilderAgent)
+	cfg.BuilderModel = config.LoadRuntimeBuilderModel(cfg.StateDir, cfg.BuilderModel)
 	_ = cfg.LoadCredentials()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -356,18 +360,35 @@ func cmdStatus(ctx context.Context, cfg config.Config, args []string) error {
 }
 
 func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (rex.CreatedWindow, error) {
-	sessionID, err := ensureCoordSessionID(cfg.CoordDir)
-	if err != nil {
-		return rex.CreatedWindow{}, fmt.Errorf("coordinator session id: %w", err)
+	var (
+		sessionID     string
+		hasTranscript bool
+	)
+	if strings.EqualFold(strings.TrimSpace(cfg.CoordAgent), "agy") {
+		if err := os.MkdirAll(cfg.CoordDir, 0o755); err != nil {
+			return rex.CreatedWindow{}, fmt.Errorf("coordinator dir: %w", err)
+		}
+		hasTranscript = agyCoordStarted(cfg.CoordDir)
+	} else {
+		var err error
+		sessionID, err = ensureCoordSessionID(cfg.CoordDir)
+		if err != nil {
+			return rex.CreatedWindow{}, fmt.Errorf("coordinator session id: %w", err)
+		}
+		hasTranscript = coordTranscriptExists(cfg.CoordDir, sessionID)
 	}
-	coordCmd := coordinatorCommand(cfg, sessionID, coordTranscriptExists(cfg.CoordDir, sessionID))
+	coordCmd := coordinatorCommand(cfg, sessionID, hasTranscript)
 
 	sess, err := findCoordSession(ctx, cfg, rc)
 	if err != nil {
 		return rex.CreatedWindow{}, err
 	}
 	if sess == nil {
-		return rc.NewSession(ctx, cfg.SessionName, cfg.CoordWindow, cfg.CoordDir, coordCmd)
+		created, err := rc.NewSession(ctx, cfg.SessionName, cfg.CoordWindow, cfg.CoordDir, coordCmd)
+		if err == nil && strings.EqualFold(strings.TrimSpace(cfg.CoordAgent), "agy") {
+			_ = os.WriteFile(filepath.Join(cfg.CoordDir, ".agy-started"), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+		}
+		return created, err
 	}
 	wins, err := rc.ListWindows(ctx, sess.SessionID)
 	if err != nil {
@@ -382,7 +403,11 @@ func ensureCoordinator(ctx context.Context, cfg config.Config, rc *rex.Client) (
 			}, nil
 		}
 	}
-	return rc.NewWindow(ctx, sess.SessionID, cfg.CoordWindow, cfg.CoordDir, false, coordCmd)
+	created, err := rc.NewWindow(ctx, sess.SessionID, cfg.CoordWindow, cfg.CoordDir, false, coordCmd)
+	if err == nil && strings.EqualFold(strings.TrimSpace(cfg.CoordAgent), "agy") {
+		_ = os.WriteFile(filepath.Join(cfg.CoordDir, ".agy-started"), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+	}
+	return created, err
 }
 
 // findCoordSession finds the coordinator's Rex session by label and remembers its ID. Agents in the session
@@ -456,11 +481,18 @@ func builderCommand(agent, model, sessionID, prompt, configDir string, resume bo
 		}
 		return args, nil
 	case "agy":
-		args := []string{"agy"}
-		if resume && sessionID != "" {
-			args = append(args, "--resume", sessionID)
+		args := []string{"env", "REX_SESSION_NAMING=false", resolveAgyBin(), "--dangerously-skip-permissions"}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		if resume {
+			if sessionID != "" {
+				args = append(args, "--conversation", sessionID)
+			} else {
+				args = append(args, "--continue")
+			}
 		} else if prompt != "" {
-			args = append(args, prompt)
+			args = append(args, "-i", prompt)
 		}
 		return args, nil
 	default:
@@ -544,8 +576,13 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 	app := fs.String("app", "", "app slug (e.g. agent-pager, prhub)")
 	repo := fs.String("repo", "", "target repository (owner/name)")
 	branch := fs.String("branch", "", "git branch name (defaults to chat ID)")
-	agent := fs.String("agent", "claude", "builder agent: claude | codex | agy")
-	model := fs.String("model", "", "optional model override")
+	defaultAgent := config.LoadRuntimeBuilderAgent(cfg.StateDir, cfg.BuilderAgent)
+	if defaultAgent == "" {
+		defaultAgent = config.DefaultBuilderAgent
+	}
+	defaultModel := config.LoadRuntimeBuilderModel(cfg.StateDir, cfg.BuilderModel)
+	agent := fs.String("agent", defaultAgent, "builder agent: claude | codex | agy")
+	model := fs.String("model", defaultModel, "optional model override")
 	dir := fs.String("dir", "", "working directory (defaults to <runs-dir>/<chat>)")
 	prompt := fs.String("prompt", "", "initial task prompt for builder")
 	dryRun := fs.Bool("dry-run", false, "write no Rex tabs; print planned spawn")
@@ -558,7 +595,10 @@ func cmdSpawn(ctx context.Context, cfg config.Config, args []string) error {
 	if runDir == "" {
 		runDir = filepath.Join(cfg.RunsDir, *chatID)
 	}
-	sessionID := newUUIDv4()
+	sessionID := ""
+	if *agent == "claude" {
+		sessionID = newUUIDv4()
+	}
 	if strings.TrimSpace(*prompt) != "" {
 		*prompt += builderRules
 	}

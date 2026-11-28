@@ -49,6 +49,28 @@ func TestCoordinatorCommandUsesClaudeSwitchRunForNewSession(t *testing.T) {
 	}
 }
 
+func TestCoordinatorCommandUsesAgyWhenConfigured(t *testing.T) {
+	orig := resolveAgyBin
+	resolveAgyBin = func() string { return "/opt/homebrew/bin/agy" }
+	defer func() { resolveAgyBin = orig }()
+
+	cfg := config.Config{CoordAgent: "agy", CoordModel: "gemini-4-neon-medium"}
+	gotFresh := coordinatorCommand(cfg, "", false)
+	wantFresh := []string{
+		"env", "REX_SESSION_NAMING=false", "/opt/homebrew/bin/agy",
+		"--dangerously-skip-permissions", "--model", "gemini-4-neon-medium",
+	}
+	if !reflect.DeepEqual(gotFresh, wantFresh) {
+		t.Fatalf("fresh got %q, want %q", gotFresh, wantFresh)
+	}
+
+	gotResume := coordinatorCommand(cfg, "", true)
+	wantResume := append(append([]string(nil), wantFresh...), "--continue")
+	if !reflect.DeepEqual(gotResume, wantResume) {
+		t.Fatalf("resume got %q, want %q", gotResume, wantResume)
+	}
+}
+
 func TestCoordinatorDownReason(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -79,6 +101,14 @@ func TestCoordinatorDownReason(t *testing.T) {
 			name: "bare shell prompt after crash",
 			screen: "feedback-coordinator %\n",
 			want: "exited",
+		},
+		{
+			name: "live idle agy",
+			screen: "Status: Idle.\n" +
+				"──────────────────────────────────────\n" +
+				">\n" +
+				"auto · Gemini 4 Neon · medium\n",
+			want: "",
 		},
 		{
 			name: "empty screen ignored",

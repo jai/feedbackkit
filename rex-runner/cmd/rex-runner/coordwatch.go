@@ -77,9 +77,43 @@ var coordTranscriptExists = func(coordDir, sessionID string) bool {
 	return transcriptExists(sessionID)
 }
 
-// coordinatorCommand builds the pure-Go `claude-switch` command that launches or resumes the
-// feedback coordinator inside Rex without any wrapper shell script.
+// resolveAgyBin locates the Antigravity CLI (`agy`), checking Homebrew's bin path as a launchd fallback.
+var resolveAgyBin = func() string {
+	if p, err := exec.LookPath("agy"); err == nil {
+		return p
+	}
+	if _, err := os.Stat("/opt/homebrew/bin/agy"); err == nil {
+		return "/opt/homebrew/bin/agy"
+	}
+	return "agy"
+}
+
+// agyCoordStarted reports whether an Antigravity coordinator session has already run in coordDir.
+var agyCoordStarted = func(coordDir string) bool {
+	if coordDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(coordDir, ".agy-started"))
+	return err == nil
+}
+
+// coordinatorCommand builds the command that launches or resumes the feedback coordinator inside Rex
+// without any wrapper shell script. Supports both Claude (`claude-switch`) and Antigravity (`agy`).
 func coordinatorCommand(cfg config.Config, sessionID string, hasTranscript bool) []string {
+	if strings.EqualFold(strings.TrimSpace(cfg.CoordAgent), "agy") {
+		model := strings.TrimSpace(cfg.CoordModel)
+		if model == "" || strings.HasPrefix(model, "claude-fable") {
+			model = config.DefaultAgyCoordModel
+		}
+		args := []string{
+			"env", "REX_SESSION_NAMING=false",
+			resolveAgyBin(), "--dangerously-skip-permissions", "--model", model,
+		}
+		if hasTranscript {
+			args = append(args, "--continue")
+		}
+		return args
+	}
 	bin := resolveClaudeSwitchBin(cfg.ClaudeSwitchBin)
 	model := strings.TrimSpace(cfg.CoordModel)
 	if model == "" {
@@ -125,12 +159,19 @@ var exitedMarkers = []string{
 	"command not found",
 }
 
-// claudeAliveMarkers indicate Claude's live TUI chrome is still drawn at the bottom of the pane.
+// claudeAliveMarkers indicate Claude Code or Antigravity live TUI chrome is still drawn at the bottom of the pane.
 var claudeAliveMarkers = []string{
 	"bypass permissions",
 	"shift+tab to cycle",
 	"esc to interrupt",
 	"ctrl+o to expand",
+	"auto ·",
+	"gemini 4",
+	"gemini 3",
+	"claude opus",
+	"claude sonnet",
+	"tip: use /",
+	"esc to cancel",
 }
 
 // coordinatorDownReason inspects the bottom of the coordinator's Rex pane and returns
@@ -338,8 +379,8 @@ func (w *coordWatchdog) check(ctx context.Context, cfg config.Config, rc *rex.Cl
 		alertCoordinatorDown(fmt.Sprintf("%s (%s)", reason, why))
 		return updated, rebound, nil
 	}
-	log.Printf("coordinator watchdog: detected %s in %s; relaunching via claude-switch", reason, updated.BlockID)
-	if reason == "rate_limit" {
+	log.Printf("coordinator watchdog: detected %s in %s; relaunching (%s)", reason, updated.BlockID, cfg.CoordAgent)
+	if reason == "rate_limit" && !strings.EqualFold(strings.TrimSpace(cfg.CoordAgent), "agy") {
 		if sid, err := ensureCoordSessionID(cfg.CoordDir); err == nil {
 			scanLimitForAccount(ctx, cfg, sid)
 		}

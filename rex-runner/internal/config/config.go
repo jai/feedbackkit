@@ -9,11 +9,15 @@ import (
 )
 
 const (
-	DefaultSessionName   = "feedback-loop"
-	DefaultCoordWindow   = "fable-coordinator"
-	DefaultCoordLauncher = "cly"
-	DefaultCoordModel    = "claude-fable-5-2"
-	DefaultWorkerURL     = "https://featurekit.jai-f89.workers.dev"
+	DefaultSessionName     = "feedback-loop"
+	DefaultCoordWindow     = "fable-coordinator"
+	DefaultCoordAgent      = "claude"
+	DefaultCoordLauncher   = "cly"
+	DefaultCoordModel      = "claude-fable-5-2"
+	DefaultAgyCoordModel   = "gemini-4-neon-medium"
+	DefaultAgyBuilderModel = "gemini-4-neon-high"
+	DefaultBuilderAgent    = "claude"
+	DefaultWorkerURL       = "https://featurekit.jai-f89.workers.dev"
 )
 
 // Config holds runtime paths and options for rex-runner.
@@ -21,9 +25,12 @@ type Config struct {
 	SessionName     string
 	CoordWindow     string
 	CoordDir        string
+	CoordAgent      string
 	CoordLauncher   string
 	CoordModel      string
 	ClaudeSwitchBin string
+	BuilderAgent    string
+	BuilderModel    string
 	// BuilderConfigDir is passed to Claude builders as CLAUDE_CONFIG_DIR, so they run on that Claude account.
 	// Empty leaves the builder on the default account.
 	BuilderConfigDir string
@@ -45,9 +52,12 @@ func Default() Config {
 		SessionName:      envOr("FEEDBACK_REX_SESSION", DefaultSessionName),
 		CoordWindow:      envOr("FEEDBACK_COORD_WINDOW", DefaultCoordWindow),
 		CoordDir:         envOr("FEEDBACK_COORD_DIR", filepath.Join(home, "Developer", "feedback-coordinator")),
+		CoordAgent:       envOr("FEEDBACK_COORD_AGENT", DefaultCoordAgent),
 		CoordLauncher:    envOr("FEEDBACK_COORD_LAUNCHER", DefaultCoordLauncher),
-		CoordModel:       envOr("FABLE_MODEL", DefaultCoordModel),
+		CoordModel:       envOr("FEEDBACK_COORD_MODEL", envOr("FABLE_MODEL", DefaultCoordModel)),
 		ClaudeSwitchBin:  envOr("CLAUDE_SWITCH_BIN", ""),
+		BuilderAgent:     envOr("FEEDBACK_BUILDER_AGENT", DefaultBuilderAgent),
+		BuilderModel:     envOr("FEEDBACK_BUILDER_MODEL", ""),
 		BuilderConfigDir: envOr("FEEDBACK_BUILDER_CONFIG_DIR", ""),
 		RunsDir:          envOr("FEEDBACK_RUNS_DIR", filepath.Join(home, "Developer", "feedback-runs")),
 		StateDir:         envOr("FEEDBACK_REX_STATE_DIR", filepath.Join(home, "Library", "Application Support", "feedbackkit-rex-runner")),
@@ -177,17 +187,58 @@ func LoadRuntimeCoordLauncher(stateDir, base string) string {
 	if strings.TrimSpace(os.Getenv("FEEDBACK_COORD_LAUNCHER")) != "" {
 		return base
 	}
+	return loadRuntimeString(stateDir, "coord_launcher", base)
+}
+
+// LoadRuntimeCoordAgent returns the coordinator agent (`claude` or `agy`): `FEEDBACK_COORD_AGENT` wins, else
+// `coord_agent` in `<stateDir>/config.json`, else base.
+func LoadRuntimeCoordAgent(stateDir, base string) string {
+	if strings.TrimSpace(os.Getenv("FEEDBACK_COORD_AGENT")) != "" {
+		return base
+	}
+	return loadRuntimeString(stateDir, "coord_agent", base)
+}
+
+// LoadRuntimeCoordModel returns the coordinator model: `FEEDBACK_COORD_MODEL` or `FABLE_MODEL` wins, else
+// `coord_model` in `<stateDir>/config.json`, else base.
+func LoadRuntimeCoordModel(stateDir, base string) string {
+	if strings.TrimSpace(os.Getenv("FEEDBACK_COORD_MODEL")) != "" || strings.TrimSpace(os.Getenv("FABLE_MODEL")) != "" {
+		return base
+	}
+	return loadRuntimeString(stateDir, "coord_model", base)
+}
+
+// LoadRuntimeBuilderAgent returns the default builder agent (`claude`, `codex`, or `agy`): `FEEDBACK_BUILDER_AGENT`
+// wins, else `builder_agent` in `<stateDir>/config.json`, else base.
+func LoadRuntimeBuilderAgent(stateDir, base string) string {
+	if strings.TrimSpace(os.Getenv("FEEDBACK_BUILDER_AGENT")) != "" {
+		return base
+	}
+	return loadRuntimeString(stateDir, "builder_agent", base)
+}
+
+// LoadRuntimeBuilderModel returns the default builder model: `FEEDBACK_BUILDER_MODEL` wins, else `builder_model` in
+// `<stateDir>/config.json`, else base.
+func LoadRuntimeBuilderModel(stateDir, base string) string {
+	if strings.TrimSpace(os.Getenv("FEEDBACK_BUILDER_MODEL")) != "" {
+		return base
+	}
+	return loadRuntimeString(stateDir, "builder_model", base)
+}
+
+func loadRuntimeString(stateDir, key, fallback string) string {
 	raw, err := os.ReadFile(filepath.Join(stateDir, "config.json"))
 	if err != nil {
-		return base
+		return fallback
 	}
-	var file struct {
-		CoordLauncher string `json:"coord_launcher"`
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return fallback
 	}
-	if err := json.Unmarshal(raw, &file); err != nil || strings.TrimSpace(file.CoordLauncher) == "" {
-		return base
+	if v, ok := m[key].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
 	}
-	return strings.TrimSpace(file.CoordLauncher)
+	return fallback
 }
 
 // ParseAppList parses a comma-separated list of app slugs into a lookup set.
